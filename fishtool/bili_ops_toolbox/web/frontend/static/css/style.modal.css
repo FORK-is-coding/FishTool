@@ -1,0 +1,232 @@
+/* ===== style.modal.css —— 拆分自 style.css（前端优化补回 + 弹窗），原始行 L1616-L1846 ===== */
+/* 前端优化补回：统一客户端边框、大圆角卡片、鼠标跟随光晕与应用弹窗。 */
+.container {
+    border: 1px solid var(--border-color);
+    border-radius: var(--card-radius);
+    overflow: hidden;
+    background: var(--bg-primary);
+}
+
+.form-control,
+.btn,
+.sentiment-tag,
+.availability-item {
+    border-radius: var(--control-radius);
+}
+
+:is(
+    .card,
+    .section,
+    .comment-dashboard,
+    .metric-item,
+    .chart-panel,
+    .voice-module,
+    .voice-item,
+    .result-area,
+    .logs-area,
+    .raw-output-details,
+    .analysis-notice,
+    .analysis-error,
+    .diagnosis-dashboard,
+    .diagnosis-score,
+    .diagnosis-detail-card,
+    .ai-research-card,
+    .account-tag-cloud-card
+) {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+    border-radius: var(--card-radius);
+    background-color: var(--bg-secondary);
+    transition:
+        --x 120ms linear,
+        --y 120ms linear,
+        transform 220ms ease,
+        border-color 220ms ease,
+        box-shadow 220ms ease;
+}
+
+:is(
+    .card,
+    .section,
+    .comment-dashboard,
+    .metric-item,
+    .chart-panel,
+    .voice-module,
+    .voice-item,
+    .result-area,
+    .logs-area,
+    .raw-output-details,
+    .analysis-notice,
+    .analysis-error,
+    .diagnosis-dashboard,
+    .diagnosis-score,
+    .diagnosis-detail-card,
+    .ai-research-card,
+    .account-tag-cloud-card
+)::before {
+    position: absolute;
+    z-index: -1;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    pointer-events: none;
+    content: "";
+    opacity: 0;
+    background: radial-gradient(
+        circle 190px at var(--x, 50%) var(--y, 50%),
+        var(--glow-color),
+        transparent 72%
+    );
+    transition: opacity 220ms ease;
+}
+
+:is(
+    .card,
+    .section,
+    .comment-dashboard,
+    .metric-item,
+    .chart-panel,
+    .voice-module,
+    .voice-item,
+    .result-area,
+    .logs-area,
+    .raw-output-details,
+    .analysis-notice,
+    .analysis-error,
+    .diagnosis-dashboard,
+    .diagnosis-score,
+    .diagnosis-detail-card,
+    .ai-research-card,
+    .account-tag-cloud-card
+):hover {
+    border-color: var(--primary-border-hover);
+    box-shadow: var(--shadow-hover);
+}
+
+:is(
+    .card,
+    .section,
+    .comment-dashboard,
+    .metric-item,
+    .chart-panel,
+    .voice-module,
+    .voice-item,
+    .result-area,
+    .logs-area,
+    .raw-output-details,
+    .analysis-notice,
+    .analysis-error,
+    .diagnosis-dashboard,
+    .diagnosis-score,
+    .diagnosis-detail-card,
+    .ai-research-card,
+    .account-tag-cloud-card
+):hover::before {
+    opacity: 1;
+}
+
+/* 弹窗遮罩：全屏半透明+毛玻璃，点击空白处可关闭。 */
+/* 注意：必须显式写 top/right/bottom/left 四个值，不能简写成 inset:0；
+   FishTool 内嵌的 QtWebEngine (Chromium 87) 不识别 inset 简写，
+   会导致 position:fixed 失效、弹窗渲染到屏幕外（历史线上 bug 根因）。 */
+.app-modal-backdrop {
+    position: fixed;
+    z-index: 1000;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: rgba(81, 74, 69, 0.24);
+    backdrop-filter: blur(8px);
+}
+
+/* 弹窗本体：最大 440px 居中，暖白底+大圆角+柔和投影。 */
+.app-modal {
+    width: min(440px, 100%);
+    padding: 26px;
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--modal-radius);
+    background: var(--bg-elevated);
+    box-shadow: 0 22px 60px rgba(81, 74, 69, 0.22);
+}
+
+.app-modal h3 {
+    margin-bottom: 10px;
+    color: var(--primary-color);
+}
+
+.app-modal p {
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+}
+
+.app-modal .btn {
+    margin-top: 20px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    :is(
+        .card,
+        .section,
+        .comment-dashboard,
+        .metric-item,
+        .chart-panel,
+        .voice-module,
+        .voice-item,
+        .result-area,
+        .logs-area,
+        .raw-output-details,
+        .analysis-notice,
+        .analysis-error,
+        .diagnosis-dashboard,
+        .diagnosis-score,
+        .diagnosis-detail-card
+    ),
+    :is(
+        .card,
+        .section,
+        .comment-dashboard,
+        .metric-item,
+        .chart-panel,
+        .voice-module,
+        .voice-item,
+        .result-area,
+        .logs-area,
+        .raw-output-details,
+        .analysis-notice,
+        .analysis-error,
+        .diagnosis-dashboard,
+        .diagnosis-score,
+        .diagnosis-detail-card
+    )::before {
+        transition: none;
+    }
+}
+
+@media (max-width: 1100px) {
+    .diagnosis-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .lottery-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 900px) {
+    .diagnosis-metrics, .diagnosis-detail-grid, .ai-research-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 768px) {
+    .diagnosis-dashboard { padding: 14px; border-radius: 14px; }
+    .diagnosis-header { align-items: flex-start; flex-direction: column; }
+    .diagnosis-metrics, .diagnosis-chart-grid, .diagnosis-detail-grid, .ai-research-grid { grid-template-columns: minmax(0, 1fr); }
+    .diagnosis-chart-grid { grid-auto-rows: minmax(340px, auto); }
+    .diagnosis-chart-panel, .diagnosis-chart-grid .chart-panel-wide { min-height: 340px; padding: 14px; }
+    .diagnosis-chart-canvas, .diagnosis-triangle-panel .diagnosis-chart-canvas { min-height: 286px; }
+    .lottery-filter-grid { grid-template-columns: minmax(0, 1fr); }
+    .lottery-candidate-list { grid-template-columns: minmax(0, 1fr); }
+    .tag-cloud-heading { flex-direction: column; }
+    .tag-cloud-heading > span { text-align: left; }

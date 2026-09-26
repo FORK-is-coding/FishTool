@@ -1,0 +1,292 @@
+/* ===== style.up.css —— 拆分自 style.css（运营策略分析 + 账号自诊），原始行 L1324-L1614 ===== */
+/* 运营策略分析卡片面板 */
+.analysis-dashboard {
+    display: grid;
+    gap: 20px;
+    color: var(--text-primary);
+}
+
+.analysis-dashboard .card {
+    padding: 20px;
+    text-align: left;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    transform: none;
+}
+
+/* UP主概要卡：头像 | 名称信息 | 核心指标 三列布局。 */
+.up-summary-card {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 20px;
+}
+
+/* UP主头像：圆形裁剪，主题色描边，加载失败时显示占位底。 */
+.up-avatar {
+    width: 72px;
+    height: 72px;
+    border: 2px solid var(--primary-color);
+    border-radius: 50%;
+    object-fit: cover;
+    background: var(--bg-primary);
+}
+
+.up-avatar-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    font-size: 11px;
+    text-align: center;
+}
+
+.up-summary-main h3,
+.analysis-heading h3 {
+    margin: 0;
+    color: var(--text-primary);
+}
+
+.up-summary-main span {
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+/* UP主指标：粉丝数/总播放双列网格。 */
+.up-summary-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(130px, 1fr));
+    gap: 12px;
+}
+
+.analysis-heading {
+    padding-left: 14px;
+    border-left: 3px solid var(--primary-color);
+}
+
+/* 运营策略卡网格：双列，最后一卡跨整行收尾。 */
+.strategy-card-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+}
+
+.strategy-card:last-child {
+    grid-column: 1 / -1;
+}
+
+.card-title {
+    margin: 0 0 16px;
+    color: var(--primary-color);
+    font-size: 18px;
+}
+
+/* 策略卡分区：上下留白，顶部分隔线与上一节区分。 */
+.card-section {
+    padding: 14px 0;
+    border-top: 1px solid var(--border-color);
+}
+
+.card-section h5 {
+    margin-bottom: 7px;
+    color: var(--text-primary);
+    font-size: 13px;
+}
+
+.card-section-content p,
+.raw-output-details p {
+    margin: 0 0 8px;
+    color: var(--text-secondary);
+    line-height: 1.7;
+    overflow-wrap: anywhere;
+}
+
+.card-section-content p:last-child,
+.raw-output-details p:last-child {
+    margin-bottom: 0;
+}
+
+.card-empty {
+    color: var(--text-secondary);
+}
+
+.raw-output-details {
+    padding: 16px 20px;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-secondary);
+}
+
+.raw-output-details summary {
+    color: var(--primary-color);
+    cursor: pointer;
+}
+
+.raw-output-details > div {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-color);
+}
+
+/* 分析提示/错误：左侧强调条+浅色底，错误用红棕色条。 */
+.analysis-notice,
+.analysis-error {
+    padding: 16px 20px;
+    border: 1px solid var(--border-color);
+    border-left: 3px solid var(--warning-color);
+    border-radius: 12px;
+    color: var(--text-secondary);
+    background: var(--bg-secondary);
+}
+
+.analysis-error {
+    border-left-color: var(--danger-color);
+}
+
+/* 账号自诊莫兰迪暖色可视化大屏 */
+.diagnosis-dashboard {
+    display: grid;
+    gap: 16px;
+    padding: 24px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 18px;
+    box-shadow: var(--shadow);
+}
+
+/* 自诊头部：账号信息左、可用项得分右。 */
+.diagnosis-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 4px 2px;
+}
+
+.diagnosis-header h3 { margin: 0; font-size: 24px; color: var(--text-primary); }
+.diagnosis-header p:not(.dashboard-eyebrow) { margin-top: 4px; color: var(--text-secondary); font-size: 13px; }
+/* 自诊得分：右侧圆形徽标，展示可用数据项数量。 */
+.diagnosis-score { min-width: 112px; padding: 12px 16px; text-align: center; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 14px; }
+.diagnosis-score strong, .diagnosis-score span { display: block; }
+.diagnosis-score strong { color: var(--primary-color); font-size: 26px; line-height: 1; }
+.diagnosis-score span { margin-top: 5px; color: var(--text-secondary); font-size: 12px; }
+/* 账号自诊指标：五列网格展示粉丝、视频、均播等核心数据。 */
+.diagnosis-metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.diagnosis-metrics .metric-item { background: var(--bg-secondary); border-radius: 14px; }
+.diagnosis-metrics small { display: block; margin-top: 4px; color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }
+/* 自诊图表区：大尺寸双列卡片，画布占满可用空间。 */
+.diagnosis-chart-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: minmax(380px, auto); gap: 18px; }
+.diagnosis-chart-panel { display: flex; flex-direction: column; min-width: 0; min-height: 380px; padding: 20px; }
+.diagnosis-chart-panel .panel-title { flex: 0 0 auto; margin-bottom: 8px; }
+.diagnosis-chart-canvas { flex: 1 1 auto; width: 100%; min-height: 320px; }
+.diagnosis-triangle-panel .diagnosis-chart-canvas { min-height: 336px; }
+.diagnosis-chart-grid .chart-panel-wide { grid-column: 1 / -1; min-height: 400px; }
+/* 自诊详情区：三列网格展示互动指标、数据可用性与对比结论。 */
+.diagnosis-detail-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.diagnosis-detail-card { padding: 18px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 14px; box-shadow: var(--shadow); }
+/* 自诊详情卡标题：左侧主题色竖线作为视觉锚点。 */
+.diagnosis-detail-card h4 { margin: 0 0 14px; padding-left: 10px; color: var(--text-primary); font-size: 15px; border-left: 3px solid var(--primary-color); }
+.diagnosis-detail-card p { margin: 0 0 10px; color: var(--text-secondary); line-height: 1.65; overflow-wrap: anywhere; }
+.diagnosis-detail-card p:last-child { margin-bottom: 0; }
+.diagnosis-detail-card dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.diagnosis-detail-card dl div { min-width: 0; padding: 10px; background: var(--bg-primary); border-radius: 8px; }
+.diagnosis-detail-card dt { color: var(--text-secondary); font-size: 12px; }
+.diagnosis-detail-card dd { margin: 3px 0 0; color: var(--text-primary); font-size: 16px; font-weight: 700; }
+/* 数据可用性标签：横向排布，就绪/缺失用不同颜色区分。 */
+.availability-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.availability-item { padding: 5px 8px; color: var(--text-secondary); font-size: 12px; border: 1px solid var(--border-color); border-radius: 7px; background: var(--bg-primary); }
+/* 就绪标签：绿色系，表示该维度数据已获取。 */
+.availability-item.ready { color: #5f7f59; border-color: var(--success-color); }
+/* 缺失标签：红棕色系，表示该维度数据暂不可得。 */
+.availability-item.unavailable { color: #9d6253; border-color: var(--danger-color); }
+
+/* AI 调研网格：调研报告与运营点评双卡并列。 */
+.ai-research-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.ai-research-card,
+.account-tag-cloud-card {
+    padding: 20px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--card-radius);
+    box-shadow: var(--shadow);
+}
+
+.ai-research-card h4,
+.account-tag-cloud-card h4 {
+    margin: 2px 0 12px;
+    color: var(--text-primary);
+    font-size: 17px;
+}
+
+.ai-research-card p {
+    color: var(--text-secondary);
+    line-height: 1.75;
+    white-space: pre-wrap;
+}
+
+.ai-research-card ul {
+    display: grid;
+    gap: 7px;
+    margin: 14px 0 0 18px;
+    color: var(--text-primary);
+}
+
+.ai-research-card small {
+    display: block;
+    margin-top: 14px;
+    color: var(--text-muted);
+}
+
+/* AI 不可用态：占满整行，弱化展示失败信息。 */
+.ai-unavailable {
+    grid-column: 1 / -1;
+}
+
+.tag-cloud-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.tag-cloud-heading > span {
+    color: var(--text-secondary);
+    font-size: 12px;
+    text-align: right;
+}
+
+/* 账号标签云：弹性居中排布，按词频映射字号。 */
+.account-tag-cloud {
+    display: flex;
+    align-content: center;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 10px 16px;
+    min-height: 240px;
+    padding: 24px;
+    border-radius: var(--inner-radius);
+    background: var(--bg-primary);
+}
+
+/* 词云单字：悬停放大 8%，五色调轮换丰富视觉。 */
+.tag-cloud-word {
+    display: inline-block;
+    line-height: 1.15;
+    cursor: default;
+    transition: transform 180ms ease, color 180ms ease;
+}
+
+.tag-cloud-word:hover { transform: scale(1.08); }
+.tag-cloud-word.tone-0 { color: #b47b50; }
+.tag-cloud-word.tone-1 { color: #718d7b; }
+.tag-cloud-word.tone-2 { color: #9b6f73; }
+.tag-cloud-word.tone-3 { color: #667f8c; }
+.tag-cloud-word.tone-4 { color: #8c765d; }

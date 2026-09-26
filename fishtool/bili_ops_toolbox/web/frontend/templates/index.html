@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<!--
+    全局单页应用：左侧导航 + 右侧内容区，页面间通过 JS 切换 active 类。
+    主要模块：欢迎 / 热点发现 / 评论监控 / 头部UP拆解 / 账号自诊 / 配置 / 日志。
+-->
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FishTool运营助手</title>
+    <!-- 内嵌空图标，避免浏览器默认请求 /favicon.ico 产生无关 404 console 错误。 -->
+    <link rel="icon" href="data:,">
+    <!-- 版本参数用于让 8000 端口在修复后主动获取最新前端资源，避免浏览器继续使用旧缓存。 -->
+    <link rel="stylesheet" href="/static/css/style.lottery.css?v=split-20260824">
+<link rel="stylesheet" href="/static/css/style.resident.css?v=split-20260824">
+<link rel="stylesheet" href="/static/css/style.base.css?v=split-20260824">
+<link rel="stylesheet" href="/static/css/style.pages.css?v=split-20260824">
+<link rel="stylesheet" href="/static/css/style.log.css?v=split-20260824">
+<link rel="stylesheet" href="/static/css/style.config.css?v=split-20260824">
+<link rel="stylesheet" href="/static/css/style.comment.css?v=split-20260824">
+<link rel="stylesheet" href="/static/css/style.up.css?v=split-20260824">
+<link rel="stylesheet" href="/static/css/style.modal.css?v=split-20260824">
+<link rel="stylesheet" href="/static/css/style.responsive.css?v=split-20260824">
+<link rel="stylesheet" href="/static/css/style.logviewer.css?v=split-20260824">
+<link rel="stylesheet" href="/static/css/style.help.css?v=split-20260824">
+<link rel="stylesheet" href="/static/css/style.hotspot.css?v=rev5">
+</head>
+<body>
+    <div class="container">
+        <!-- 侧边栏导航：nav-item 的 data-page 与下方 page 容器 id 对应，点击即切换页面。 -->
+        <aside class="sidebar">
+            <div class="logo">
+                <!-- 使用项目内静态图标作为品牌徽标，避免打包后引用桌面路径失效。 -->
+                <img class="logo-badge" src="/static/图标.png" alt="FishTool图标">
+                <div class="logo-copy">
+                    <h2>FishTool运营助手</h2>
+                    <span class="logo-version">v0.1.0测试版</span>
+                </div>
+            </div>
+            <nav class="nav-menu">
+                <a href="#welcome" class="nav-item active" data-page="welcome">
+                    <span class="icon">🏠</span>
+                    <span>欢迎</span>
+                </a>
+                <a href="#hotspot" class="nav-item" data-page="hotspot">
+                    <span class="icon">🔥</span>
+                    <span>热点发现</span>
+                </a>
+                <a href="#comment" class="nav-item" data-page="comment">
+                    <span class="icon">💬</span>
+                    <span>评论监控</span>
+                </a>
+                <a href="#config" class="nav-item" data-page="config">
+                    <span class="icon">⚙️</span>
+                    <span>配置</span>
+                </a>
+                <a href="#analysis" class="nav-item" data-page="analysis">
+                    <span class="icon">🎯</span>
+                    <span>头部UP拆解</span>
+                </a>
+                <a href="#self-diagnosis" class="nav-item" data-page="self-diagnosis">
+                    <span class="icon">🏥</span>
+                    <span>账号自诊</span>
+                </a>
+                <a href="#lottery" class="nav-item" data-page="lottery">
+                    <span class="icon">🎁</span>
+                    <span>抽奖工具</span>
+                </a>
+                <a href="#logs" class="nav-item" data-page="logs">
+                    <span class="icon">📋</span>
+                    <span>日志</span>
+                </a>
+                <a href="#usage" class="nav-item" data-page="usage">
+                    <span class="icon">⚠️</span>
+                    <span>使用说明</span>
+                </a>
+            </nav>
+        </aside>
+
+        <!-- 主内容区 -->
+        <main class="main-content">
+            <!-- 欢迎页：默认激活，承载登录态与快速开始入口。 -->
+            <div id="welcome-page" class="page active">
+                <div class="welcome-header">
+                    <h1>欢迎使用 FishTool运营工具箱</h1>
+                    <p class="subtitle">瞄准真实业务痛点·面向新手个人创作者·无需学习成本·个人自媒体的智能运营助理</p>
+                </div>
+
+                <!-- B站登录态配置模块：扫码二维码由后端生成，登录态用于解锁身份功能。 -->
+                <section class="section auth-section">
+                    <h2>🔑 B站登录态</h2>
+                    <div class="auth-status-box" style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+                        <span id="auth-status-badge" class="auth-status-badge" style="background:#eee;color:#666;padding:4px 12px;border-radius:12px;font-size:13px;">检测中...</span>
+                        <span id="auth-user-info" class="auth-user-info" style="color: var(--text-secondary); font-size: 14px;"></span>
+                    </div>
+                    <div class="auth-actions" style="margin-bottom: 12px;">
+                        <button class="btn btn-primary" id="auth-login-btn" onclick="toggleQrPanel()">扫码登录</button>
+                        <button class="btn btn-secondary" id="auth-logout-btn" onclick="logoutBili()" style="display:none; background:#c62828; color:white;">清除登录态</button>
+                    </div>
+                    <div id="auth-qr-panel" class="auth-qr-panel" style="display:none; text-align: center; padding: 16px; background: white; border-radius: 12px;">
+                        <div class="form-group">
+                            <img id="auth-qr-img" alt="登录二维码" style="width: 220px; height: 220px; background: white; border-radius: 8px; padding: 8px; border: 1px solid #e0e0e0;"/>
+                        </div>
+                        <p id="auth-qr-status" style="font-size: 14px; min-height: 20px;">正在获取二维码...</p>
+                        <p id="auth-qr-countdown" style="font-size: 12px; color: #888; min-height: 16px;"></p>
+                        <div class="form-group" style="display: flex; gap: 12px; justify-content: center;">
+                            <button class="btn btn-secondary" onclick="startQrLogin()">重新生成</button>
+                            <button class="btn btn-secondary" onclick="closeQrPanel()">关闭</button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 快速开始：三个入口卡片引导新用户按顺序配置并体验核心能力。 -->
+                <div class="quick-start">
+                    <h2>快速开始</h2>
+                    <div class="cards">
+                        <div class="card">
+                            <div class="card-icon">⚙️</div>
+                            <h3>1. 配置AI大模型</h3>
+                            <p>配置OpenAI兼容的API以启用AI功能</p>
+                            <button class="btn btn-primary" onclick="navigateTo('config')">前往配置</button>
+                        </div>
+                        <div class="card">
+                            <div class="card-icon">🔥</div>
+                            <h3>2. 探索热点</h3>
+                            <p>查看分区热门tag和活动情报</p>
+                            <button class="btn btn-primary" onclick="navigateTo('hotspot')">开始探索</button>
+                        </div>
+                        <div class="card">
+                            <div class="card-icon">💬</div>
+                            <h3>3. 监控评论</h3>
+                            <p>实时监控视频评论和舆情预警</p>
+                            <button class="btn btn-primary" onclick="navigateTo('comment')">开始监控</button>
+                        </div>
+                    </div>
+
+                    <!-- 社区支持卡片：与前三个功能入口分组展示，方便用户识别外部支持入口。 -->
+                    <div class="cards support-cards">
+                        <div class="card">
+                            <div class="card-icon">⭐</div>
+                            <h3>支持作者</h3>
+                            <p>为作者在github上点个⭐吧拜托了！</p>
+                            <!-- 已配置作者仓库地址，供用户直接访问项目源码。 -->
+                            <a class="btn btn-primary" href="https://github.com/FORK-is-coding/FishTool" aria-label="前往github">前往github</a>
+                        </div>
+                        <div class="card notice-card">
+                            <div class="card-icon">📌</div>
+                            <h3>注意事项</h3>
+                            <div class="notice-copy">
+                                <p>1.本项目完全<strong>开源免费</strong>，无任何盈利计划，谨防诈骗。</p>
+                                <p>2.本项目由<strong>无技术背景</strong>的<strong>落榜美术生</strong>制作，欢迎提交代码优化意见。</p>
+                                <p>3.本项目仅供个人学习交流，严禁任何企业或机构用于商业行为。</p>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <div class="card-icon">👥</div>
+                            <h3>意见反馈</h3>
+                            <p>点击加入QQ群</p>
+                            <button class="btn btn-primary" type="button" onclick="showGroupQrModal()">加入群聊</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 热点发现页：Tag词云 + 活动情报 + AI选题助手三个独立功能区块。 -->
+            <div id="hotspot-page" class="page">
+                <h1>🔥 热点发现</h1>
+                
+                <section class="section hotspot-lifecycle-section">
+                    <div class="hotspot-section-heading">
+                        <div>
+                            <p class="dashboard-eyebrow">LIFECYCLE SIGNALS</p>
+                            <h2>热点生命周期</h2>
+                        </div>
+                        <span id="hotspot-algorithm-version" class="hotspot-algorithm-badge">算法加载中</span>
+                    </div>
+                    <p class="hotspot-notice">采集采用活跃时段分段采样、评论热评 Top+增量；为保护账号不被风控，宁慢勿封。</p>
+                    <p class="hotspot-notice hotspot-notice-sub">首次使用仅有单日切片，阶段会显示“数据不足”属正常；连续使用几天后算法开始计算，建议持续数天以积累充足数据。</p>
+                    <div id="hotspot-lifecycle-grid" class="hotspot-lifecycle-grid"><p class="text-muted">数据积累中，连续采集几天后解锁阶段判断。</p></div>
+                    <div class="hotspot-progress-row">
+                        <span id="hotspot-collect-message">采集进度查询中</span>
+                        <progress id="hotspot-collect-progress" max="100" value="0"></progress>
+                        <select id="hotspot-tid-select" class="hotspot-collect-select" title="采集分区">
+                            <option value="">加载全站分区...</option>
+                        </select>
+                        <select id="hotspot-limit-select" class="hotspot-collect-select" title="采集数量">
+                            <option value="20" selected>20条</option>
+                            <option value="50">50条</option>
+                            <option value="100">100条</option>
+                            <option value="200">200条</option>
+                        </select>
+                        <select id="hotspot-min-view-select" class="hotspot-collect-select" title="绘画区播放量下限">
+                            <option value="10000">下限1万</option>
+                            <option value="50000" selected>下限5万</option>
+                            <option value="100000">下限10万</option>
+                        </select>
+                        <button class="btn btn-primary" id="hotspot-collect-btn" onclick="triggerHotspotCollect()">立即采集</button>
+                    </div>
+                </section>
+
+                <!-- 账号关联抽屉：遮罩 + 抽屉本体，内容由 app.hotspot.js 动态渲染 -->
+                <div id="hotspot-drawer-mask" class="hotspot-drawer-mask" onclick="closeHotspotDrawer()"></div>
+                <aside id="hotspot-drawer" class="hotspot-drawer" aria-label="账号关联抽屉"></aside>
+
+                <!-- 分区热门Tag词云：按分区拉取热门视频并统计高频Tag，生成词云结果。
+                    与活动情报/AI选题助手同级的完整卡片，间距沿用 .section 的 margin-bottom(30px)。 -->
+                <section class="section">
+                    <h2>分区热门Tag词云</h2>
+                    <div class="form-group">
+                        <label>选择分区：</label>
+                        <select id="zone-select" class="form-control">
+                            <option value="">加载中...</option>
+                        </select>
+                        <button class="btn btn-primary" onclick="generateTagCloud()">生成词云</button>
+                    </div>
+                    <div id="tag-cloud-result" class="result-area"></div>
+                </section>
+
+                <!-- 活动情报：拉取各分区官方活动与激励计划，实时追踪运营机会。 -->
+                <section class="section">
+                    <h2>活动情报</h2>
+                    <div class="form-group">
+                        <label for="activity-zone">分区选择：</label>
+                        <select id="activity-zone" class="form-control">
+                            <option value="all">全部</option>
+                            <option value="game">游戏区（游戏官号激励计划）</option>
+                            <option value="anime">动画区（番剧/动画官号）</option>
+                            <option value="paint">绘画区（画师同人站等蓝标UGC）</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-primary" onclick="fetchActivities()">拉取最新活动</button>
+                    <div id="activity-result" class="result-area"></div>
+                </section>
+
+                <!-- 选题助手：基于真实热点数据调用 AI 生成创作方向建议。 -->
+                <section class="section">
+                    <h2>AI选题助手</h2>
+                    <div class="form-group">
+                        <label>创作方向：</label>
+                        <input type="text" id="topic-direction" class="form-control" placeholder="例如：游戏解说、美食测评">
+                    </div>
+                    <div class="form-group">
+                        <label>目标分区：</label>
+                        <select id="topic-zone" class="form-control"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>生成数量：</label>
+                        <input type="number" id="topic-count" class="form-control" value="5" min="1" max="20">
+                    </div>
+                    <button class="btn btn-primary" onclick="generateTopics()">生成选题</button>
+                    <div id="topic-result" class="result-area"></div>
+                </section>
+            </div>
+
+            <!-- 评论监控页：常驻监控卡片 + 单次监控表单 + 可视化大屏 + 预警记录。 -->
+            <div id="comment-page" class="page">
+                <h1>💬 评论监控</h1>
+                
+                <!-- 常驻监控卡片：状态、统计、控制和运行态右侧波形保持在同一操作区域。
+                    开启/恢复/暂停/停止 对应后端 /comment/resident/* 四个接口。 -->
+                <section class="resident-monitor-card" aria-live="polite">
+                    <!-- 运行态专用右侧音频均衡器波形；暂停和停止由 CSS 状态选择器处理。 -->
+                    <div class="resident-monitor-waveform" aria-hidden="true">
+                        <span></span><span></span><span></span><span></span><span></span><span></span>
+                        <span></span><span></span><span></span><span></span><span></span><span></span>
+                    </div>
+                    <div class="resident-monitor-heading">
+                        <div>
+                            <p class="dashboard-eyebrow">RESIDENT COMMENT MONITOR</p>
+                            <h2>常驻监控状态</h2>
+                        </div>
+                        <span id="resident-monitor-status" class="monitor-state-chip">已停止</span>
+                    </div>
+                    <div class="resident-monitor-metrics">
+                        <span>上次采集 <strong id="resident-last-collect">暂无</strong></span>
+                        <span>累计新增 <strong id="resident-total-collected">0</strong> 条</span>
+                        <span>失败退避 <strong id="resident-failures">0</strong> 次</span>
+                    </div>
+                    <div class="resident-monitor-controls">
+                        <input id="resident-bvids" class="form-control" placeholder="BV号，多个用逗号分隔">
+                        <button class="btn btn-primary" onclick="enableResidentMonitor()">开启/恢复</button>
+                        <button class="btn btn-secondary" onclick="pauseResidentMonitor()">暂停</button>
+                        <button class="btn btn-secondary" onclick="stopResidentMonitor()">停止</button>
+                    </div>
+                </section>
+
+                <!-- 普采评论监控：支持按单个 BV 或按 UP 主 UID 串行采集账号投稿。 -->
+                <section class="section">
+                    <!-- 三列分别填写 BV、UID 和账号采集视频数量；BV 路径不会读取数量输入。 -->
+                    <div class="monitor-target-grid">
+                        <div class="form-group">
+                            <label for="monitor-bvid">视频BV号：</label>
+                            <input type="text" id="monitor-bvid" class="form-control" placeholder="BV1xx411c7XZ" autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label for="monitor-uid">UP主UID：</label>
+                            <input type="text" id="monitor-uid" class="form-control" placeholder="例如：12345678" inputmode="numeric" autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label for="monitor-video-limit">视频数量：</label>
+                            <input type="number" id="monitor-video-limit" class="form-control" value="10" min="1" max="50" step="1" inputmode="numeric" aria-describedby="monitor-video-limit-help">
+                            <small id="monitor-video-limit-help">UID采集范围：1-50，默认10</small>
+                        </div>
+                    </div>
+                    <!-- 采集策略下拉栏：快速(默认100条) / 全面(全量采集) -->
+                    <div class="form-group monitor-option-row">
+                        <label for="monitor-strategy">采集策略：</label>
+                        <select id="monitor-strategy" class="form-control" style="max-width: 220px; display: inline-block; width: auto;">
+                            <option value="normal" selected>快速（默认，100条采集）</option>
+                            <option value="full">全面（全量采集）</option>
+                        </select>
+                        <span style="margin-left: 8px; color: #888; font-size: 12px;">全面模式评论较多时耗时较长，可查看采集进度</span>
+                    </div>
+                    <!-- 去重和情感开关继续服务原有 BV 采集路径，保持既有功能不变。 -->
+                    <div class="form-group monitor-option-row">
+                        <label>
+                            <input type="checkbox" id="enable-dedup" checked>
+                            启用去重
+                        </label>
+                        <label style="margin-left: 20px;">
+                            <input type="checkbox" id="enable-sentiment" checked>
+                            启用情感分析
+                        </label>
+                    </div>
+                    <!-- 提交按钮在请求期间由 JS 禁用并显示当前采集目标，避免重复提交。 -->
+                    <button id="monitor-submit-button" class="btn btn-primary" type="button" onclick="monitorVideo()">开始监控</button>
+                    <div id="monitor-result" class="result-area"></div>
+                    <!-- 评论可视化大屏：固定尺寸容器保证 ECharts 在离线环境稳定初始化。 -->
+                    <section id="monitor-visualization" class="comment-dashboard" aria-live="polite">
+                        <header class="dashboard-header">
+                            <div>
+                                <p class="dashboard-eyebrow">COMMENT INTELLIGENCE</p>
+                                <h3>评论舆情可视化</h3>
+                            </div>
+                            <span id="dashboard-data-status" class="dashboard-status">等待数据</span>
+                        </header>
+
+                        <div class="dashboard-metrics" aria-label="评论核心指标">
+                            <div class="metric-item"><span>原始评论</span><strong id="metric-before">0</strong></div>
+                            <div class="metric-item"><span>清洗后</span><strong id="metric-after">0</strong></div>
+                            <div class="metric-item"><span>去重数量</span><strong id="metric-removed">0</strong></div>
+                            <div class="metric-item"><span>高声量条目</span><strong id="metric-voice">0</strong></div>
+                        </div>
+
+                        <div class="dashboard-chart-grid">
+                            <section class="chart-panel" aria-label="情感分布图表">
+                                <div class="panel-title">情感分布</div>
+                                <div id="sentiment-chart" class="dashboard-chart"></div>
+                                <div id="sentiment-empty" class="chart-empty">暂无情感数据</div>
+                            </section>
+                            <section class="chart-panel" aria-label="评论趋势图表">
+                                <div class="panel-title">评论日期趋势</div>
+                                <div id="trend-chart" class="dashboard-chart"></div>
+                                <div id="trend-empty" class="chart-empty">暂无趋势数据</div>
+                            </section>
+                            <section class="chart-panel chart-panel-wide" aria-label="清洗原因图表">
+                                <div class="panel-title">去重与清洗构成</div>
+                                <div id="dedup-chart" class="dashboard-chart dashboard-chart-short"></div>
+                                <div id="dedup-empty" class="chart-empty">暂无去重数据，当前评论均为唯一内容</div>
+                            </section>
+                        </div>
+
+                        <!-- 独立 Top10 模块，不再把高声量细则堆成普通文本。 -->
+                        <section class="voice-module">
+                            <div class="voice-module-header">
+                                <div>
+                                    <p class="dashboard-eyebrow">VOICE RANKING</p>
+                                    <h3>前十高声量具体评论</h3>
+                                </div>
+                                <span class="voice-rule">声量分 = 点赞 + 聚合权重</span>
+                            </div>
+                            <div id="monitor-top10" class="voice-list"></div>
+                        </section>
+                    </section>
+                </section>
+
+                <section class="section">
+                    <h2>预警记录</h2>
+                    <button class="btn btn-secondary" onclick="loadAlerts()">刷新预警</button>
+                    <div id="alerts-list" class="result-area"></div>
+                </section>
+            </div>
+
+            <!-- 头部UP主拆解页：先拉分区头部UP列表，再对单个UP做运营策略分析。 -->
+            <div id="analysis-page" class="page">
+                <h1>🎯 头部UP主拆解</h1>
+                <p class="subtitle">分析分区头部UP主的运营策略与数据表现</p>
+
+                <section class="section">
+                    <h2>选择分析目标</h2>
+                    <div class="form-group">
+                        <label>目标分区：</label>
+                        <select id="analysis-zone-select" class="form-control">
+                            <option value="">加载中...</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>获取数量：</label>
+                        <input type="number" id="analysis-limit" class="form-control" value="10" min="1" max="50">
+                    </div>
+                    <button class="btn btn-primary" onclick="fetchTopUps()">获取头部UP主</button>
+                    <div id="top-ups-result" class="result-area"></div>
+                </section>
+
+                <section class="section">
+                    <h2>运营策略分析</h2>
+                    <div class="form-group">
+                        <label>UP主UID或主页链接：</label>
+                        <input type="text" id="analyze-uid" class="form-control" placeholder="输入UID或主页链接">
+                    </div>
+                    <button class="btn btn-primary" onclick="analyzeUp()">开始分析</button>
+                    <div id="analysis-result" class="result-area"></div>
+                </section>
+            </div>
+
+            <!-- 账号自诊页：对比分区基准，输出账号健康度、互动效率与 AI 运营建议。 -->
+            <div id="self-diagnosis-page" class="page">
+                <h1>🏥 账号自诊</h1>
+                <p class="subtitle">对比分区数据，发现账号增长瓶颈</p>
+
+                <section class="section">
+                    <h2>诊断我的账号</h2>
+                    <div class="form-group">
+                        <label>我的B站UID：</label>
+                        <input type="text" id="diagnosis-uid" class="form-control" placeholder="输入你的B站UID">
+                    </div>
+                    <div class="form-group">
+                        <label>对比分区（可选）：</label>
+                        <select id="diagnosis-zone-select" class="form-control">
+                            <option value="">不对比分区</option>
+                            <option value="">加载中...</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-primary" onclick="runSelfDiagnosis()">开始自诊</button>
+                    <button class="btn btn-secondary" onclick="exportDiagnosisReport()">导出报告</button>
+                    <div id="diagnosis-result" class="result-area"></div>
+                </section>
+            </div>
+
+            <!-- 配置页：AI大模型教程引导 + 密钥/地址/模型配置 + 用量统计。 -->
+            <div id="config-page" class="page">
+                <h1>⚙️ 配置管理</h1>
+                <p class="config-intro">模型可由用户自由灵活配置，不同水平的AI会影响工具箱内涉及AI功能模块的产出效果</p>
+
+                <section class="section ai-guide-card">
+                    <div class="guide-heading">
+                        <span class="guide-badge">新手指引</span>
+                        <div>
+                            <h2>AI配置教程</h2>
+                            <p>以 DeepSeek 为例，三步完成配置，无需编程基础。</p>
+                        </div>
+                    </div>
+                    <div class="guide-explainer">
+                        <p><strong>API是什么</strong></p>
+                        <p>API 可以理解为工具箱和 DeepSeek 之间的专用通道。工具箱通过它把分析需求交给模型，再把结果展示给你。</p>
+                    </div>
+                    <div class="guide-steps" aria-label="DeepSeek API配置步骤">
+                        <article class="guide-step">
+                            <span>01</span>
+                            <h3>申请 API Key</h3>
+                            <p>访问 DeepSeek 开放平台，注册并登录账号，在“API Keys”中创建一枚新密钥。</p>
+                        </article>
+                        <article class="guide-step">
+                            <span>02</span>
+                            <h3>填入配置页</h3>
+                            <p>把密钥填入下方 API Key；Base URL 填写 <code>https://api.deepseek.com</code>。</p>
+                        </article>
+                        <article class="guide-step">
+                            <span>03</span>
+                            <h3>选择模型</h3>
+                            <p>从模型列表选择 <code>deepseek-chat</code>，再点击“保存配置”。</p>
+                        </article>
+                    </div>
+                    <div class="guide-explainer guide-config">
+                        <p><strong>API如何配置</strong></p>
+                        <p>按上方顺序填好三个字段即可。保存后，热点选题、UP主拆解等 AI 功能会使用你选择的模型。</p>
+                    </div>
+                    <div class="api-key-warning" role="note">
+                        <span aria-hidden="true">!</span>
+                        <p><strong>API Key 相当于账号密码</strong><br>请只填写在自己的工具箱中，不要截图、转发或提供给他人。</p>
+                    </div>
+                </section>
+                
+                <section class="section ai-config-card">
+                    <!-- 模型下拉：JS 探测成功时替换手填框，失败时保持手填能力。 -->
+                    <h2>AI大模型配置</h2>
+                    <div class="form-group">
+                        <label>API Key：</label>
+                        <input type="password" id="llm-api-key" class="form-control" placeholder="sk-xxx">
+                    </div>
+                    <div class="form-group">
+                        <label>Base URL：</label>
+                        <input type="text" id="llm-base-url" class="form-control" value="https://api.openai.com/v1">
+                    </div>
+                    <div class="form-group">
+                        <label>Model：</label>
+                        <!-- 成功获取模型后由 JS 替换为下拉框，失败时保留手填能力。 -->
+                        <input type="text" id="llm-model" class="form-control" value="gpt-3.5-turbo" autocomplete="off">
+                        <select id="llm-model-select" class="form-control" style="display: none;"></select>
+                        <small id="llm-model-status" style="color: var(--text-secondary);"></small>
+                    </div>
+                    <button class="btn btn-primary" onclick="saveLLMConfig()">保存配置</button>
+                </section>
+
+                <section class="section">
+                    <h2>AI大模型用量统计</h2>
+                    <button class="btn btn-secondary" onclick="loadLLMUsage()">查看用量</button>
+                    <div id="llm-usage" class="result-area"></div>
+                </section>
+            </div>
+
+            <!-- 抽奖工具页：真人筛选、受约束 AI 快筛与评论区随机抽奖。 -->
+            <div id="lottery-page" class="page">
+                <h1>🎁 抽奖工具</h1>
+                <p class="subtitle">先核对内容，再复用本地评论数据完成真人筛选或随机抽取</p>
+
+                <div class="lottery-layout">
+                    <section class="section lottery-workbench">
+                        <div class="lottery-section-heading">
+                            <div>
+                                <p class="dashboard-eyebrow">REAL PERSON REVIEW</p>
+                                <h2>真人筛选</h2>
+                            </div>
+                            <span class="lottery-badge">AI 受限数据判定</span>
+                        </div>
+                        <div class="form-group">
+                            <label for="lottery-filter-target">视频 BV 号或动态完整链接</label>
+                            <input id="lottery-filter-target" class="form-control" type="text" placeholder="BV1xx... 或 https://t.bilibili.com/...">
+                        </div>
+                        <div class="form-group">
+                            <label for="lottery-focus-template">AI 判定侧重点模板</label>
+                            <textarea id="lottery-focus-template" class="form-control lottery-prompt" rows="4">重点核验账号等级、可观察账号年龄、近期活跃度，以及近期动态是否几乎全部为转发抽奖。不要因低等级单一指标直接判定。</textarea>
+                            <small>模板只调整判断侧重点；系统会强制 AI 仅使用本次传入的结构化数据。</small>
+                        </div>
+                        <button id="lottery-filter-button" class="btn btn-primary" type="button" onclick="startRealUserFilter()">分析评论区全部用户</button>
+                        <div id="lottery-filter-result" class="result-area" aria-live="polite"></div>
+                    </section>
+
+                    <section class="section lottery-quick-card">
+                        <div class="lottery-section-heading">
+                            <div>
+                                <p class="dashboard-eyebrow">FOCUSED UID CHECK</p>
+                                <h2>快速筛选</h2>
+                            </div>
+                            <span class="lottery-badge secondary">单 UID</span>
+                        </div>
+                        <div class="form-group">
+                            <label for="lottery-quick-uid">用户 UID</label>
+                            <input id="lottery-quick-uid" class="form-control" type="number" min="1" placeholder="输入需要核验的 UID">
+                        </div>
+                        <div class="lottery-quick-actions">
+                            <button id="lottery-quick-button" class="btn btn-secondary" type="button" onclick="quickFilterUser()">采集画像并交给 AI 核验</button>
+                            <button id="lottery-verify-winners-button" class="btn btn-primary" type="button" onclick="verifyLotteryWinners()">一键校验中奖名单</button>
+                        </div>
+                        <div id="lottery-quick-result" class="result-area" aria-live="polite"></div>
+                    </section>
+
+                    <section class="section lottery-draw-card">
+                        <div class="lottery-section-heading">
+                            <div>
+                                <p class="dashboard-eyebrow">RANDOM DRAW</p>
+                                <h2>评论区随机抽奖</h2>
+                            </div>
+                            <span class="lottery-badge success">本地优先</span>
+                        </div>
+                        <div class="lottery-draw-controls">
+                            <div class="form-group lottery-target-field">
+                                <label for="lottery-draw-target">视频 BV 号或动态完整链接</label>
+                                <input id="lottery-draw-target" class="form-control" type="text" placeholder="输入后先预览标题与发布者">
+                            </div>
+                            <div class="form-group">
+                                <label for="lottery-winner-count">中奖人数</label>
+                                <input id="lottery-winner-count" class="form-control" type="number" value="1" min="1" max="100">
+                            </div>
+                        </div>
+                        <div class="lottery-filter-grid" aria-label="候选用户筛选条件">
+                            <label class="lottery-toggle lottery-vip-toggle"><input id="lottery-vip-only" type="checkbox"><span>仅限大会员</span></label>
+                            <div class="form-group">
+                                <label for="lottery-min-level">最低用户等级</label>
+                                <select id="lottery-min-level" class="form-control lottery-select">
+                                    <option value="">不限等级</option>
+                                    <option value="0">Lv0 及以上</option>
+                                    <option value="1">Lv1 及以上</option>
+                                    <option value="2">Lv2 及以上</option>
+                                    <option value="3">Lv3 及以上</option>
+                                    <option value="4">Lv4 及以上</option>
+                                    <option value="5">Lv5 及以上</option>
+                                    <option value="6">仅 Lv6</option>
+                                </select>
+                            </div>
+                            <div class="form-group lottery-date-field">
+                                <label for="lottery-date-start">评论开始日期</label>
+                                <input id="lottery-date-start" class="form-control" type="date">
+                            </div>
+                            <div class="form-group lottery-date-field">
+                                <label for="lottery-date-end">评论结束日期</label>
+                                <input id="lottery-date-end" class="form-control" type="date">
+                            </div>
+                        </div>
+                        <label class="lottery-toggle"><input id="lottery-unique-users" type="checkbox" checked><span>同一 UID 只保留一次抽奖机会</span></label>
+                        <button id="lottery-preview-button" class="btn btn-primary" type="button" onclick="previewLotteryDraw()">核对内容并开始</button>
+                        <div id="lottery-preview-result" class="lottery-preview" aria-live="polite"></div>
+                        <div id="lottery-draw-result" class="result-area" aria-live="polite"></div>
+                        <div id="lottery-winner-verification-result" class="result-area" aria-live="polite"></div>
+                    </section>
+                </div>
+            </div>
+
+            <!-- 日志页：来源/级别/关键词筛选 + 2 秒增量轮询 + 问题日志导出。 -->
+            <div id="logs-page" class="page">
+                <h1>📋 平台日志</h1>
+
+                <section class="section logs-toolbar">
+                    <div class="logs-toolbar-row">
+                        <div class="form-group">
+                            <label for="log-type">日志来源</label>
+                            <select id="log-type" class="form-control">
+                                <option value="all">全项目日志</option>
+                                <option value="app">应用日志</option>
+                                <option value="error">错误日志</option>
+                                <option value="crawler">爬虫日志</option>
+                                <option value="risk">风控日志</option>
+                            </select>
+                        </div>
+                        <div class="form-group logs-keyword-field">
+                            <label for="log-keyword">关键词</label>
+                            <input id="log-keyword" class="form-control" type="search" placeholder="筛选模块或消息">
+                        </div>
+                        <button class="btn btn-primary" type="button" onclick="loadLogs(true)">重新加载</button>
+                        <button class="btn btn-secondary" type="button" onclick="exportProblemLogs()">导出问题日志</button>
+                    </div>
+                    <div class="log-level-filters" role="group" aria-label="日志级别筛选">
+                        <label><input type="checkbox" value="DEBUG" checked> <span class="log-level-chip level-debug">DEBUG</span></label>
+                        <label><input type="checkbox" value="INFO" checked> <span class="log-level-chip level-info">INFO</span></label>
+                        <label><input type="checkbox" value="WARNING" checked> <span class="log-level-chip level-warning">WARNING</span></label>
+                        <label><input type="checkbox" value="ERROR" checked> <span class="log-level-chip level-error">ERROR</span></label>
+                    </div>
+                    <div class="logs-status-row"><span id="logs-status">实时连接准备中</span><span id="logs-count">0 条</span></div>
+                </section>
+                <div id="logs-content" class="logs-area" aria-live="polite"></div>
+            </div>
+
+            <!-- 使用说明页：展示项目说明与后续补充说明。 -->
+            <div id="usage-page" class="page usage-page">
+                <h1>⚠️ 使用说明</h1>
+                <div class="usage-card-stack">
+                    <section class="card usage-card">
+                        <div class="usage-card-heading">
+                            <span class="card-icon" aria-hidden="true">🧭</span>
+                            <div>
+                                <h2>项目说明</h2><!-- 第一张卡片的模块标题。 -->
+                                <p class="usage-card-subtitle">项目背景、定位与使用声明</p><!-- 概括正文涵盖的信息。 -->
+                            </div>
+                        </div>
+                        <div class="usage-card-content" tabindex="0"><!-- 保留可聚焦、可滚轮滚动的正文接口。 -->
+                            <div class="usage-item"><!-- 按使用说明条目结构承载分段文案。 -->
+                                <p><strong>技术说明</strong>：本项目完全基于 AstrBot 全流程 vibe coding 制作，当前处于测试阶段。若您发现代码可优化之处、漏洞或架构建议，欢迎提出！</p><!-- 说明项目技术实现与反馈渠道。 -->
+                                <p><strong>产品定位</strong>：本项目是基于个人运营经验打造的验证型产品。若您有功能设想或需求方案，欢迎反馈～</p><!-- 说明产品定位与需求反馈范围。 -->
+                                <p><strong>使用声明</strong>：本项目为在校学生个人制作的技术验证产物，仅供交流学习，严禁贩卖、盈利或破坏性改造，严禁企业或机构使用。如有相关业务需求，请前往 B 站 API 开放平台申请官方接口。</p><!-- 说明允许用途、禁止用途与官方接口指引。 -->
+                            </div><!-- 结束项目说明条目。 -->
+                        </div><!-- 结束第一张卡片的独立滚动正文区。 -->
+                    </section>
+                    <section class="card usage-card">
+                        <div class="usage-card-heading">
+                            <span class="card-icon" aria-hidden="true">📝</span>
+                            <div>
+                                <h2>免责声明</h2><!-- 第二张卡片展示完整的免责声明与边界限定协议。 -->
+                                <p class="usage-card-subtitle">使用本工具前请完整阅读以下协议</p><!-- 提醒用户先阅读协议内容。 -->
+                            </div>
+                        </div>
+                        <div class="usage-card-content" tabindex="0"><!-- 免责声明内容支持在卡片内使用鼠标滚轮独立滚动。 -->
+                            <div class="usage-disclaimer"><!-- 按协议章节保留原始文案，便于阅读和维护。 -->
+                                <p>免责声明与边界限定协议</p>
+                                <p>1. 项目性质与开源协议<br>本项目（以下简称"本工具"）系面向B站个人创作者的辅助性开源代码，旨在提供技术学习与经验交流的工具。本工具完全免费且开源，仅供个人学习、研究及非商业性质的技术交流使用。严禁任何个人或组织将本工具用于商业盈利、数据倒卖或破坏平台生态的行为。</p>
+                                <p>2. 免责条款<br>本工具按"原样（AS IS）"提供，开发者不提供任何明示或暗示的保证（包括但不限于对适销性、特定用途适用性和非侵权性的保证）。<br>技术风险：因使用、修改或分发本工具源码而导致的任何直接、间接、偶然、特殊或后果性的损害（包括但不限于账号封禁、数据丢失、设备故障等），开发者及贡献者概不负责。<br>合规风险：用户在使用本工具获取B站公开数据及调用AI大模型时，必须严格遵守《中华人民共和国网络安全法》、《数据安全法》及B站平台用户协议。因用户自行修改代码、绕过限制、高频抓取或滥用AI生成内容而引发的任何法律纠纷、平台处罚或经济损失，均由用户自行承担。</p>
+                                <p>3. 数据与隐私边界限定<br>公开数据原则：本工具默认仅获取B站平台向公众公开的数据。<br>本地化与隐私：本工具未设置任何后门或云端数据收集机制。用户的API Key、Cookie等敏感凭证均由用户自行配置，并以加密形式仅存储于本地设备。因用户本地环境不安全或操作不当导致的凭证泄露，开发者不承担任何责任。</p>
+                                <p>4. 知识产权与禁止滥用<br>本项目的源代码、UI设计及文档遵循开源协议发布。未经原作者书面授权，任何个人或组织不得将本工具或其衍生版本用于非法用途、恶意攻击或大规模商业化运营。</p>
+                                <p>5. 最终解释权<br>本免责声明适用于所有下载、克隆、Fork或使用本项目源码的用户。用户一旦开始使用本工具，即视为已充分阅读、理解并同意接受本协议的全部约束。</p>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- ECharts 固定为本地静态资源，断网环境不依赖 CDN。 -->
+    <script src="/static/vendor/echarts.min.js"></script>
+    <!-- 版本参数用于让 8000 端口加载本次弹窗修复后的脚本，避免旧 JS 缓存导致 onclick 无响应。 -->
+    <script src="/static/js/app.core.js?v=split-20260824"></script>
+<script src="/static/js/app.hotspot.js?v=split-20260824-tagcard"></script>
+<script src="/static/js/app.comment.js?v=split-20260824"></script>
+<script src="/static/js/app.config.js?v=split-20260824"></script>
+<script src="/static/js/app.up.js?v=split-20260824"></script>
+<script src="/static/js/app.auth.js?v=split-20260824"></script>
+<script src="/static/js/app.lottery.js?v=split-20260824"></script>
+<script src="/static/js/app.ui.js?v=split-20260824"></script>
+</body>
+</html>

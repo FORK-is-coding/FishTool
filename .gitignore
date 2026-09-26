@@ -1,0 +1,30 @@
+# 密钥与敏感配置
+config/.key
+config/.secrets
+*.key
+*.secrets
+.env
+.env.*
+
+# 数据库与运行数据
+data/*.db
+*.db
+*.db-shm
+*.db-wal
+*.sqlite3
+logs/
+*.log
+
+# Python 缓存与构建产物
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+build/
+dist/
+.codegraph/
+
+# 备份文件
+*.bak
+*.bak_*
+backup_*/

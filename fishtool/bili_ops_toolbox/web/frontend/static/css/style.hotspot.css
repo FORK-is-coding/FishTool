@@ -1,0 +1,60 @@
+/* 热点生命周期 rev3：复用全局莫兰迪暖色变量。 */
+.hotspot-section-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.hotspot-algorithm-badge { padding:6px 12px; border-radius:999px; color:var(--text-secondary); background:var(--primary-soft); border:1px solid var(--border-color); font-size:12px; }
+.hotspot-notice { color:var(--text-secondary); font-size:13px; margin:10px 0 16px; }
+.hotspot-notice-sub { margin:-8px 0 16px; color:var(--text-secondary); font-size:12px; opacity:.85; }
+.hotspot-lifecycle-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+.hotspot-lifecycle-card { background:var(--bg-elevated); border:1px solid var(--border-color); border-radius:var(--card-radius); padding:18px; box-shadow:var(--shadow); transition:box-shadow .2s, transform .2s; }
+.hotspot-lifecycle-card:hover { box-shadow:var(--shadow-hover); transform:translateY(-2px); }
+.hotspot-lifecycle-card h3 { color:var(--text-primary); font-size:16px; margin-bottom:5px; }
+.hotspot-lifecycle-meta { color:var(--text-secondary); font-size:13px; }
+.hotspot-confidence { color:var(--success-color); font-weight:600; }
+.hotspot-progress-row { display:flex; align-items:center; gap:12px; margin-top:16px; color:var(--text-secondary); font-size:13px; flex-wrap:wrap; }
+.hotspot-progress-row progress { flex:1; min-width:120px; accent-color:var(--primary-color); }
+.hotspot-progress-row .btn { flex-shrink:0; }
+.hotspot-collect-select { padding:4px 8px; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-elevated); color:var(--text-primary); font-size:12px; flex-shrink:0; }
+/* 阶段标签与卡片操作行 */
+.hotspot-stage-pill { padding:2px 10px; border-radius:999px; font-size:12px; color:var(--text-secondary); background:var(--primary-soft); border:1px solid var(--border-color); }
+/* 卡片每千粉转化伪徽标：圆角背景小标签，与阶段 pill 同族样式但用强调色区分 */
+.hotspot-metric-badges { display:inline-flex; gap:4px; margin-left:4px; flex-wrap:wrap; vertical-align:middle; }
+.hotspot-metric-badge { padding:2px 8px; border-radius:999px; font-size:11px; line-height:1.4; color:var(--text-primary); background:rgba(251,114,153,0.12); border:1px solid rgba(251,114,153,0.35); white-space:nowrap; }
+
+/* 卡片趋势徽标：与抽屉增长判定联动，增长▲ / 显著增长▲▲ / 下滑▼ */
+.hotspot-trend-badge { display:inline-block; margin-left:4px; padding:2px 6px; border-radius:999px; font-size:11px; line-height:1; vertical-align:middle; }
+.hotspot-trend-up { color:#c0553b; background:rgba(192,85,59,.12); border:1px solid rgba(192,85,59,.35); }
+.hotspot-trend-down { color:#4a6b8a; background:rgba(74,107,138,.12); border:1px solid rgba(74,107,138,.35); }
+.hotspot-card-title-row { display:flex; align-items:center; justify-content:space-between; gap:10px; cursor:pointer; }
+.hotspot-card-title-row h3 { margin-bottom:0; }
+.hotspot-up-count { color:var(--primary-color); font-weight:600; }
+.hotspot-card-actions { margin-top:12px; display:flex; gap:8px; }
+.btn-sm { padding:4px 10px; font-size:12px; }
+/* 时间轴：卡片内嵌，默认折叠，点击标题区展开 */
+.hotspot-timeline-box { display:none; margin-top:12px; padding-top:10px; border-top:1px dashed var(--border-color); }
+.hotspot-timeline-box.hotspot-timeline-open { display:block; }
+.hotspot-timeline-title { font-size:12px; color:var(--text-secondary); margin-bottom:8px; }
+.hotspot-timeline-chart { width:100%; height:220px; }
+.hotspot-timeline-empty { font-size:12px; color:var(--text-secondary); }
+/* 采集失败明细：进度条下方小字提示，点击重试前可确认原因 */
+.hotspot-collect-detail { font-size:12px; color:var(--danger-color, #c0392b); margin-top:6px; }
+/* 账号关联抽屉 */
+.hotspot-drawer-mask { display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:900; }
+.hotspot-drawer-mask.hotspot-drawer-mask-show { display:block; }
+.hotspot-drawer { position:fixed; top:0; right:0; height:100%; width:min(420px, 92vw); background:var(--bg-elevated); border-left:1px solid var(--border-color); box-shadow:var(--shadow-hover); transform:translateX(100%); transition:transform .25s ease; z-index:901; display:flex; flex-direction:column; }
+.hotspot-drawer.hotspot-drawer-open { transform:translateX(0); }
+.hotspot-drawer-header { display:flex; align-items:center; justify-content:space-between; padding:18px 20px; border-bottom:1px solid var(--border-color); }
+.hotspot-drawer-header h3 { margin:0; color:var(--text-primary); font-size:16px; }
+.hotspot-drawer-header small { color:var(--text-secondary); font-size:12px; }
+.hotspot-drawer-close { border:none; background:transparent; font-size:24px; line-height:1; color:var(--text-secondary); cursor:pointer; }
+.hotspot-drawer-body { padding:20px; overflow-y:auto; }
+.hotspot-drawer-stat-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }
+.hotspot-drawer-stat-grid div { background:var(--primary-soft); border-radius:8px; padding:12px; text-align:center; }
+.hotspot-drawer-stat-grid span { display:block; font-size:12px; color:var(--text-secondary); margin-bottom:4px; }
+.hotspot-drawer-stat-grid b { font-size:18px; color:var(--text-primary); }
+.hotspot-drawer-growth { margin-top:16px; padding:10px 12px; border-radius:8px; background:var(--bg); border:1px solid var(--border-color); color:var(--text-secondary); font-size:13px; }
+/* 舰长转化行：与增速行同风格，直播中点绿色小圆点提示 */
+.hotspot-drawer-guard { margin-top:10px; padding:10px 12px; border-radius:8px; background:var(--bg); border:1px solid var(--border-color); color:var(--text-secondary); font-size:13px; display:flex; align-items:center; gap:8px; }
+.hotspot-drawer-guard b { color:var(--text-primary); }
+.hotspot-live-dot { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; color:#fff; background:var(--success-color, #27ae60); }
+.hotspot-drawer-actions { margin-top:16px; display:flex; gap:8px; }
+.hotspot-drawer-error { padding:16px; color:var(--danger-color, #c0392b); font-size:13px; }
+@media (max-width: 760px) { .hotspot-lifecycle-grid { grid-template-columns:1fr; } .hotspot-section-heading { align-items:flex-start; flex-direction:column; } }

@@ -1,0 +1,89 @@
+/* ===== style.responsive.css —— 拆分自 style.css（响应式适配），原始行 L1848-L1935 ===== */
+/* 窄屏下采集目标、账号指标和视频明细全部改为单列，避免文字相互遮挡。 */
+@media (max-width: 768px) {
+    .monitor-target-grid,
+    .account-report-metrics {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .account-report-header {
+        flex-direction: column;
+    }
+
+    .account-video-row {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 6px;
+    }
+}
+
+/* 中屏适配：指标卡与声量列表降为两列。 */
+@media (max-width: 900px) {
+    .dashboard-metrics,
+    .voice-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+/* 窄屏适配：侧边栏收窄为 60px 图标栏，隐藏文字。 */
+@media (max-width: 768px) {
+    .sidebar {
+        width: 60px;
+    }
+
+    .sidebar .logo h2,
+    .nav-item span:not(.icon) {
+        display: none;
+    }
+
+    .main-content {
+        margin-left: 60px;
+        padding: 20px;
+    }
+
+    .comment-dashboard {
+        padding: 14px;
+    }
+
+    .dashboard-header,
+    .voice-module-header {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .dashboard-chart-grid,
+    .voice-list,
+    .strategy-card-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .strategy-card:last-child {
+        grid-column: auto;
+    }
+
+    .up-summary-card {
+        grid-template-columns: 58px minmax(0, 1fr);
+    }
+
+    .up-avatar {
+        width: 58px;
+        height: 58px;
+    }
+
+    .up-summary-metrics {
+        grid-column: 1 / -1;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .chart-panel-wide {
+        grid-column: auto;
+    }
+
+    .voice-item {
+        grid-template-columns: 30px minmax(0, 1fr);
+    }
+
+    .voice-score {
+        grid-column: 2;
+        text-align: left;
+    }
+}

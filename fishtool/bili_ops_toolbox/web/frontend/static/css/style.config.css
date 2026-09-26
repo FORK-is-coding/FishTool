@@ -1,0 +1,149 @@
+/* ===== style.config.css —— 拆分自 style.css（AI 配置教程），原始行 L928-L1075 ===== */
+/* AI 配置教程沿用全站莫兰迪暖色与大圆角视觉语言。 */
+.config-intro {
+    margin: -18px 0 24px;
+    padding-left: 14px;
+    color: var(--text-secondary);
+    border-left: 3px solid var(--accent-color);
+}
+
+.ai-guide-card {
+    background-color: #fffaf3;
+}
+
+.guide-heading {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 22px;
+}
+
+.guide-heading h2,
+.guide-heading p {
+    margin: 0;
+}
+
+.guide-heading p {
+    color: var(--text-secondary);
+}
+
+.guide-badge {
+    flex: 0 0 auto;
+    padding: 7px 12px;
+    color: #6a5545;
+    font-size: 12px;
+    font-weight: 700;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    background: var(--primary-soft);
+}
+
+.guide-explainer {
+    padding: 16px 18px;
+    color: var(--text-secondary);
+    border-left: 3px solid var(--accent-color);
+    border-radius: var(--inner-radius);
+    background: rgba(163, 177, 138, 0.12);
+}
+
+.guide-explainer p + p {
+    margin-top: 5px;
+}
+
+.guide-explainer strong {
+    color: var(--text-primary);
+    font-size: 16px;
+}
+
+.guide-steps {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    margin: 18px 0;
+}
+
+.guide-step {
+    min-width: 0;
+    padding: 18px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--inner-radius);
+    background: var(--bg-secondary);
+}
+
+.guide-step > span {
+    display: inline-grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    margin-bottom: 12px;
+    color: white;
+    font-size: 12px;
+    font-weight: 700;
+    border-radius: 50%;
+    background: var(--primary-color);
+}
+
+.guide-step h3 {
+    margin-bottom: 7px;
+    color: var(--text-primary);
+    font-size: 16px;
+}
+
+.guide-step p {
+    color: var(--text-secondary);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+}
+
+.guide-step code {
+    color: #667f8c;
+    overflow-wrap: anywhere;
+}
+
+.guide-config {
+    border-left-color: var(--primary-color);
+    background: var(--primary-soft);
+}
+
+.api-key-warning {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-top: 18px;
+    padding: 14px 16px;
+    color: #79544f;
+    border: 1px solid rgba(180, 111, 105, 0.42);
+    border-radius: var(--inner-radius);
+    background: rgba(180, 111, 105, 0.09);
+}
+
+.api-key-warning > span {
+    display: grid;
+    flex: 0 0 auto;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    color: white;
+    font-weight: 800;
+    border-radius: 50%;
+    background: var(--danger-color);
+}
+
+.ai-config-card {
+    border-top: 3px solid var(--primary-color);
+}
+
+@media (max-width: 900px) {
+    .guide-steps { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 600px) {
+    .loading-state { grid-template-columns: 38px minmax(0, 1fr); padding: 14px 4px; }
+    .loading-spinner { width: 36px; height: 36px; }
+    .loading-copy { align-items: flex-start; flex-direction: column; gap: 2px; }
+    .guide-heading { align-items: flex-start; flex-direction: column; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .loading-spinner { animation-duration: 1.8s; }
+}

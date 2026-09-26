@@ -1,0 +1,113 @@
+/* ===== style.help.css —— 拆分自 style.css（使用说明页），原始行 L2031-L2142 ===== */
+/* 使用说明页：项目说明按内容收缩，免责声明填满剩余高度，正文区域独立滚动。 */
+.usage-page {
+    display: none;
+    min-height: calc(100vh - 80px);
+    flex-direction: column;
+}
+
+.usage-page.active {
+    display: flex;
+}
+
+.usage-page > h1 { flex: 0 0 auto; }
+
+.usage-card-stack {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.usage-card {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    padding: 26px 30px;
+    text-align: left;
+    background: var(--bg-elevated);
+}
+
+/* 首张卡片按自身内容收缩，避免被剩余空间拉高。 */
+.usage-card:first-child {
+    flex: 0 0 auto;
+    padding-top: 18px;
+    padding-bottom: 18px;
+}
+
+/* 第二张卡片填满首张卡片之外的剩余空间。 */
+.usage-card:nth-child(2) {
+    flex: 1 1 auto;
+}
+
+.usage-card-heading {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 14px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.usage-card-heading .card-icon { flex: 0 0 auto; margin: 0; font-size: 32px; }
+.usage-card-heading h2 { margin: 0; font-size: 20px; color: var(--primary-color); }
+.usage-card-subtitle { margin-top: 3px; color: var(--text-secondary); font-size: 13px; }
+
+.usage-card-content {
+    min-height: 0;
+    flex: 1 1 auto; /* 让正文区填满卡片剩余高度，滚动时不改变卡片布局。 */
+    margin-top: 16px;
+    padding-right: 10px;
+    overflow-y: auto;
+    color: var(--text-secondary);
+    line-height: 1.8;
+    scrollbar-color: var(--primary-color) var(--bg-tertiary);
+}
+
+/* 首卡正文无需占满剩余空间，内容结束后立即收束卡片高度。 */
+.usage-card:first-child .usage-card-content {
+    flex: 0 0 auto;
+    overflow-y: visible;
+}
+
+/* 项目说明条目：使用网格间距保证三段正文清晰分隔。 */
+.usage-item { /* 限定样式只作用于使用说明正文。 */
+    display: grid; /* 使用网格布局管理段落间距。 */
+    gap: 14px; /* 为三段说明保留稳定的垂直留白。 */
+}
+
+/* 免责声明按章节留出稳定间距，同时继承卡片既有文字配色。 */
+.usage-disclaimer {
+    display: grid;
+    gap: 14px;
+}
+
+.usage-disclaimer p {
+    margin: 0;
+}
+
+.usage-disclaimer p:first-child {
+    color: var(--text-primary);
+    font-weight: 700;
+}
+
+/* 项目说明小标题：提高字重与正文层级对比。 */
+.usage-item strong { /* 仅强调每段开头的小标题。 */
+    color: var(--text-primary); /* 使用主文本色提升可读性。 */
+    font-weight: 700; /* 保持小标题明显加粗。 */
+}
+
+.usage-card-content:focus-visible {
+    outline: 2px solid var(--primary-border-hover);
+    outline-offset: 3px;
+}
+
+@media (max-width: 768px) {
+    .usage-page { min-height: calc(100vh - 40px); }
+    .usage-card { padding: 22px; }
+    .usage-card:first-child {
+        padding-top: 16px;
+        padding-bottom: 16px;
+    }
+}

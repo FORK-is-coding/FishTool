@@ -1,0 +1,81 @@
+/* ===== style.log.css —— 拆分自 style.css（日志区域），原始行 L847-L926 ===== */
+/* 日志区域 */
+.logs-area {
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    padding: 20px;
+    border-radius: 8px;
+    font-family: "SimHei", "Microsoft YaHei", sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    max-height: 600px;
+    overflow-y: auto;
+}
+
+.logs-area pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+/* 真实任务进度：转圈、百分比、进度条与预计时间同步展示。 */
+.loading-state {
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr);
+    gap: 12px 16px;
+    align-items: center;
+    width: min(620px, 100%);
+    margin: 0 auto;
+    padding: 20px;
+    text-align: left;
+}
+
+.loading-spinner {
+    grid-row: 1 / span 3;
+    width: 44px;
+    height: 44px;
+    border: 4px solid var(--primary-soft);
+    border-top-color: var(--primary-color);
+    border-right-color: var(--accent-color);
+    border-radius: 50%;
+    animation: loading-spin 850ms linear infinite;
+}
+
+.loading-copy {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    color: var(--text-primary);
+}
+
+.loading-percentage {
+    flex: 0 0 auto;
+    color: var(--primary-color);
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.loading-track {
+    height: 9px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--bg-tertiary);
+}
+
+.loading-track span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, var(--primary-color), var(--accent-color));
+    transition: width 280ms ease;
+}
+
+.loading-state p {
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+@keyframes loading-spin {
+    to { transform: rotate(360deg); }
+}

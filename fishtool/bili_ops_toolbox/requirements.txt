@@ -1,0 +1,31 @@
+# 网络请求
+aiohttp==3.9.1
+# 加密
+cryptography==41.0.7
+PyYAML==6.0.1
+# 网络请求
+requests==2.31.0
+# SQLAlchemy
+SQLAlchemy==2.0.23
+# PyQt5桌面客户端
+PyQt5==5.15.10
+# PyQtWebEngine（桌面端QWebEngineView必需，红线勿删）
+PyQtWebEngine==5.15.6
+websocket-client==1.6.4
+# Web框架
+fastapi==0.108.0
+# ASGI服务器
+uvicorn[standard]==0.25.0
+# 模板渲染（web/main.py Jinja2Templates 必需）
+jinja2==3.1.2
+# 网络请求（LLM OpenAI兼容调用）
+httpx==0.25.2
+# HTML解析
+beautifulsoup4==4.12.2
+# 二维码生成
+qrcode==7.4.2
+# PDF导出
+markdown2==2.4.12
+pdfkit==1.0.0
+# 静态类型检查
+pydantic==2.5.2

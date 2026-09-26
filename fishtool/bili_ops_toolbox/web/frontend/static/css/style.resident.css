@@ -1,0 +1,136 @@
+/* ===== style.resident.css —— 拆分自 style.css（常驻评论监控状态卡片），原始行 L216-L350 ===== */
+/* 常驻评论监控状态卡片：状态、统计和控制保持在同一操作区域。 */
+.resident-monitor-card { margin-bottom: 18px; padding: 18px; border: 1px solid var(--border-color); border-radius: var(--inner-radius); background: var(--bg-secondary); }
+.resident-monitor-heading, .resident-monitor-controls, .resident-monitor-metrics { display: flex; align-items: center; gap: 12px; }
+.resident-monitor-heading { justify-content: space-between; }
+.resident-monitor-heading h2 { margin: 0; font-size: 20px; }
+.resident-monitor-metrics { flex-wrap: wrap; margin: 14px 0; color: var(--text-secondary); font-size: 13px; }
+.resident-monitor-metrics strong { color: var(--text-primary); }
+.monitor-state-chip { padding: 5px 10px; border: 1px solid var(--border-color); border-radius: 999px; color: var(--primary-color); }
+.resident-monitor-controls .form-control { flex: 1; min-width: 180px; }
+/* 常驻卡片专属反馈：运行态仅在右侧显示清晰的音频均衡器波形，彻底移除左右镜像心跳。 */
+.resident-monitor-card {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    background: var(--bg-secondary);
+    transition: border-color 220ms ease, box-shadow 220ms ease, transform 220ms ease;
+}
+
+/* 卡片内容保持在波形之上，避免动态装饰影响文字和控件的可读性。 */
+.resident-monitor-card > * {
+    position: relative;
+    z-index: 1;
+}
+
+.resident-monitor-card::before,
+.resident-monitor-card::after {
+    position: absolute;
+    z-index: -1;
+    top: -20%;
+    bottom: -20%;
+    width: 64%;
+    border-radius: 50%;
+    pointer-events: none;
+    content: "";
+}
+
+/* 悬停光晕仍由卡片背景承载，不与右侧波形共用伪元素。 */
+.resident-monitor-card:hover {
+    border-color: var(--primary-border-hover);
+    background-image: radial-gradient(circle 190px at var(--x, 50%) var(--y, 50%), var(--glow-color), transparent 72%);
+    box-shadow: var(--shadow-hover);
+}
+
+/* 右侧均衡器区域固定尺寸，避免竖条律动时改变卡片布局。 */
+.resident-monitor-waveform {
+    position: absolute;
+    z-index: 0;
+    top: 50%;
+    right: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 5px;
+    width: min(38%, 220px);
+    height: 72px;
+    transform: translateY(-50%);
+    pointer-events: none;
+}
+
+/* 竖条使用低模糊暖驼色，保持音频波形轮廓清晰可辨。 */
+.resident-monitor-waveform span {
+    display: block;
+    flex: 0 0 4px;
+    height: 42px;
+    border-radius: 3px;
+    background: rgba(212, 163, 115, 0.86);
+    box-shadow: 0 0 4px rgba(212, 163, 115, 0.24);
+    transform: scaleY(0.22);
+    transform-origin: center;
+}
+
+/* 只有 running 状态启动波形；不使用任何左右位移或镜像收缩关键帧。 */
+.resident-monitor-card[data-monitor-state="running"] .resident-monitor-waveform span {
+    animation: residentAudioBar 1.6s ease-in-out infinite;
+}
+
+/* 通过错开的延迟制造连续、规律的均衡器波形，而非心跳式同步闪烁。 */
+.resident-monitor-card[data-monitor-state="running"] .resident-monitor-waveform span:nth-child(2) { animation-delay: -0.18s; }
+.resident-monitor-card[data-monitor-state="running"] .resident-monitor-waveform span:nth-child(3) { animation-delay: -0.36s; }
+.resident-monitor-card[data-monitor-state="running"] .resident-monitor-waveform span:nth-child(4) { animation-delay: -0.54s; }
+.resident-monitor-card[data-monitor-state="running"] .resident-monitor-waveform span:nth-child(5) { animation-delay: -0.72s; }
+.resident-monitor-card[data-monitor-state="running"] .resident-monitor-waveform span:nth-child(6) { animation-delay: -0.90s; }
+.resident-monitor-card[data-monitor-state="running"] .resident-monitor-waveform span:nth-child(7) { animation-delay: -1.08s; }
+.resident-monitor-card[data-monitor-state="running"] .resident-monitor-waveform span:nth-child(8) { animation-delay: -1.26s; }
+.resident-monitor-card[data-monitor-state="running"] .resident-monitor-waveform span:nth-child(9) { animation-delay: -1.44s; }
+.resident-monitor-card[data-monitor-state="running"] .resident-monitor-waveform span:nth-child(10) { animation-delay: -1.12s; }
+.resident-monitor-card[data-monitor-state="running"] .resident-monitor-waveform span:nth-child(11) { animation-delay: -0.84s; }
+.resident-monitor-card[data-monitor-state="running"] .resident-monitor-waveform span:nth-child(12) { animation-delay: -0.56s; }
+
+/* 不同条高让波形具有中心峰值和两侧回落，模拟音乐播放器均衡器。 */
+.resident-monitor-card[data-monitor-state="running"] .resident-monitor-waveform span:nth-child(3),
+.resident-monitor-card[data-monitor-state="running"] .resident-monitor-waveform span:nth-child(4),
+.resident-monitor-card[data-monitor-state="running"] .resident-monitor-waveform span:nth-child(5),
+.resident-monitor-card[data-monitor-state="running"] .resident-monitor-waveform span:nth-child(6),
+.resident-monitor-card[data-monitor-state="running"] .resident-monitor-waveform span:nth-child(7) {
+    height: 58px;
+}
+
+.resident-monitor-card[data-monitor-state="running"] .resident-monitor-waveform span:nth-child(8),
+.resident-monitor-card[data-monitor-state="running"] .resident-monitor-waveform span:nth-child(9) {
+    height: 50px;
+}
+
+/* 暂停仅保留原有弱光晕，明确关闭波形动画。 */
+.resident-monitor-card[data-monitor-state="paused"]::before,
+.resident-monitor-card[data-monitor-state="paused"]::after {
+    filter: blur(7px);
+    opacity: 0.34;
+}
+
+.resident-monitor-card[data-monitor-state="paused"]::before {
+    left: -12%;
+    background: radial-gradient(ellipse at 18% 50%, rgba(151, 91, 52, 0.30), transparent 60%);
+}
+
+.resident-monitor-card[data-monitor-state="paused"]::after {
+    right: -12%;
+    background: radial-gradient(ellipse at 82% 50%, rgba(151, 91, 52, 0.30), transparent 60%);
+}
+
+/* 停止态不显示伪元素和动态竖条，保留干净的静态卡片。 */
+.resident-monitor-card[data-monitor-state="stopped"]::before,
+.resident-monitor-card[data-monitor-state="stopped"]::after,
+.resident-monitor-card[data-monitor-state="stopped"] .resident-monitor-waveform {
+    display: none;
+}
+
+/* 非同步的多峰律动用于模拟音频振幅变化，避免产生心脏收缩感。 */
+@keyframes residentAudioBar {
+    0%, 100% { opacity: 0.58; transform: scaleY(0.28); }
+    25% { opacity: 0.92; transform: scaleY(0.82); }
+    50% { opacity: 0.74; transform: scaleY(0.46); }
+    75% { opacity: 1; transform: scaleY(1); }
+}
+

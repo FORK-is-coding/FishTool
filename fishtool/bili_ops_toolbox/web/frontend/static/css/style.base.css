@@ -1,0 +1,192 @@
+/* ===== style.base.css —— 拆分自 style.css（全局基础：令牌变量 / 重置 / 布局 / 导航 / 页面容器），原始行 L351-L541 ===== */
+:root {
+    color-scheme: light;
+    /* 主色：暖驼色，用于按钮、标题、强调元素。 */
+    --primary-color: #d4a373;
+    --secondary-color: #c48f61;  /* 次级暖棕：hover 加深、辅助强调。 */
+    --accent-color: #a3b18a;  /* 点缀色：莫兰迪绿，用于激活态与图标。 */
+    --bg-primary: #faf7f2;  /* 页面底色：米白暖调。 */
+    --bg-secondary: #fffdf9;  /* 卡片底色：更亮的暖白。 */
+    --bg-tertiary: #f1e8dc;
+    --bg-elevated: #ffffff;
+    --text-primary: #514a45;  /* 正文主色：深暖灰。 */
+    --text-secondary: #81766d;  /* 次要文字：浅暖灰，用于说明与元信息。 */
+    --text-muted: #a49a91;
+    --border-color: #dfd0c0;
+    --success-color: #718d7b;  /* 成功/正面：灰绿。 */
+    --warning-color: #b68b5f;
+    --danger-color: #b46f69;  /* 危险/负面：砖红。 */
+    --primary-soft: rgba(212, 163, 115, 0.16);
+    --primary-border-hover: rgba(212, 163, 115, 0.78);
+    --card-radius: 22px;
+    --inner-radius: 16px;
+    --control-radius: 14px;
+    --shadow: 0 8px 24px rgba(105, 83, 68, 0.10);  /* 常规阴影：暖调低透明度。 */
+    --shadow-hover: 0 14px 34px rgba(212, 163, 115, 0.24);  /* 悬停阴影：主题色投影，配合光晕动效。 */
+    --glow-color: rgba(212, 163, 115, 0.36);
+    --modal-radius: 26px;
+}
+
+/* 注册 CSS 变量 --x：供鼠标光晕定位，支持过渡动画。 */
+@property --x {
+    syntax: "<length-percentage>";
+    initial-value: 50%;
+    inherits: true;
+}
+
+/* 注册 CSS 变量 --y：与 --x 配合定位光晕中心。 */
+@property --y {
+    syntax: "<length-percentage>";
+    initial-value: 50%;
+    inherits: true;
+}
+
+/* 全局重置：清除默认内外边距，统一盒模型为 border-box，避免布局偏移。 */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+/* 全局字体与底色：优先使用系统字体栈，保证 Windows/macOS 观感一致。 */
+body {
+    font-family: "SimHei", "Microsoft YaHei", sans-serif;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    line-height: 1.6;
+    overflow: hidden;
+}
+
+/* 整体布局容器：占满视口高度，滚动任务交给右侧主内容区。 */
+.container {
+    display: flex;
+    width: 100%;
+    min-height: 100vh;
+    height: 100vh;
+    overflow: hidden;
+}
+
+/* 侧边导航栏：固定在视口左侧，页面滚动时保持可见。 */
+.sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 10;
+    width: 240px;
+    overflow-y: auto;
+    background-color: var(--bg-secondary);
+    border-right: 1px solid var(--border-color);
+    padding: 20px 0;
+    box-shadow: var(--shadow);
+}
+
+/* Logo 区：徽标与产品名横向排列，徽标来自项目 static 目录。 */
+.logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 20px 20px;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 20px;
+}
+
+.logo-badge {
+    width: 34px;
+    height: 34px;
+    flex: 0 0 34px;
+    object-fit: contain;
+    border-radius: 8px;
+}
+
+/* 品牌标题与版本号纵向排列，避免窄侧栏挤压标题。 */
+.logo-copy {
+    min-width: 0;
+}
+
+.logo-version {
+    display: block;
+    margin-top: 2px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.3;
+}
+
+.logo h2 {
+    font-size: 18px;
+    color: var(--primary-color);
+}
+
+/* 导航菜单：纵向排列，每一项支持悬停与激活态高亮。 */
+.nav-menu {
+    display: flex;
+    flex-direction: column;
+}
+
+/* 单个导航项：图标+文字横排，悬停变色提示可点击。 */
+.nav-item {
+    display: flex;
+    align-items: center;
+    padding: 12px 20px;
+    text-decoration: none;
+    color: var(--text-secondary);
+    transition: all 0.3s;
+}
+
+.nav-item:hover {
+    background-color: var(--bg-primary);
+    color: var(--primary-color);
+}
+
+/* 激活导航项：浅绿底+白字+左侧强调条，指示当前所在页面。 */
+.nav-item.active {
+    background-color: var(--accent-color);
+    color: white;
+    border-left: 3px solid var(--primary-color);
+}
+
+.nav-item .icon {
+    margin-right: 10px;
+    font-size: 18px;
+}
+
+/* 主内容区：为固定侧边栏预留空间，只有此区域响应鼠标滚轮。 */
+.main-content {
+    flex: 1;
+    min-width: 0;
+    height: 100vh;
+    margin-left: 240px;
+    padding: 40px;
+    overflow-y: auto;
+}
+
+/* 页面容器：默认隐藏，只有 active 页显示；切换时 0.3s 淡入。 */
+.page {
+    display: none;
+    animation: fadeIn 0.3s;
+}
+
+/* 激活页：恢复为块级显示，配合 JS navigateTo 切换。 */
+.page.active {
+    display: block;
+}
+
+/* 页面切换淡入关键帧：从透明到不透明。 */
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* 一级标题：页面主标题使用主题色，拉开层级。 */
+h1 {
+    font-size: 32px;
+    margin-bottom: 30px;
+    color: var(--primary-color);
+}
+
+/* 二级标题：模块标题使用正文深色，与 h1 区分。 */
+h2 {
+    font-size: 24px;
+    margin-bottom: 20px;
+    color: var(--text-primary);
+}

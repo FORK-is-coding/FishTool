@@ -1,0 +1,94 @@
+activity:
+  accounts:
+    anime:
+    - 928123:哔哩哔哩番剧
+    - 98627270:哔哩哔哩国创
+    - 326499679:哔哩哔哩漫画
+    - 26366366:哔哩哔哩活动
+    game:
+    - 401742377:原神
+    - 161775300:明日方舟
+    - 1340190821:崩坏星穹铁道
+    - 1636034895:绝区零
+    - 1328260:哔哩哔哩游戏中心
+    paint:
+    - 1105739740:画师同人站
+    - 2072860945:B站绘画小课堂
+app:
+  debug: false
+  log_level: INFO
+  name: B站运营工具箱
+  version: 1.0.0
+bilibili:
+  cookie_check_interval: 1800
+  rate_limit:
+    comment: 4.0
+    dynamic: 2.5
+    max_429_count: 5
+    normal: 2.0
+    retry_429_delays:
+    - 30
+    - 60
+    - 120
+    - 300
+    - 600
+  request_headers:
+    Referer: https://www.bilibili.com
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
+      like Gecko) Chrome/120.0.0.0 Safari/537.36
+  wbi_key_refresh_interval: 3600
+crawler:
+  cache_ttl: 3600
+  concurrent_limit: 3
+  enable_checkpoint: true
+  retry_times: 3
+  timeout: 30
+database:
+  echo: false
+  path: data/bili_ops.db
+  pool_size: 10
+deduplication:
+  enable_fuzzy_match: true
+  min_length_for_fuzzy: 5
+  similarity_threshold: 0.85
+  time_window: 3600
+desktop_pet:
+  default_position:
+    x: 100
+    y: 100
+  enable: true
+  stay_on_top: true
+  websocket_port: 8081
+export:
+  formats:
+  - pdf
+  - markdown
+  - json
+  output_dir: exports
+llm:
+  api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+  api_key: ''
+  batch_size: 100
+  daily_token_limit: 100000
+  max_tokens: 2000
+  model: qwen-plus
+  provider: openai
+  temperature: 0.7
+monitor:
+  alert_keywords:
+  - 翻车
+  - 抄袭
+  - 举报
+  - 营销号
+  - 恶心
+  - 举报了
+  alert_thresholds:
+    comment_surge: 2.0
+    keyword_match: true
+    negative_ratio: 0.3
+  check_interval: 300
+  enable: false
+server:
+  host: 127.0.0.1
+  port: 8080
+  reload: false

@@ -1,0 +1,276 @@
+/* ===== style.comment.css —— 拆分自 style.css（评论监控可视化大屏），原始行 L1077-L1322 ===== */
+/* 评论监控莫兰迪暖色浅色可视化大屏 */
+/* 整体容器：包裹指标卡、图表与高声量评论，白色描边+投影悬浮于页面。 */
+.comment-dashboard {
+    margin-top: 24px;
+    padding: 24px;
+    color: var(--text-primary);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+}
+
+/* 大屏头部：标题左对齐、状态/规则右对齐。 */
+.dashboard-header,
+.voice-module-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 18px;
+}
+
+.dashboard-header h3,
+.voice-module-header h3 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 20px;
+}
+
+/* 眉题小字：英文装饰性标题，用于大屏与卡片顶部。 */
+.dashboard-eyebrow {
+    margin: 0 0 3px;
+    color: var(--primary-color);
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.dashboard-status,
+.voice-rule {
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+/* 状态文本：左侧主题色竖线，提示数据更新时间与来源。 */
+.dashboard-status {
+    padding-left: 12px;
+    border-left: 3px solid var(--primary-color);
+}
+
+/* 核心指标卡：四列等宽网格展示采集前后数量与声量。 */
+.dashboard-metrics {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.metric-item {
+    min-width: 0;
+    padding: 15px 18px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+}
+
+/* 指标标签：小字号灰色置于数值上方。 */
+.metric-item span {
+    display: block;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+/* 指标数值：26px 大号数字，作为卡片视觉焦点。 */
+.metric-item strong {
+    display: block;
+    margin-top: 2px;
+    color: var(--text-primary);
+    font-size: 26px;
+    line-height: 1.2;
+}
+
+/* 图表区：双列网格，宽面板可跨整行。 */
+.dashboard-chart-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    margin-top: 14px;
+}
+
+/* 图表面板：相对定位承载空态提示，min-width:0 防止网格溢出。 */
+.chart-panel {
+    position: relative;
+    min-width: 0;
+    padding: 16px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-secondary);
+    box-shadow: var(--shadow);
+}
+
+/* 跨列面板：占满整行，用于基准对比等宽图表。 */
+.chart-panel-wide {
+    grid-column: 1 / -1;
+}
+
+.panel-title {
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+/* 图表画布：固定高度，宽度自适应父容器。 */
+.dashboard-chart {
+    width: 100%;
+    height: 280px;
+}
+
+.dashboard-chart-short {
+    height: 220px;
+}
+
+/* 图表空态遮罩：默认隐藏，is-empty 时覆盖图表显示提示。 */
+.chart-empty {
+    display: none;
+    position: absolute;
+    top: 48px;
+    right: 16px;
+    bottom: 16px;
+    left: 16px;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    font-size: 13px;
+    border: 1px dashed var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-primary);
+}
+
+/* 空态联动：面板标记 is-empty 时隐藏图表本体。 */
+.chart-panel.is-empty .dashboard-chart {
+    visibility: hidden;
+}
+
+/* 空态联动：面板标记 is-empty 时展示占位提示。 */
+.chart-panel.is-empty .chart-empty {
+    display: flex;
+}
+
+/* 高声量评论模块：独立卡片，与图表区保持间距。 */
+.voice-module {
+    margin-top: 14px;
+    padding: 18px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-secondary);
+    box-shadow: var(--shadow);
+}
+
+/* 高声量评论列表：双列卡片网格。 */
+.voice-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+/* 单条声量卡片：排名 | 内容 | 声量分三列。 */
+.voice-item {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr) auto;
+    gap: 12px;
+    min-width: 0;
+    padding: 14px;
+    border: 1px solid var(--border-color);
+    border-left: 3px solid var(--primary-color);
+    border-radius: 12px;
+    background: var(--bg-secondary);
+    box-shadow: var(--shadow);
+}
+
+/* 排名序号：主题色加粗，突出榜单位置。 */
+.voice-rank {
+    color: var(--primary-color);
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.voice-content {
+    min-width: 0;
+}
+
+/* 评论正文：允许任意位置换行，避免长文本撑破布局。 */
+.voice-comment {
+    margin: 5px 0 9px;
+    overflow-wrap: anywhere;
+    color: var(--text-primary);
+    line-height: 1.5;
+}
+
+.voice-meta,
+.voice-reason {
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.voice-reason {
+    padding-top: 7px;
+    border-top: 1px solid var(--border-color);
+}
+
+/* 声量分：右侧次级色加粗展示，与排名形成对照。 */
+.voice-score {
+    min-width: 58px;
+    color: var(--secondary-color);
+    text-align: right;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+/* 情感标签：小圆角胶囊，颜色随情感类型切换。 */
+.sentiment-tag {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    padding: 2px 8px;
+    color: var(--text-primary);
+    font-size: 11px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-primary);
+}
+
+.sentiment-tag.positive { color: #5f7f59; border-color: var(--success-color); }
+.sentiment-tag.negative,
+.sentiment-tag.risk { color: #9d6253; border-color: var(--danger-color); }
+.sentiment-tag.neutral { color: var(--text-secondary); border-color: var(--border-color); }
+
+/* 声量列表空态：占满两列并居中提示。 */
+.voice-empty {
+    grid-column: 1 / -1;
+    padding: 36px 16px;
+    color: var(--text-secondary);
+    text-align: center;
+    border: 1px dashed var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-primary);
+}
+
+/* ===== 评论采集进度条 ===== */
+.monitor-progress-bar {
+    width: 100%;
+    height: 10px;
+    border-radius: 5px;
+    background: var(--bg-secondary, #eee);
+    border: 1px solid var(--border-color);
+    overflow: hidden;
+    margin: 8px 0 4px;
+}
+.monitor-progress-fill {
+    width: 0%;
+    height: 100%;
+    border-radius: 5px;
+    background: linear-gradient(90deg, #5b8def, #7bb7ff);
+    transition: width 0.4s ease;
+}
+.monitor-progress-text {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+#monitor-progress-wrap {
+    margin-bottom: 10px;
+    padding: 10px 12px;
+    border: 1px dashed var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-primary);
+}

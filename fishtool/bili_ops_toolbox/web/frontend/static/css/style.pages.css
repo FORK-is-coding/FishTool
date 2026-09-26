@@ -1,0 +1,304 @@
+/* ===== style.pages.css —— 拆分自 style.css（欢迎页 / 群二维码 / 表单 / 按钮 / 普采 / 结果区域），原始行 L543-L845 ===== */
+/* 欢迎页 */
+/* 欢迎页头图：居中展示产品名与副标题。 */
+.welcome-header {
+    text-align: center;
+    margin-bottom: 60px;
+}
+
+.welcome-header h1 {
+    font-size: 42px;
+    margin-bottom: 10px;
+}
+
+.subtitle {
+    font-size: 18px;
+    color: var(--text-secondary);
+}
+
+.quick-start {
+    margin-bottom: 60px;
+}
+
+/* 功能入口卡片网格：自适应列数，窄屏自动折行。 */
+.cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 20px;
+    margin-top: 20px;
+}
+
+/* 通用卡片：浅色底+圆角+阴影，悬停时轻微上浮。 */
+.card {
+    background: var(--bg-secondary);
+    padding: 30px;
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    text-align: center;
+    transition: transform 0.3s;
+}
+
+/* 卡片悬停：向上浮动 5px，提示可点击。 */
+.card:hover {
+    transform: translateY(-5px);
+}
+
+.card-icon {
+    font-size: 48px;
+    margin-bottom: 15px;
+}
+
+.card h3 {
+    font-size: 20px;
+    margin-bottom: 10px;
+    color: var(--primary-color);
+}
+
+/* 支持作者按钮下移，利用卡片下方留白拉开与说明文字的距离。 */
+.support-cards .card:first-child .btn {
+    display: inline-block;
+    margin-top: 24px;
+}
+
+/* 注意事项卡片正文保持左对齐，但图标与标题单独居中。 */
+.notice-card .card-icon,
+.notice-card h3 {
+    text-align: center;
+}
+
+.notice-card {
+    text-align: left;
+}
+
+.notice-copy p {
+    margin-bottom: 10px;
+    line-height: 1.7;
+}
+
+.notice-copy p:last-child {
+    margin-bottom: 20px;
+}
+
+.notice-copy strong {
+    color: #111;
+    font-weight: 800;
+}
+
+/* 群聊二维码弹窗中的邀请图片：限制尺寸并保持原始比例。 */
+.group-qr-image {
+    display: block;
+    width: min(100%, 360px);
+    max-height: 62vh;
+    margin: 4px auto 0;
+    object-fit: contain;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+}
+    list-style: none;
+    font-size: 18px;
+}
+
+.features li {
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+/* 表单 */
+.section {
+    background: var(--bg-secondary);
+    padding: 30px;
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    margin-bottom: 30px;
+}
+
+/* 表单组：每组标签+控件之间留 20px 纵向间距。 */
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+/* 输入控件：最大 500px 宽，聚焦时主题色描边。 */
+.form-control {
+    width: 100%;
+    max-width: 500px;
+    padding: 10px 15px;
+    color: var(--text-primary);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    font-size: 14px;
+    transition: border-color 0.3s;
+}
+
+.form-control:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}
+
+/* 按钮 */
+/* 通用按钮：无边框圆角，hover 过渡 0.3s。 */
+.btn {
+    padding: 10px 24px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+/* 主按钮：主题色底白字，用于核心操作。 */
+.btn-primary {
+    background-color: var(--primary-color);
+    color: white;
+}
+
+.btn-primary:hover {
+    background-color: var(--secondary-color);
+}
+
+.btn-secondary {
+    background-color: var(--text-secondary);
+    color: white;
+}
+
+.btn-secondary:hover {
+    background-color: var(--text-primary);
+}
+
+/* 普采目标布局：桌面端让 BV、UID 和视频数量输入框并排，移动端由全局规则自动收窄。 */
+.monitor-target-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    max-width: 1016px;
+}
+
+/* 网格中的输入框使用完整列宽，覆盖全局 500px 上限造成的细小留白。 */
+.monitor-target-grid .form-control {
+    max-width: none;
+}
+
+/* 请求期间按钮保持可辨识，同时通过禁用光标阻止重复提交。 */
+#monitor-submit-button:disabled {
+    cursor: wait;
+    opacity: 0.72;
+}
+
+/* 账号报告标题：UID 与监控时间分列展示，保持信息层级清晰。 */
+.account-report-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+/* 标题下方 UID 与右侧时间统一使用次要文字色。 */
+.account-report-header p,
+.account-report-header time {
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+/* 汇总指标采用稳定三列，数字变化不会导致布局跳动。 */
+.account-report-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 18px;
+}
+
+/* 单个指标使用轻边框分隔，避免出现卡片嵌套卡片的视觉层级。 */
+.account-report-metrics > div {
+    padding: 12px;
+    border-bottom: 2px solid var(--border-color);
+}
+
+/* 指标名称和数值纵向排列，数值保持便于扫描的字号。 */
+.account-report-metrics span,
+.account-report-metrics strong {
+    display: block;
+}
+
+.account-report-metrics span {
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.account-report-metrics strong {
+    margin-top: 2px;
+    font-size: 22px;
+}
+
+/* 视频列表使用边框分行，不额外创建外层装饰卡片。 */
+.account-video-list {
+    border-top: 1px solid var(--border-color);
+}
+
+/* 每个视频结果为三列：标题信息、采集状态和详细统计。 */
+.account-video-row {
+    display: grid;
+    grid-template-columns: minmax(180px, 1fr) auto minmax(220px, 1fr);
+    align-items: center;
+    gap: 14px;
+    padding: 14px 4px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+/* 视频标题允许换行，BV 号单独显示为次级信息。 */
+.account-video-main strong,
+.account-video-main span {
+    display: block;
+    overflow-wrap: anywhere;
+}
+
+.account-video-main span,
+.account-video-row p {
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+/* 状态文字固定最小宽度，避免成功与失败切换时其他列位移。 */
+.account-video-status {
+    min-width: 64px;
+    color: var(--success-color);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+/* 失败行使用危险色强调状态，但不覆盖具体错误说明。 */
+.account-video-row.is-failed .account-video-status,
+.monitor-danger {
+    color: var(--danger-color);
+}
+
+/* 通用监控反馈色供单 BV 与账号报告共同复用。 */
+.monitor-warning {
+    color: var(--warning-color);
+}
+
+.monitor-success {
+    color: var(--success-color);
+}
+
+/* 结果区域：展示各模块输出，空内容时显示占位文案。 */
+.result-area {
+    margin-top: 20px;
+    padding: 20px;
+    background-color: var(--bg-primary);
+    border-radius: 8px;
+    min-height: 100px;
+}
+
+/* 空结果占位：容器无内容时用伪元素提示暂无数据。 */
+.result-area:empty::before {
+    content: "暂无数据";
+    color: var(--text-secondary);
+}

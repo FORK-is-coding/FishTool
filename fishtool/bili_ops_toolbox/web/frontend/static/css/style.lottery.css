@@ -1,0 +1,216 @@
+/* ===== style.lottery.css —— 拆分自 style.css（文件头说明 + 抽奖工具），原始行 L1-L215 ===== */
+/* 浅色莫兰迪暖色设计令牌：主界面与评论监控统一复用。 */
+
+/* 抽奖工具：三块工作区保持暖色卡片体系，宽屏双列、抽奖卡横跨全宽。 */
+.lottery-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.45fr) minmax(300px, .75fr);
+    gap: 20px;
+}
+
+.lottery-layout .section { margin-bottom: 0; }
+.lottery-quick-actions { display: flex; align-items: stretch; flex-wrap: wrap; gap: 10px; }
+.lottery-quick-actions .btn { flex: 1 1 190px; margin-top: 0; }
+#lottery-winner-verification-result:not(:empty) { margin-top: 18px; }
+.lottery-draw-card { grid-column: 1 / -1; }
+.lottery-section-heading,
+.lottery-user-heading,
+.lottery-summary-strip,
+.lottery-modal-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+.lottery-section-heading { margin-bottom: 20px; }
+.lottery-section-heading h2 { margin: 0; }
+.lottery-badge {
+    flex: 0 0 auto;
+    padding: 5px 10px;
+    color: var(--primary-color);
+    border: 1px solid var(--primary-border-hover);
+    border-radius: 999px;
+    background: var(--primary-soft);
+    font-size: 12px;
+}
+.lottery-badge.secondary { color: var(--text-secondary); border-color: var(--border-color); background: var(--bg-tertiary); }
+.lottery-badge.success { color: var(--success-color); border-color: rgba(113, 141, 123, .45); background: rgba(113, 141, 123, .12); }
+.lottery-prompt { min-height: 108px; resize: vertical; }
+.lottery-workbench small,
+.lottery-user-card small { display: block; margin-top: 7px; color: var(--text-muted); }
+.lottery-draw-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 150px;
+    gap: 16px;
+}
+.lottery-filter-grid {
+    display: grid;
+    grid-template-columns: minmax(170px, .7fr) minmax(180px, .8fr) repeat(2, minmax(170px, 1fr));
+    align-items: end;
+    gap: 14px;
+    margin: 2px 0 16px;
+    padding: 16px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--inner-radius);
+    background: var(--bg-primary);
+}
+.lottery-filter-grid .form-group { margin: 0; }
+.lottery-vip-toggle { min-height: 42px; margin: 0; }
+.lottery-select { appearance: auto; cursor: pointer; }
+.lottery-date-field input { color-scheme: light; }
+.lottery-candidate-section,
+.lottery-winner-section { margin-top: 22px; }
+.lottery-candidate-section h3,
+.lottery-winner-section h3 { margin-bottom: 12px; font-size: 16px; }
+.lottery-candidate-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 10px;
+    max-height: 440px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+.lottery-candidate-row {
+    min-width: 0;
+    padding: 13px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--inner-radius);
+    background: var(--bg-elevated);
+}
+.lottery-candidate-row > span,
+.lottery-candidate-row p { color: var(--text-secondary); font-size: 12px; }
+.lottery-candidate-row p { margin-top: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lottery-candidate-name { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.lottery-user-icons { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 5px; color: var(--text-muted); font-size: 11px; }
+.lottery-meta-icon {
+    display: inline-grid;
+    place-items: center;
+    gap: 4px;
+    min-width: 34px;
+    min-height: 22px;
+    padding: 3px 7px;
+    border: 0;
+    border-radius: 7px;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.2;
+}
+.lottery-meta-icon.level-0,
+.lottery-meta-icon.level-1 { background: #8f969d; }
+.lottery-meta-icon.level-2 { background: #76b99a; }
+.lottery-meta-icon.level-3 { background: #5b9bd5; }
+.lottery-meta-icon.level-4 { background: #e59a52; }
+.lottery-meta-icon.level-5,
+.lottery-meta-icon.level-6 { background: #d85b61; }
+.lottery-meta-icon.vip.none { background: #8f969d; }
+.lottery-meta-icon.vip.active,
+.lottery-meta-icon.vip.annual { background: #e875a4; }
+.lottery-meta-icon.time { background: #718d7b; white-space: nowrap; font-weight: 600; }
+.lottery-toggle { display: inline-flex; align-items: center; gap: 9px; margin: 0 0 18px; color: var(--text-secondary); cursor: pointer; }
+.lottery-toggle input { accent-color: var(--primary-color); width: 17px; height: 17px; }
+.lottery-preview {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 28px;
+    margin-top: 14px;
+    color: var(--text-secondary);
+}
+.lottery-preview strong { color: var(--text-primary); }
+.mini-spinner {
+    width: 18px;
+    height: 18px;
+    flex: 0 0 auto;
+    border: 2px solid var(--border-color);
+    border-top-color: var(--primary-color);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+.lottery-summary-strip {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    margin-bottom: 18px;
+}
+.lottery-summary-strip span {
+    padding: 5px 10px;
+    color: var(--text-secondary);
+    border-radius: 999px;
+    background: var(--bg-tertiary);
+    font-size: 12px;
+}
+.lottery-result-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.lottery-result-columns > section > h3 { margin-bottom: 10px; font-size: 16px; }
+.lottery-user-card,
+.lottery-winner-card {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    margin-bottom: 10px;
+    padding: 15px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--inner-radius);
+    background: var(--bg-elevated);
+    transition: transform 220ms ease, border-color 220ms ease, box-shadow 220ms ease;
+}
+.lottery-user-card::before,
+.lottery-winner-card::before {
+    position: absolute;
+    z-index: -1;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    pointer-events: none;
+    content: "";
+    opacity: 0;
+    background: radial-gradient(circle 190px at var(--x, 50%) var(--y, 50%), var(--glow-color), transparent 72%);
+    transition: opacity 220ms ease;
+}
+.lottery-user-card:hover,
+.lottery-winner-card:hover { transform: translateY(-2px); border-color: var(--primary-border-hover); box-shadow: var(--shadow-hover); }
+.lottery-user-card:hover::before,
+.lottery-winner-card:hover::before { opacity: 1; }
+.lottery-user-card.is-real { border-left: 4px solid var(--success-color); }
+.lottery-user-card.is-suspicious { border-left: 4px solid var(--danger-color); }
+.lottery-user-heading span { color: var(--text-secondary); font-size: 12px; }
+.lottery-user-card p { margin: 4px 0 0; color: var(--text-secondary); font-size: 13px; overflow-wrap: anywhere; }
+.lottery-user-card .lottery-reasons { color: var(--text-primary); }
+.lottery-user-metadata { margin: 8px 0 4px; }
+.lottery-reason-tag {
+    display: inline-block;
+    margin: 2px 6px 2px 0;
+    padding: 3px 7px;
+    border-radius: 6px;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-size: 12px;
+}
+.lottery-winner-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.lottery-winner-card { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 12px; margin: 0; }
+.winner-rank {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    color: white;
+    border-radius: 50%;
+    background: var(--primary-color);
+    font-weight: 700;
+}
+.lottery-winner-card p { color: var(--text-secondary); font-size: 12px; }
+.lottery-winner-card blockquote { margin-top: 8px; color: var(--text-primary); overflow-wrap: anywhere; }
+.lottery-modal-actions { justify-content: flex-end; margin-top: 20px; }
+.app-modal .lottery-modal-actions .btn { margin-top: 0; }
+
+@media (max-width: 900px) {
+    .lottery-layout,
+    .lottery-result-columns { grid-template-columns: 1fr; }
+    .lottery-draw-card { grid-column: auto; }
+}
+@media (max-width: 600px) {
+    .lottery-draw-controls { grid-template-columns: 1fr; }
+    .lottery-section-heading { align-items: flex-start; }
+    .lottery-section-heading .lottery-badge { max-width: 120px; white-space: normal; text-align: center; }
+    .lottery-preview { align-items: flex-start; flex-direction: column; }
+}
