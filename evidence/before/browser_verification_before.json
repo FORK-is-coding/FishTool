@@ -1,0 +1,32 @@
+{
+  "url": "http://127.0.0.1:8000",
+  "status_text": "视频_BV1gz3h6TEuv · BV1gz3h6TEuv",
+  "echarts_type": "object",
+  "chart_metrics": {
+    "sentiment-chart": {
+      "width": 464,
+      "height": 280,
+      "canvases": 1
+    },
+    "trend-chart": {
+      "width": 464,
+      "height": 280,
+      "canvases": 1
+    },
+    "dedup-chart": {
+      "width": 976,
+      "height": 220,
+      "canvases": 1
+    }
+  },
+  "top10_items": 10,
+  "empty_state": {
+    "emptyPanels": 3,
+    "voiceEmpty": true,
+    "status": "空数据验收"
+  },
+  "console_errors": [],
+  "page_errors": [],
+  "failed_resources": [],
+  "screenshot": "D:\\tasks\\cola\\bili_ops_toolbox\\evidence\\dashboard_after.png"
+}

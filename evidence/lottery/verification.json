@@ -1,0 +1,32 @@
+{
+  "desktop": {
+    "navLotteryBeforeLogs": true,
+    "logsLast": true,
+    "pageVisible": true,
+    "primaryColor": "#d4a373",
+    "backgroundColor": "#faf7f2",
+    "glowX": "542px",
+    "horizontalOverflow": false,
+    "resultContainers": true
+  },
+  "mobile": {
+    "navLotteryBeforeLogs": true,
+    "logsLast": true,
+    "pageVisible": true,
+    "primaryColor": "#d4a373",
+    "backgroundColor": "#faf7f2",
+    "glowX": "216px",
+    "horizontalOverflow": false,
+    "resultContainers": true
+  },
+  "apiRoutesPresent": true,
+  "runtimeContract": {
+    "triangleGraphic": false,
+    "verifyButtonBesideCollector": true,
+    "emptyWinnerPrompt": true,
+    "level6Badge": true,
+    "annualVipBadge": true,
+    "timestampInBadge": true
+  },
+  "passed": true
+}

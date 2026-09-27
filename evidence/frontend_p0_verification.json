@@ -1,0 +1,23 @@
+{
+  "url": "http://127.0.0.1:8000",
+  "theme": {
+    "primary": "#d4a373",
+    "background": "rgb(250, 247, 242)"
+  },
+  "card": {
+    "x": "251px",
+    "y": "111.4375px",
+    "radius": "22px",
+    "border": "rgba(212, 163, 115, 0.78)",
+    "background": "rgb(255, 253, 249)",
+    "pseudoPointerEvents": "none",
+    "pseudoOpacity": "1"
+  },
+  "modal": {
+    "count": 1,
+    "radius": "26px",
+    "border": "rgb(223, 208, 192)",
+    "backdropFilter": "blur(8px)"
+  },
+  "consoleErrors": []
+}

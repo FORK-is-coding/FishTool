@@ -1,0 +1,19 @@
+{
+  "style_diff_before_edit": {
+    "baseline": "C:/Users/27418/.irmia/backups/style.css.a88b5524.20260820_215546_563138.multi.bak",
+    "added_lines": 106,
+    "removed_lines": 7,
+    "total_changes": 113
+  },
+  "preserved_contract": {
+    "background": "#faf7f2",
+    "primary": "#d4a373",
+    "property_x": true,
+    "property_y": true,
+    "mouse_glow_radial_gradient": true,
+    "modal_border_uses_theme": true,
+    "large_card_radius": true
+  },
+  "final_style_sha256": "254f87df1a55ceb0c5d49dbc2a7e4eaf9da066503d74dc0364036d88d6d801a9",
+  "scope": "Only diagnosis AI cards, tag cloud, metric grid and responsive selectors were added or adjusted."
+}

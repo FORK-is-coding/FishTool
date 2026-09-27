@@ -1,0 +1,9 @@
+{
+  "analysis_data_contract": "data.analysis.analysis",
+  "account_data_contract": "data.up_data.data.fans + data.up_data.data.total_play",
+  "top_ups_contract": "up.follower_count + up.total_play",
+  "screenshots": [
+    "D:\\tasks\\cola\\bili_ops_toolbox\\evidence\\bugfix\\analysis_after.png",
+    "D:\\tasks\\cola\\bili_ops_toolbox\\evidence\\bugfix\\top_ups_after.png"
+  ]
+}

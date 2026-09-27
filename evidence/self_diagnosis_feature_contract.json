@@ -1,0 +1,33 @@
+{
+  "success": true,
+  "favorite_field_source": "/x/web-interface/view:data.stat.favorite",
+  "total_favorite": 444,
+  "avg_favorite": 222,
+  "tag_cloud": {
+    "video_count": 2,
+    "stats_video_count": 2,
+    "tagged_video_count": 2,
+    "tag_count": 4,
+    "word_frequency": {
+      "数据分析": 2,
+      "B站运营": 2
+    },
+    "source_endpoint": "/x/tag/archive/tags"
+  },
+  "interaction_score_scale": {
+    "min": 0,
+    "max": 10,
+    "sample": {
+      "touch": 4.85,
+      "comment": 5.0,
+      "favorite": 5.0
+    }
+  },
+  "ai_parser": {
+    "report": "基于真实数据的调研报告",
+    "commentary": "运营点评",
+    "highlights": [
+      "结论A"
+    ]
+  }
+}

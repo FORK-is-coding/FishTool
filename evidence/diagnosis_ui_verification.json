@@ -1,0 +1,37 @@
+{
+  "base_url": "http://127.0.0.1:8000",
+  "uid": 98941882,
+  "metrics": [
+    "94,209",
+    "171",
+    "13,714",
+    "7"
+  ],
+  "contains_unknown": false,
+  "contains_failure": false,
+  "chart_metrics": {
+    "diagnosis-volume-chart": {
+      "width": 444,
+      "height": 220,
+      "canvases": 1,
+      "renderedPixelSamples": 2627
+    },
+    "diagnosis-engagement-chart": {
+      "width": 444,
+      "height": 220,
+      "canvases": 1,
+      "renderedPixelSamples": 2541
+    }
+  },
+  "theme": {
+    "primary": "#d4a373",
+    "background": "#faf7f2",
+    "cardBackground": "rgb(255, 255, 255)",
+    "dashboardRadius": "18px",
+    "cardRadius": "14px"
+  },
+  "console_errors": [],
+  "page_errors": [],
+  "failed_resources": [],
+  "passed": true
+}

@@ -1,0 +1,7 @@
+{
+  "uid": 98941882,
+  "endpoint": "/x/space/wbi/acc/info",
+  "success": false,
+  "error_type": "BilibiliAPIError",
+  "error": "获取用户信息失败: 请求被风控: 风控校验失败"
+}

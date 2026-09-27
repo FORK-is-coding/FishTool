@@ -1,0 +1,10 @@
+{
+  "checked_at": "2026-08-20T20:02:36",
+  "health_status": 200,
+  "health_body": {"status": "ok"},
+  "docs_status": 200,
+  "docs_has_swagger": true,
+  "executable": "C:\\Users\\27418\\.astrbot_launcher\\instances\\97178adf-ca48-4822-937c-a66e60960270\\venv\\Scripts\\python.exe",
+  "command_line": "start_web.py --port 8000",
+  "worker_pid": 33888
+}

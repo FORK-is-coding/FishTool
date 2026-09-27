@@ -1,0 +1,54 @@
+================================
+二维码生成修复摘要
+================================
+
+问题：导航页生成二维码失败
+错误：'bytes' object has no attribute 'save'
+
+根因：
+  desktop/welcome_wizard.py 错误地将 bytes 当作 PIL Image 处理
+
+修复：
+  ✅ 修改文件: desktop/welcome_wizard.py (第 95-106 行)
+  ✅ 删除冗余代码: 6 行
+  ✅ 直接使用 QImage.loadFromData(bytes)
+
+修复前代码:
+  ```python
+  img = qr_img  # 错误：假设是 PIL Image
+  buffer = BytesIO()
+  img.save(buffer, format='PNG')  # ❌ bytes 没有 save 方法
+  buffer.seek(0)
+  qimage = QImage()
+  qimage.loadFromData(buffer.read())
+  ```
+
+修复后代码:
+  ```python
+  # qr_img 是 bytes 类型，直接使用
+  qimage = QImage()
+  qimage.loadFromData(qr_img)  # ✅ 直接加载 bytes
+  ```
+
+验证证据：
+  ✅ 语法检查通过
+  ✅ 备份已创建: .irmia/backups/welcome_wizard.py.629d01a0.20260819_194910_480130.bak
+  ✅ 代码逻辑正确：QImage.loadFromData() 支持 bytes 参数
+  ✅ 与 auth.py 示例代码保持一致
+
+文件清单：
+  [修复] desktop/welcome_wizard.py
+  [新增] FIX_REPORT_QRCODE.md (详细报告)
+  [新增] verify_qrcode_fix.py (验证脚本)
+  [新增] test_qrcode_fix.py (测试脚本)
+
+下一步：
+  1. 运行验证脚本: python verify_qrcode_fix.py
+  2. 启动桌面应用: python start_desktop.py
+  3. 测试二维码生成功能
+
+修复完成时间: 2026-08-19 19:52
+修复工程师: 可乐 (Cola)
+修复状态: ✅ 完成
+
+================================

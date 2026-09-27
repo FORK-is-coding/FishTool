@@ -1,0 +1,33 @@
+{
+  "success": true,
+  "up_data_keys": [
+    "completeness",
+    "data",
+    "data_source",
+    "uid"
+  ],
+  "up_data_data_keys": [
+    "api_success",
+    "face",
+    "fans",
+    "metrics",
+    "name",
+    "raw_data",
+    "source",
+    "total_play",
+    "video_list"
+  ],
+  "fans": 1423292,
+  "total_play": 54795348,
+  "analysis_keys": [
+    "analysis",
+    "analyzed_at",
+    "data_completeness",
+    "raw_text",
+    "success",
+    "uid"
+  ],
+  "analysis_success": true,
+  "analysis_error": null,
+  "analysis_message": null
+}

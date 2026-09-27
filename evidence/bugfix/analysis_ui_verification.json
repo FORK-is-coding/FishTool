@@ -1,0 +1,22 @@
+{
+  "url": "http://127.0.0.1:8000/",
+  "nickname": "碧诗",
+  "metrics": [
+    "142.3万",
+    "5479.5万"
+  ],
+  "strategy_card_count": 5,
+  "strategy_card_titles": [
+    "选题方向",
+    "标题套路",
+    "封面风格",
+    "发布节奏",
+    "互动引导"
+  ],
+  "card_section_count": 15,
+  "populated_section_count": 15,
+  "raw_output_collapsed": true,
+  "contains_unknown": false,
+  "page_has_content": true,
+  "console_errors": []
+}

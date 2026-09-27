@@ -1,0 +1,94 @@
+{
+  "generated_at": "2026-08-20T14:53:40.038284+00:00",
+  "base_url": "http://127.0.0.1:8000",
+  "http_results": [
+    {
+      "path": "/health",
+      "requested_at": "2026-08-20T14:53:39.882803+00:00",
+      "status": 200,
+      "body_preview": "{\"status\":\"ok\"}",
+      "body_bytes": 15,
+      "json_keys": [
+        "status"
+      ]
+    },
+    {
+      "path": "/api/logs/?log_type=all&levels=DEBUG,INFO,WARNING,ERROR&limit=20",
+      "requested_at": "2026-08-20T14:53:39.914748+00:00",
+      "status": 200,
+      "body_preview": "{\"success\":true,\"log_type\":\"all\",\"records\":[{\"timestamp\":\"2026-08-20 22:11:29\",\"level\":\"WARNING\",\"source\":\"modules.up_analyzer.data_fetcher\",\"message\":\"[zeroroku] 获取失败: Cannot connect to host api.zeroroku.cn:443 ssl:default [getaddrinfo failed]，退化到B站爬取\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:11:29\",\"level\":\"WARNING\",\"source\":\"modules.self_diagnosis.self_analyzer\",\"message\":\"[自诊] 三方数据获取失败\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:11:29\",\"level\":\"INFO\",\"source\":\"modules.self_diagnosis.self_analyzer\",\"message\":\"===== 账号98941882数据采集完成 =====\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:12:15\",\"level\":\"INFO\",\"source\":\"httpx\",\"message\":\"HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions \\\"HTTP/1.1 200 OK\\\"\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:12:15\",\"level\":\"INFO\",\"source\":\"core.database\",\"message\":\"数据库表创建完成: data\\\\bili_ops.db\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:12:15\",\"level\":\"INFO\",\"source\":\"llm.client\",\"message\":\"Token使用: 763 (输入: 448, 输出: 315), 今日累计: 763/100000\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:13:12\",\"level\":\"INFO\",\"source\":\"bilibili.api\",\"message\":\"已获取B站指纹: buvid3=5FE6D25B-F7F2-EC...\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:13:12\",\"level\":\"INFO\",\"source\":\"bilibili.api\",\"message\":\"已获取B站指纹: buvid3=9F0D4B6D-82E5-52...\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:49:10\",\"level\":\"INFO\",\"source\":\"web.main\",\"message\":\"Web服务启动中...\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:49:10\",\"level\":\"INFO\",\"source\":\"core.database\",\"message\":\"数据库表创建完成: data\\\\bili_ops.db\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:49:10\",\"level\":\"INFO\",\"source\":\"web.main\",\"message\":\"Web服务已启动\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:49:10\",\"level\":\"INFO\",\"source\":\"web.main\",\"message\":\"Web服务关闭中...\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:50:18\",\"level\":\"INFO\",\"source\":\"web.main\",\"message\":\"Web服务启动中...\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:50:18\",\"level\":\"INFO\",\"source\":\"core.database\",\"message\":\"数据库表创建完成: data\\\\bili_ops.db\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:50:18\",\"level\":\"INFO\",\"source\":\"web.main\",\"message\":\"Web服务已启动\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:51:52\",\"level\":\"INFO\",\"source\":\"bilibili.api\",\"message\":\"已获取B站指纹: buvid3=69C61401-52E9-20...\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:51:53\",\"level\":\"INFO\",\"source\":\"bilibili.api\",\"message\":\"已获取B站指纹: buvid3=03DDD4E6-59A1-68...\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:52:43\",\"level\":\"INFO\",\"source\":\"web.main\",\"message\":\"Web服务启动中...\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:52:43\",\"level\":\"INFO\",\"source\":\"core.database\",\"message\":\"数据库表创建完成: data\\\\bili_ops.db\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:52:43\",\"level\":\"INFO\",\"source\":\"web.main\",\"message\":\"Web服务已启动\",\"is_rate_limit\":false}],\"returned\":20,\"cursor\":\"eyJEOlxcdGFza3NcXGNvbGFcXGJpbGlfb3BzX3Rvb2xib3hcXGRhdGFcXGxvZ3NcXGFwcC5sb2ciOjM",
+      "body_bytes": 3363,
+      "json_keys": [
+        "cursor",
+        "log_type",
+        "records",
+        "returned",
+        "success"
+      ]
+    },
+    {
+      "path": "/api/logs/?log_type=app&levels=DEBUG,INFO,WARNING,ERROR&limit=20",
+      "requested_at": "2026-08-20T14:53:39.958006+00:00",
+      "status": 200,
+      "body_preview": "{\"success\":true,\"log_type\":\"app\",\"records\":[{\"timestamp\":\"2026-08-20 22:11:29\",\"level\":\"WARNING\",\"source\":\"modules.up_analyzer.data_fetcher\",\"message\":\"[zeroroku] 获取失败: Cannot connect to host api.zeroroku.cn:443 ssl:default [getaddrinfo failed]，退化到B站爬取\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:11:29\",\"level\":\"WARNING\",\"source\":\"modules.self_diagnosis.self_analyzer\",\"message\":\"[自诊] 三方数据获取失败\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:11:29\",\"level\":\"INFO\",\"source\":\"modules.self_diagnosis.self_analyzer\",\"message\":\"===== 账号98941882数据采集完成 =====\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:12:15\",\"level\":\"INFO\",\"source\":\"httpx\",\"message\":\"HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions \\\"HTTP/1.1 200 OK\\\"\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:12:15\",\"level\":\"INFO\",\"source\":\"core.database\",\"message\":\"数据库表创建完成: data\\\\bili_ops.db\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:12:15\",\"level\":\"INFO\",\"source\":\"llm.client\",\"message\":\"Token使用: 763 (输入: 448, 输出: 315), 今日累计: 763/100000\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:13:12\",\"level\":\"INFO\",\"source\":\"bilibili.api\",\"message\":\"已获取B站指纹: buvid3=5FE6D25B-F7F2-EC...\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:13:12\",\"level\":\"INFO\",\"source\":\"bilibili.api\",\"message\":\"已获取B站指纹: buvid3=9F0D4B6D-82E5-52...\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:49:10\",\"level\":\"INFO\",\"source\":\"web.main\",\"message\":\"Web服务启动中...\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:49:10\",\"level\":\"INFO\",\"source\":\"core.database\",\"message\":\"数据库表创建完成: data\\\\bili_ops.db\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:49:10\",\"level\":\"INFO\",\"source\":\"web.main\",\"message\":\"Web服务已启动\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:49:10\",\"level\":\"INFO\",\"source\":\"web.main\",\"message\":\"Web服务关闭中...\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:50:18\",\"level\":\"INFO\",\"source\":\"web.main\",\"message\":\"Web服务启动中...\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:50:18\",\"level\":\"INFO\",\"source\":\"core.database\",\"message\":\"数据库表创建完成: data\\\\bili_ops.db\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:50:18\",\"level\":\"INFO\",\"source\":\"web.main\",\"message\":\"Web服务已启动\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:51:52\",\"level\":\"INFO\",\"source\":\"bilibili.api\",\"message\":\"已获取B站指纹: buvid3=69C61401-52E9-20...\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:51:53\",\"level\":\"INFO\",\"source\":\"bilibili.api\",\"message\":\"已获取B站指纹: buvid3=03DDD4E6-59A1-68...\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:52:43\",\"level\":\"INFO\",\"source\":\"web.main\",\"message\":\"Web服务启动中...\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:52:43\",\"level\":\"INFO\",\"source\":\"core.database\",\"message\":\"数据库表创建完成: data\\\\bili_ops.db\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 22:52:43\",\"level\":\"INFO\",\"source\":\"web.main\",\"message\":\"Web服务已启动\",\"is_rate_limit\":false}],\"returned\":20,\"cursor\":\"eyJEOlxcdGFza3NcXGNvbGFcXGJpbGlfb3BzX3Rvb2xib3hcXGRhdGFcXGxvZ3NcXGFwcC5sb2ciOjM",
+      "body_bytes": 3271,
+      "json_keys": [
+        "cursor",
+        "log_type",
+        "records",
+        "returned",
+        "success"
+      ]
+    },
+    {
+      "path": "/api/logs/?log_type=error&levels=DEBUG,INFO,WARNING,ERROR&limit=20",
+      "requested_at": "2026-08-20T14:53:40.006860+00:00",
+      "status": 200,
+      "body_preview": "{\"success\":true,\"log_type\":\"error\",\"records\":[{\"timestamp\":\"2026-08-20 19:40:33\",\"level\":\"ERROR\",\"source\":\"modules.up_analyzer.data_fetcher\",\"message\":\"[分区榜单] 获取游戏区分区榜单失败：获取游戏区分区榜单失败：B站返回空数据，可能是Cookie失效或触发风控（B站 ranking/v2 的 type 参数只接受 all/origin 字符串，请检查请求参数）\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 19:40:33\",\"level\":\"ERROR\",\"source\":\"llm.client\",\"message\":\"LLM API请求失败: HTTP 400, LLM模型不存在：qwen3.7。请在配置中改为 qwen-plus、qwen-max 或 qwen-turbo，并确认API Key已配置\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 20:03:56\",\"level\":\"ERROR\",\"source\":\"modules.hotspot.tag_cloud\",\"message\":\"分区【游戏】未获取到视频数据，请检查B站Cookie/登录态、网络连接或是否触发风控\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 20:03:56\",\"level\":\"ERROR\",\"source\":\"modules.up_analyzer.data_fetcher\",\"message\":\"获取游戏区分区榜单失败：B站返回空数据，可能是Cookie失效或触发风控\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 20:03:56\",\"level\":\"ERROR\",\"source\":\"modules.up_analyzer.data_fetcher\",\"message\":\"[分区榜单] 获取游戏区分区榜单失败：获取游戏区分区榜单失败：B站返回空数据，可能是Cookie失效或触发风控（B站 ranking/v2 的 type 参数只接受 all/origin 字符串，请检查请求参数）\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 20:03:56\",\"level\":\"ERROR\",\"source\":\"llm.client\",\"message\":\"LLM API请求失败: HTTP 400, LLM模型不存在：qwen3.7。请在配置中改为 qwen-plus、qwen-max 或 qwen-turbo，并确认API Key已配置\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 20:14:47\",\"level\":\"ERROR\",\"source\":\"bilibili.api\",\"message\":\"获取用户信息失败 (uid=405370021): API错误 [-799]: 请求过于频繁，请稍后再试\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 20:14:47\",\"level\":\"ERROR\",\"source\":\"modules.up_analyzer.data_fetcher\",\"message\":\"[B站爬取] API错误: 获取用户信息失败: API错误 [-799]: 请求过于频繁，请稍后再试，无法获取真实数据\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 20:14:47\",\"level\":\"ERROR\",\"source\":\"modules.up_analyzer.data_fetcher\",\"message\":\"[降级警告] UP主405370021的B站API调用失败，数据可能不完整或为默认值\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 20:51:32\",\"level\":\"ERROR\",\"source\":\"bilibili.api\",\"message\":\"获取用户信息失败 (uid=405370021): API错误 [-799]: 请求过于频繁，请稍后再试\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 20:51:32\",\"level\":\"ERROR\",\"source\":\"modules.up_analyzer.data_fetcher\",\"message\":\"[B站爬取] API错误: 获取用户信息失败: API错误 [-799]: 请求过于频繁，请稍后再试，无法获取真实数据\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 20:51:32\",\"level\":\"ERROR\",\"source\":\"modules.up_analyzer.data_fetcher\",\"message\":\"[降级警告] UP主405370021的B站API调用失败，数据可能不完整或为默认值\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 21:18:56\",\"level\":\"ERROR\",\"source\":\"bilibili.api\",\"message\":\"获取用户信息失败 (uid=98941882): 请求被风控: 风控校验失败\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 21:22:41\",\"level\":\"ERROR\",\"source\":\"bilibili.api\",\"message\":\"获取用户信息失败 (uid=98941882): API错误 [-799]: 请求过于频繁，请稍后再试\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 21:22:41\",\"level\":\"ERROR\",\"source\":\"modules.self_diagnosis.self_analyzer\",\"message\":\"[自诊] 数据采集失败: 获取用户信息失败: API错误 [-799]: 请求过于频繁，请稍后再试\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 21:22:41\",\"level\":\"ERROR\",\"source\":\"web.routers.analysis\",\"message\":\"[API] 账号自诊失败: 获取用户信息失败: API错误 [-799]: 请求过于频繁，请稍后再试\",\"is_rate_limit\":false},{\"timestamp\":\"2026-08-20 21",
+      "body_bytes": 5190,
+      "json_keys": [
+        "cursor",
+        "log_type",
+        "records",
+        "returned",
+        "success"
+      ]
+    },
+    {
+      "path": "/api/logs/?log_type=risk&levels=DEBUG,INFO,WARNING,ERROR&limit=20",
+      "requested_at": "2026-08-20T14:53:40.026071+00:00",
+      "status": 200,
+      "body_preview": "{\"success\":true,\"log_type\":\"risk\",\"records\":[],\"returned\":0,\"cursor\":\"eyJEOlxcdGFza3NcXGNvbGFcXGJpbGlfb3BzX3Rvb2xib3hcXGRhdGFcXGxvZ3NcXHJpc2tfY29udHJvbC5sb2ciOjB9\"}",
+      "body_bytes": 164,
+      "json_keys": [
+        "cursor",
+        "log_type",
+        "records",
+        "returned",
+        "success"
+      ]
+    }
+  ],
+  "reader_reproduction": {
+    "case": "_read_records(all, None, 20)",
+    "success": true,
+    "record_count": 20,
+    "cursor_length": 180,
+    "sample": [
+      {
+        "timestamp": "2026-08-20 22:11:29",
+        "level": "WARNING",
+        "source": "modules.up_analyzer.data_fetcher",
+        "message": "[zeroroku] 获取失败: Cannot connect to host api.zeroroku.cn:443 ssl:default [getaddrinfo failed]，退化到B站爬取",
+        "is_rate_limit": false
+      },
+      {
+        "timestamp": "2026-08-20 22:11:29",
+        "level": "WARNING",
+        "source": "modules.self_diagnosis.self_analyzer",
+        "message": "[自诊] 三方数据获取失败",
+        "is_rate_limit": false
+      }
+    ]
+  }
+}

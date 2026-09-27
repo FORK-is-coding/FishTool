@@ -1,0 +1,22 @@
+{
+  "uid": 98941882,
+  "total_favorite_text": "粉丝数\n94,210\n关注 128\n视频总数\n171\n累计播放 2,345,094\n平均播放\n13,714\n最高播放 312,000\n累计收藏\n347,106\n平均每稿 2,029\n近30天投稿\n9\n周均 2.1 条",
+  "ai_card_count": 2,
+  "tag_word_count": 40,
+  "chart": {
+    "yMin": 0,
+    "yMax": 10,
+    "scores": [
+      4.85,
+      5.4,
+      10
+    ]
+  },
+  "theme": {
+    "primary": "#d4a373",
+    "background": "#faf7f2",
+    "glow": "radial-gradient(190px, rgba(212, 163, 115, 0.36), rgba(0, 0, 0, 0) 72%)"
+  },
+  "console_errors": [],
+  "passed": true
+}

@@ -1,0 +1,21 @@
+{
+  "uid": 98941882,
+  "route": "/api/analysis/self-diagnosis",
+  "success": true,
+  "name_present": true,
+  "mid": 98941882,
+  "follower": 94209,
+  "video_count": 171,
+  "avg_play": 13714,
+  "data_availability": {
+    "basic_info": true,
+    "fan_stats": true,
+    "video_stats": true,
+    "post_rhythm": true,
+    "engagement_metrics": true,
+    "fans_growth_curve": false,
+    "completion_rate": false,
+    "audience_profile": false,
+    "traffic_source": false
+  }
+}

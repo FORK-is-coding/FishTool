@@ -1,0 +1,39 @@
+{
+  "verified_at": "2026-08-22T18:49:09",
+  "qrcode": {
+    "passed": true,
+    "login_url_present": true,
+    "png_bytes": 1230,
+    "qrcode_key_present": true
+  },
+  "lottery": {
+    "passed": true,
+    "preview": {
+      "target_id": "BV1xx411c7mD",
+      "title": "字幕君交流场所",
+      "author": "碧诗",
+      "oid": 2
+    },
+    "uid_analysis": {
+      "uid": 2,
+      "name": "碧诗",
+      "level": 6,
+      "classification": "real",
+      "data_errors": [
+        "投稿数据不可用: 获取用户视频失败: 请求被反爬拦截（IP/UA限制）",
+        "动态数据不可用: 请求被风控: -352"
+      ]
+    }
+  },
+  "logs": {
+    "passed": true,
+    "returned": 20,
+    "sample": {
+      "timestamp": "2026-08-22 18:49:16",
+      "level": "WARNING",
+      "source": "modules.lottery.analyzer",
+      "message": "真人筛选 LLM 不可用，使用可解释规则兜底: LLM API密钥未配置"
+    }
+  },
+  "all_passed": true
+}

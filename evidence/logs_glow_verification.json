@@ -1,0 +1,38 @@
+{
+  "health_status": 200,
+  "health_body": {
+    "status": "ok"
+  },
+  "logs_status": 200,
+  "logs_success": true,
+  "logs_returned": 20,
+  "records_are_objects": true,
+  "has_cursor": true,
+  "incremental_status": 200,
+  "incremental_returned": 0,
+  "browser": {
+    "entry_count": 200,
+    "copy_button_count": 200,
+    "level_chip_count": 204,
+    "contains_object_object": false,
+    "first_glow_position": {
+      "x": "40px",
+      "y": "44.8125px",
+      "pseudo_background": "radial-gradient(190px at calc(15.2696% + 27.7843px) calc(15.2696% + 31.1271px), rgba(212, 163, 115, 0.36), rgba(0, 0, 0, 0) 72%)"
+    },
+    "second_glow_position": {
+      "x": "1063px",
+      "y": "176.8125px",
+      "pseudo_background": "radial-gradient(190px at calc(2.5395% + 748.391px) calc(2.5395% + 134.204px), rgba(212, 163, 115, 0.36), rgba(0, 0, 0, 0) 72%)"
+    },
+    "glow_position_changed": true,
+    "pseudo_background_changed": true,
+    "glow_binding": {
+      "matched": 34,
+      "bound": 34
+    },
+    "console_errors": [],
+    "screenshot": "evidence\\logs_glow_verification.png",
+    "screenshot_bytes": 128694
+  }
+}

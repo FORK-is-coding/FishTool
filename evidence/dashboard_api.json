@@ -1,0 +1,184 @@
+{
+  "success": true,
+  "data": {
+    "video": {
+      "bvid": "BV1gz3h6TEuv",
+      "title": "视频_BV1gz3h6TEuv"
+    },
+    "visualization": {
+      "sentiment_distribution": {
+        "neutral": 37
+      },
+      "date_comment_counts": [
+        {
+          "date": "2026-07-31",
+          "count": 22
+        },
+        {
+          "date": "2026-08-01",
+          "count": 3
+        },
+        {
+          "date": "2026-08-02",
+          "count": 2
+        },
+        {
+          "date": "2026-08-03",
+          "count": 1
+        },
+        {
+          "date": "2026-08-04",
+          "count": 3
+        },
+        {
+          "date": "2026-08-05",
+          "count": 1
+        },
+        {
+          "date": "2026-08-06",
+          "count": 1
+        },
+        {
+          "date": "2026-08-08",
+          "count": 1
+        },
+        {
+          "date": "2026-08-13",
+          "count": 1
+        },
+        {
+          "date": "2026-08-17",
+          "count": 1
+        },
+        {
+          "date": "2026-08-20",
+          "count": 1
+        }
+      ],
+      "dedup_statistics": {
+        "before_count": 37,
+        "after_count": 36,
+        "removed_count": 1,
+        "reasons": {
+          "same_user_repeat": 0,
+          "cross_user_aggregation": 1,
+          "fuzzy_similarity": 0,
+          "time_window_hotspot": 1
+        }
+      },
+      "top10_voice_comments": [
+        {
+          "rpid": "308342312561",
+          "uname": "芭芭拉_强森",
+          "content": "可爱捏",
+          "like": 0,
+          "ctime": "2026-07-31T18:18:23",
+          "voice_weight": 2,
+          "voice_score": 10,
+          "sentiment": "neutral",
+          "cleaning_reason": "跨用户同内容聚合，合并 2 条声量"
+        },
+        {
+          "rpid": "308343154753",
+          "uname": "叫我折念大人",
+          "content": "结芬[植物少女_小花花]",
+          "like": 2,
+          "ctime": "2026-07-31T18:24:18",
+          "voice_weight": 1,
+          "voice_score": 2,
+          "sentiment": "neutral",
+          "cleaning_reason": "唯一内容，清洗后保留"
+        },
+        {
+          "rpid": "309139686833",
+          "uname": "未来课",
+          "content": "@叫我折念大人 @_-wasd-_ @鱼头豆腐汤x @青叶缪斯 @六二三四的狗 @miumiu最可爱 @lipy_1143",
+          "like": 2,
+          "ctime": "2026-08-06T16:44:47",
+          "voice_weight": 1,
+          "voice_score": 2,
+          "sentiment": "neutral",
+          "cleaning_reason": "唯一内容，清洗后保留"
+        },
+        {
+          "rpid": "311663789952",
+          "uname": "NekoMugi",
+          "content": "结婚",
+          "like": 1,
+          "ctime": "2026-07-31T21:28:35",
+          "voice_weight": 1,
+          "voice_score": 1,
+          "sentiment": "neutral",
+          "cleaning_reason": "唯一内容，清洗后保留"
+        },
+        {
+          "rpid": "311556760896",
+          "uname": "西宫硝然",
+          "content": "来啦来啦～[Cat_hightouch][暹罗猫小豆泥_来了]",
+          "like": 1,
+          "ctime": "2026-07-31T02:42:46",
+          "voice_weight": 1,
+          "voice_score": 1,
+          "sentiment": "neutral",
+          "cleaning_reason": "唯一内容，清洗后保留"
+        },
+        {
+          "rpid": "308280198737",
+          "uname": "缪汐ya",
+          "content": "缪缪[星星眼]",
+          "like": 1,
+          "ctime": "2026-07-31T09:18:42",
+          "voice_weight": 1,
+          "voice_score": 1,
+          "sentiment": "neutral",
+          "cleaning_reason": "唯一内容，清洗后保留"
+        },
+        {
+          "rpid": "311698825504",
+          "uname": "缪缪lll",
+          "content": "[doge]",
+          "like": 1,
+          "ctime": "2026-08-01T03:14:03",
+          "voice_weight": 1,
+          "voice_score": 1,
+          "sentiment": "neutral",
+          "cleaning_reason": "唯一内容，清洗后保留"
+        },
+        {
+          "rpid": "311976437152",
+          "uname": "水诺玲Zuko",
+          "content": "水精灵小姐好美[Morfonica表情包_厉害吧]",
+          "like": 1,
+          "ctime": "2026-08-03T04:25:57",
+          "voice_weight": 1,
+          "voice_score": 1,
+          "sentiment": "neutral",
+          "cleaning_reason": "唯一内容，清洗后保留"
+        },
+        {
+          "rpid": "309428028609",
+          "uname": "香甜缪缪椒",
+          "content": "[保卫萝卜_笔芯][保卫萝卜_笔芯]最喜欢的一集",
+          "like": 1,
+          "ctime": "2026-08-08T18:51:16",
+          "voice_weight": 1,
+          "voice_score": 1,
+          "sentiment": "neutral",
+          "cleaning_reason": "唯一内容，清洗后保留"
+        },
+        {
+          "rpid": "308304615089",
+          "uname": "李青麟",
+          "content": "很赞",
+          "like": 0,
+          "ctime": "2026-07-31T12:55:11",
+          "voice_weight": 1,
+          "voice_score": 0,
+          "sentiment": "neutral",
+          "cleaning_reason": "唯一内容，清洗后保留"
+        }
+      ]
+    },
+    "message": "已加载历史监控数据"
+  }
+}
