@@ -174,7 +174,7 @@ def test_relation_exception_does_not_abort_other_dimensions() -> None:
             return None
 
     async def fake_fetch_all_videos(uid: int) -> list[dict[str, Any]]:
-        """模拟投稿列表为空。
+        """模拟“确认为空且完整”的投稿列表，并写入完整元信息。
 
         Args:
             uid: B站用户 UID。
@@ -183,6 +183,15 @@ def test_relation_exception_does_not_abort_other_dimensions() -> None:
             空投稿列表。
         """
         assert uid == 42
+        # 规格 §5.4：完整性必须由显式元信息证明，此替身自报 complete=True。
+        analyzer._last_video_fetch_meta = {
+            "expected_total": 0,
+            "fetched_count": 0,
+            "fetched_unique_count": 0,
+            "truncated_by_error": False,
+            "hit_page_limit": False,
+            "complete": True,
+        }
         return []
 
     analyzer = SelfAnalyzer(

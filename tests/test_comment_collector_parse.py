@@ -63,41 +63,41 @@ def test_parse_comment_reply_maps_all_fields() -> None:
 
 
 def test_parse_comment_reply_defaults_for_missing_member() -> None:
-    """缺少 member 时应给出契约默认值，不抛异常。"""
+    """反例修复（规格 §6.6）：缺 member 时会员/等级保持未知，不伪造非会员。"""
     comment = _mix()._parse_comment_reply({"rpid": 1, "content": {"message": "x"}})
 
     assert comment["uid"] is None
     assert comment["uname"] == ""
     assert comment["avatar"] == ""
-    assert comment["level_info"] == {}
-    assert comment["vip"] == {}
+    assert comment["level_info"] is None
+    assert comment["vip"] is None
     assert comment["level"] is None
-    assert comment["is_vip"] is False
-    assert comment["vip_type"] == 0
+    assert comment["is_vip"] is None
+    assert comment["vip_type"] is None
 
 
 def test_parse_comment_reply_defaults_for_missing_content_and_stats() -> None:
-    """缺少正文/点赞/回复数时应回落默认值，ctime 缺失按 0 处理。"""
+    """反例修复（规格 §6.6）：缺 ctime 保持 None，不落到 Unix 纪元。"""
     comment = _mix()._parse_comment_reply({"rpid": 2, "member": {}})
 
     assert comment["content"] == ""
     assert comment["like"] == 0
     assert comment["reply_count"] == 0
-    assert comment["ctime"] == datetime.fromtimestamp(0)
+    assert comment["ctime"] is None
     assert comment["is_hot"] is False
 
 
 def test_parse_comment_reply_handles_null_member_subfields() -> None:
-    """member 下的 level_info / vip 显式为 None 时应降级为空字典。"""
+    """反例修复（规格 §6.6）：level_info/vip 为 None 时保持未知，不降级为 {}。"""
     reply = {"rpid": 3, "member": {"mid": 9, "level_info": None, "vip": None}}
 
     comment = _mix()._parse_comment_reply(reply)
 
     assert comment["uid"] == 9
-    assert comment["level_info"] == {}
-    assert comment["vip"] == {}
+    assert comment["level_info"] is None
+    assert comment["vip"] is None
     assert comment["level"] is None
-    assert comment["vip_type"] == 0
+    assert comment["vip_type"] is None
 
 
 def test_parse_comment_reply_vip_type_via_type_alias() -> None:

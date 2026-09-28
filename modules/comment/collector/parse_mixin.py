@@ -65,9 +65,30 @@ class CommentParseMixin:
         # 提取评论正文对象
         # 从数据中取出目标字段，供后续逻辑使用
         content = reply.get('content', {})
-        
-        level_info = member.get('level_info') or {}
-        vip = member.get('vip') or {}
+
+        # 会员/等级缺失或空对象一律保持未知，不下沉为“非会员/0 级”。
+        raw_level_info = member.get('level_info')
+        level_info = raw_level_info if isinstance(raw_level_info, dict) and raw_level_info else None
+        raw_vip = member.get('vip')
+        vip_present = isinstance(raw_vip, dict) and any(
+            key in raw_vip for key in ('vipStatus', 'vipType', 'status', 'type')
+        )
+        vip = raw_vip if vip_present else None
+        if vip is not None:
+            is_vip = bool(vip.get('vipStatus') or vip.get('vipType'))
+            vip_type = int(vip.get('vipType') or vip.get('type') or 0)
+        else:
+            is_vip = None
+            vip_type = None
+
+        # 缺 ctime / 非法 ctime 保持 None，不由 0 伪造 Unix 纪元时间。
+        ctime = None
+        raw_ctime = reply.get('ctime')
+        if isinstance(raw_ctime, (int, float)) and not isinstance(raw_ctime, bool) and raw_ctime:
+            try:
+                ctime = datetime.fromtimestamp(int(raw_ctime))
+            except (OSError, OverflowError, ValueError):
+                ctime = None
 
         # 构造标准化评论数据字典
         return {
@@ -78,11 +99,11 @@ class CommentParseMixin:
             'avatar': member.get('avatar', ''),  # 评论者头像URL
             'level_info': level_info,  # 保留评论接口原始等级字段，供本地复用
             'vip': vip,  # 保留评论接口原始会员字段，区分普通/年度大会员
-            'level': level_info.get('current_level'),  # 评论时用户等级
-            'is_vip': bool(vip.get('vipStatus') or vip.get('vipType')),  # 是否大会员
-            'vip_type': int(vip.get('vipType') or vip.get('type') or 0),
+            'level': level_info.get('current_level') if level_info else None,  # 评论时用户等级
+            'is_vip': is_vip,  # 是否大会员（未知为 None）
+            'vip_type': vip_type,
             'content': content.get('message', ''),  # 评论文本内容
-            'ctime': datetime.fromtimestamp(reply.get('ctime', 0)),  # 评论发布时间戳转datetime
+            'ctime': ctime,  # 评论发布时间戳转datetime（缺失为 None）
             'like': reply.get('like', 0),  # 点赞数（支持数）
             'reply_count': reply.get('rcount', 0),  # 回复数（评论下的子评论数）
             'is_hot': is_hot,  # 是否为热门评论标记

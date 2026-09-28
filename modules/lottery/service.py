@@ -7,6 +7,7 @@
 import asyncio
 import secrets
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -37,6 +38,25 @@ from .target import LotteryTarget, fetch_target_metadata
 logger = get_logger(__name__)
 # 进度回调类型：阶段名 + 百分比 + 提示文案。
 ProgressCallback = Optional[Callable[[str, int, str], None]]
+
+#: full 命中所需的来源组：等级/动态/投稿数分别来自 info / dynamics / videos（规格 §6.4）。
+_FULL_REQUIRED_GROUPS = ("info", "dynamics", "videos")
+#: full 命中必须四字段真实可用，不是旧版“三键存在”。
+_FULL_REQUIRED_FIELDS = ("level", "recent_activity_count", "lottery_repost_ratio", "video_count")
+#: draw 资格只需来源可确认的等级/会员字段，对应 info 组。
+_DRAW_REQUIRED_GROUPS = ("info",)
+#: source-group 到画像字段的映射，用于按组读写 v3 缓存。
+_GROUP_FIELDS: Dict[str, tuple] = {
+    "info": ("name", "level", "is_vip", "vip_type", "vip_label", "vip"),
+    "relation": ("follower", "following"),
+    "videos": ("video_count",),
+    "dynamics": (
+        "recent_activity_count",
+        "lottery_repost_count",
+        "lottery_repost_ratio",
+        "observable_account_days",
+    ),
+}
 
 
 # 抽奖服务编排层，负责缓存、采集、判定与抽取全流程。
@@ -249,29 +269,76 @@ class LotteryService:
         if not winners:
             raise ValueError("请先进行抽奖！")
 
-        cache = self._load_profile_cache()
+        # v3：full 空间按来源组命中，缺字段或旧缓存一律重采（规格 §6.5）。
         profiles: List[Dict[str, Any]] = []
         local_count = 0
         fetched_count = 0
+        partial_count = 0
         for winner in winners:
             uid = int(winner.get("uid") or 0)
             if uid <= 0:
                 raise ValueError("中奖名单包含无效 UID")
-            cached = cache.get(str(uid))
-            required_fields = {"recent_activity_count", "lottery_repost_ratio", "observable_account_days"}
-            if isinstance(cached, dict) and required_fields.issubset(cached):
-                profile = dict(cached)
+            lookup = self._cache.get_profile(
+                uid,
+                namespace="full",
+                now_s=int(time.time()),
+                required_groups=list(_FULL_REQUIRED_GROUPS),
+            )
+            hit = (
+                lookup.cache_state == "hit"
+                and isinstance(lookup.profile, dict)
+                and all(lookup.profile.get(field) is not None for field in _FULL_REQUIRED_FIELDS)
+            )
+            if hit:
+                profile = dict(lookup.profile)
                 local_count += 1
             else:
-                profile = await self.fetch_user_profile(uid)
-                cache[str(uid)] = profile
-                fetched_count += 1
+                refresh_groups = list(lookup.refresh_groups) or list(_FULL_REQUIRED_GROUPS)
+                if lookup.cache_state in ("legacy", "error", "miss"):
+                    # 旧扁平/损坏缓存不可信，必要组全部重采。
+                    refresh_groups = list(_FULL_REQUIRED_GROUPS)
+                seqs = {
+                    group: self._cache.begin_attempt(
+                        uid, namespace="full", group=group, now_s=int(time.time())
+                    )
+                    for group in refresh_groups
+                }
+                fetched = None
+                try:
+                    fetched = await self.fetch_user_profile(uid)
+                except Exception as exc:
+                    logger.warning("中奖用户 %s 画像采集失败: %s", uid, exc)
+                if fetched is not None:
+                    plan = self._split_profile_groups(fetched)
+                    for group, seq in seqs.items():
+                        self._cache.merge_attempt(
+                            uid,
+                            namespace="full",
+                            group=group,
+                            attempt=seq,
+                            success_payload=plan.get(group, {}),
+                            now_s=int(time.time()),
+                        )
+                    profile = dict(fetched)
+                    fetched_count += 1
+                else:
+                    # 采集失败：登记失败 attempt（不替换历史成功），本次按旧值构造并标 partial。
+                    for group, seq in seqs.items():
+                        self._cache.merge_attempt(
+                            uid,
+                            namespace="full",
+                            group=group,
+                            attempt=seq,
+                            success_payload=None,
+                            now_s=int(time.time()),
+                        )
+                    profile = dict(lookup.profile) if isinstance(lookup.profile, dict) else {"uid": uid}
+                    partial_count += 1
+            profile["uid"] = uid
             profile["name"] = str(profile.get("name") or winner.get("uname") or f"UID {uid}")
             profiles.append(profile)
             await asyncio.sleep(0)
 
-        if fetched_count:
-            self._save_profile_cache(cache)
         assessments = await classify_profiles(profiles, focus_template)
         profile_by_uid = {int(item["uid"]): item for item in profiles}
         winner_by_uid = {int(item.get("uid") or 0): item for item in winners}
@@ -289,6 +356,7 @@ class LotteryService:
             "winner_count": len(winners),
             "local_count": local_count,
             "fetched_count": fetched_count,
+            "partial_count": partial_count,
             "real_count": sum(item.get("classification") == "real" for item in results),
             "suspicious_count": sum(item.get("classification") == "suspicious" for item in results),
             "indeterminate_count": sum(item.get("classification") == "indeterminate" for item in results),
@@ -347,13 +415,47 @@ class LotteryService:
         }
 
 
-    def _load_profile_cache(self) -> Dict[str, Dict[str, Any]]:
-        """读取用户画像缓存，异常时降级为空字典。"""
-        return self._cache.load_profiles()
+    @staticmethod
+    def _split_profile_groups(profile: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        """把整份画像按 source-group 拆分，只保留非 None 字段（规格 §6.4）。
 
-    def _save_profile_cache(self, profiles: Dict[str, Dict[str, Any]]) -> None:
-        """原子保存用户画像缓存。"""
-        self._cache.save_profiles(profiles)
+        Args:
+            profile: 采集得到的最小画像。
+
+        Returns:
+            ``{group: {field: value}}``，缺少有效字段的组不出现在结果中。
+        """
+        plan: Dict[str, Dict[str, Any]] = {}
+        for group, fields in _GROUP_FIELDS.items():
+            payload = {field: profile.get(field) for field in fields if profile.get(field) is not None}
+            if payload:
+                plan[group] = payload
+        return plan
+
+    def _load_profile_cache(self, namespace: str = "full") -> Dict[str, Dict[str, Any]]:
+        """读取画像缓存（默认 full v3 空间；保留 namespace 参数供旧调用）。
+
+        Args:
+            namespace: 缓存空间，``full`` 或 ``draw``。
+
+        Returns:
+            以字符串 UID 为键的扁平兼容快照。
+        """
+        return self._cache.load_profiles(namespace)
+
+    def _save_profile_cache(
+        self, profiles: Dict[str, Dict[str, Any]], namespace: str = "full"
+    ) -> None:
+        """兼容入口：把整份映射写入指定 v3 空间。新业务应走 begin/merge 分组合并。
+
+        Args:
+            profiles: UID 到画像的映射。
+            namespace: 目标空间。
+
+        Returns:
+            无。
+        """
+        self._cache.save_profiles(profiles, namespace)
 
     def _persist_comment_profiles(self, profiles: Dict[int, Dict[str, Any]]) -> None:
         """把补取的最小用户资料回写到同 UID 的缺字段评论。
@@ -420,12 +522,11 @@ class LotteryService:
         if not missing_uids:
             return normalized
 
-        profiles, cache, fetched = await self._resolve_missing_profiles(missing_uids, progress)
-        if fetched:
-            self._save_profile_cache(cache)
+        profiles, _fetched = await self._resolve_missing_profiles(missing_uids, progress)
 
+        # 只回写有来源证据的有效字段，缺失/旧缓存值不得污染 Comment（规格 §6.5）。
         successful_profiles = {
-            uid: profile
+            uid: {key: value for key, value in profile.items() if value is not None}
             for uid, profile in profiles.items()
             if profile.get("level") is not None and profile.get("vip") is not None
         }
@@ -455,24 +556,57 @@ class LotteryService:
         Returns:
             画像映射、更新后的缓存和是否执行过在线补取。
         """
-        cache = self._load_profile_cache()
         profiles: Dict[int, Dict[str, Any]] = {}
         uncached: List[int] = []
         for uid in sorted(missing_uids):
-            cached = cache.get(str(uid))
-            if isinstance(cached, dict) and cached.get("level") is not None and cached.get("is_vip") is not None:
+            lookup = self._cache.get_profile(
+                uid,
+                namespace="draw",
+                now_s=int(time.time()),
+                required_groups=list(_DRAW_REQUIRED_GROUPS),
+            )
+            cached = lookup.profile if lookup.cache_state == "hit" else None
+            if (
+                isinstance(cached, dict)
+                and cached.get("level") is not None
+                and cached.get("is_vip") is not None
+            ):
                 profiles[uid] = cached
             else:
                 uncached.append(uid)
 
         for index, uid in enumerate(uncached, start=1):
+            seq = self._cache.begin_attempt(uid, namespace="draw", group="info", now_s=int(time.time()))
             try:
-                info = (await self.api.get_user_info(uid)).get("data") or {}
-                profile = profile_from_user_info(info)
+                response = await self.api.get_user_info(uid)
+                info = (response or {}).get("data") or {}
+                meta = (response or {}).get("_meta")
+                profile = profile_from_user_info(info, meta=meta)
                 profiles[uid] = profile
-                cache[str(uid)] = profile
+                payload = {
+                    field: profile.get(field)
+                    for field in ("level", "is_vip", "vip_type", "vip_label", "vip")
+                    if profile.get(field) is not None
+                }
+                # 成功结构无任何有效字段时记录失败，绝不缓存伪 0/false（§6.5）。
+                self._cache.merge_attempt(
+                    uid,
+                    namespace="draw",
+                    group="info",
+                    attempt=seq,
+                    success_payload=payload if payload else None,
+                    now_s=int(time.time()),
+                )
             except Exception as exc:
                 logger.warning("候选用户 %s 资料补全失败: %s", uid, exc)
+                self._cache.merge_attempt(
+                    uid,
+                    namespace="draw",
+                    group="info",
+                    attempt=seq,
+                    success_payload=None,
+                    now_s=int(time.time()),
+                )
                 profiles[uid] = {
                     "level": None,
                     "is_vip": None,
@@ -483,7 +617,7 @@ class LotteryService:
                 percent = 48 + int(index / max(len(uncached), 1) * 32)
                 progress("completing_profiles", percent, f"仅补齐缺失的等级/大会员字段：{index}/{len(uncached)}")
             await asyncio.sleep(0)
-        return profiles, cache, bool(uncached)
+        return profiles, bool(uncached)
 
     @staticmethod
     def _parse_comment_time(value: Any) -> Optional[datetime]:

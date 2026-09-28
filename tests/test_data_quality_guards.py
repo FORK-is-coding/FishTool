@@ -161,11 +161,15 @@ def test_classify_stat_quality_negative_view_is_missing() -> None:
 
 
 def test_analyze_video_stats_carries_scope_label() -> None:
-    """均值必须带全历史口径标识，避免被误读为近期数据。"""
+    """均值必须带全历史口径标识，且只按有效样本求均值（规格 §5.2）。"""
+    # 反例说明见 out_fishtool03/progress.md：旧 fixture 没带 metric_status，
+    # 被旧实现当成隐式 ok 参与均值；新契约要求逐项显式声明质量状态。
     stats = _analyzer()._analyze_video_stats(
         [
-            {"play": 100, "comment": 1, "favorite": 2},
-            {"play": 300, "comment": 3, "favorite": 4},
+            {"play": 100, "comment": 1, "favorite": 2,
+             "metric_status": {"play": "ok", "comment": "ok", "favorite": "ok"}},
+            {"play": 300, "comment": 3, "favorite": 4,
+             "metric_status": {"play": "ok", "comment": "ok", "favorite": "ok"}},
         ]
     )
     assert stats["stats_scope"] == "all_history"
@@ -173,12 +177,34 @@ def test_analyze_video_stats_carries_scope_label() -> None:
     assert stats["avg_play"] == 200
 
 
+def test_analyze_video_stats_excludes_missing_metric() -> None:
+    """缺 metric_status / 值非法不参与均值，分母只算有效样本（§5.2 / 验收 6）。"""
+    stats = _analyzer()._analyze_video_stats(
+        [
+            {"play": 100, "metric_status": {"play": "ok"}},
+            {"play": None, "metric_status": {"play": "missing"}},
+            {"play": 300, "metric_status": {"play": "ok"}},
+        ]
+    )
+    assert stats["avg_play"] == 200
+    assert stats["coverage"]["play"] == {"valid_count": 2, "missing_count": 1}
+
+
 def test_analyze_video_stats_empty_result_keeps_scope_and_avg_favorite() -> None:
-    """空投稿也要返回口径标识，并补全原先遗漏的 avg_favorite。"""
+    """空投稿仍带口径标识，但均值不再伪造 0，而是明确不可用（§5.2）。"""
+    # 反例说明见 out_fishtool03/progress.md：旧契约把空账号 avg_favorite 当 0，
+    # 无法与“真实均值恰好为 0”区分；新契约 avg_* 为 None + confirmed_empty。
     stats = _analyzer()._analyze_video_stats([])
     assert stats["stats_scope"] == "all_history"
-    assert "avg_favorite" in stats
-    assert stats["avg_favorite"] == 0
+    assert stats["avg_favorite"] is None
+    assert stats["collection_status"] == "confirmed_empty"
+
+
+def test_analyze_video_stats_empty_with_failed_fetch_is_unavailable() -> None:
+    """采集失败导致的空列表不得冒充确认空账号（§5.2）。"""
+    stats = _analyzer()._analyze_video_stats([], {"complete": False})
+    assert stats["collection_status"] == "unavailable"
+    assert stats["total_play"] is None
 
 
 # --------------------------------------------------------------------------
@@ -186,9 +212,13 @@ def test_analyze_video_stats_empty_result_keeps_scope_and_avg_favorite() -> None
 # --------------------------------------------------------------------------
 
 
-def test_resolve_video_list_complete_without_evidence_does_not_fail() -> None:
-    """无完整性依据时不得判定失败。"""
-    assert SelfAnalyzer._resolve_video_list_complete(None) is True
+def test_resolve_video_list_complete_without_evidence_is_not_complete() -> None:
+    """反例修复（规格 §5.4）：无完整性依据时不得判为已完成。
+
+    旧预期把“无元信息”当成已采全（True），会在采集入口被替换/元信息丢失时
+    把残缺或未知数据标为可用；新预期保守返回 False，需由显式完整元信息证明。
+    """
+    assert SelfAnalyzer._resolve_video_list_complete(None) is False
 
 
 def test_resolve_video_list_complete_follows_meta() -> None:

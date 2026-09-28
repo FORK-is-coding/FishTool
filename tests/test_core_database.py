@@ -103,7 +103,9 @@ def test_migrations_add_missing_columns_to_legacy_db(tmp_path):
     try:
         connection.execute("CREATE TABLE comments (id INTEGER PRIMARY KEY)")
         connection.execute("CREATE TABLE up_masters (id INTEGER PRIMARY KEY)")
-        connection.execute("CREATE TABLE video_stats (id INTEGER PRIMARY KEY)")
+        connection.execute(
+            "CREATE TABLE video_stats (id INTEGER PRIMARY KEY, video_id INTEGER)"
+        )
         connection.commit()
     finally:
         connection.close()
@@ -118,7 +120,13 @@ def test_migrations_add_missing_columns_to_legacy_db(tmp_path):
     assert "charge_count" in up_columns
 
     stat_columns = {column["name"] for column in inspector.get_columns("video_stats")}
-    assert {"source", "run_id", "view_status", "stat_status"} <= stat_columns
+    assert {
+        "source", "run_id", "view_status", "stat_status",
+        "captured_epoch_s", "collection_tid", "raw_tid", "metric_status",
+    } <= stat_columns
+
+    index_names = {index["name"] for index in inspector.get_indexes("video_stats")}
+    assert "ix_video_stats_video_captured" in index_names
 
 
 # ---------------------------------------------------------------------------

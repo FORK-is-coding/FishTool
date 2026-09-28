@@ -5,10 +5,51 @@ B站API封装 - UserAPIMixin 用户与榜单接口
 """
 from typing import Dict, Any, Optional, List
 
+from core.data_quality import parse_count
 from core.exceptions import BilibiliAPIError
 from core.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _raw_field_status(raw: Any) -> str:
+    """按补默认值之前的原始字段判定质量状态。
+
+    Args:
+        raw: 补 0 之前的原始字段值，可能为 int/str/None/bool/float。
+
+    Returns:
+        'ok'（真实值，含真实 0）/'missing'（字段缺失）/'invalid'（类型非法）。
+    """
+    return parse_count(raw)[1]
+
+
+def _build_profile_meta(
+    source: str,
+    level_raw: Any,
+    follower_raw: Any,
+    following_raw: Any,
+) -> Dict[str, Any]:
+    """构造 ``get_user_info`` 的 ``_meta`` 质量信息。
+
+    Args:
+        source: 数据来源标识，``'space_info'`` 或 ``'public_card'``。
+        level_raw: 补默认值之前的原始等级。
+        follower_raw: 补默认值之前的原始粉丝数。
+        following_raw: 补默认值之前的原始关注数。
+
+    Returns:
+        含 ``source`` 与 ``field_status`` 的字典；``field_status`` 逐字段给出
+        ``ok``/``missing``/``invalid``，供 01/03 新消费者优先于兼容 0 读取。
+    """
+    return {
+        'source': source,
+        'field_status': {
+            'level': _raw_field_status(level_raw),
+            'follower': _raw_field_status(follower_raw),
+            'following': _raw_field_status(following_raw),
+        },
+    }
 
 
 class UserAPIMixin:
@@ -33,7 +74,18 @@ class UserAPIMixin:
                 params={"mid": uid},
                 need_sign=True,
             )
-            return {"data": data}
+            if not isinstance(data, dict):
+                data = {}
+            # data 保持原样以兼容旧消费者；_meta 记录补默认值前各字段的真实状态。
+            return {
+                "data": data,
+                "_meta": _build_profile_meta(
+                    'space_info',
+                    data.get('level'),
+                    data.get('follower'),
+                    data.get('following'),
+                ),
+            }
         except Exception as exc:
             primary_error = exc
             logger.warning("用户空间资料接口失败，降级公开名片接口 (uid=%s): %s", uid, exc)
@@ -47,6 +99,15 @@ class UserAPIMixin:
             )
             card = fallback.get("card") or {}
             level_info = card.get("level_info") or {}
+            # 补默认值前先留存原始字段，严格 parser 才能区分真实 0 与字段缺失。
+            raw_level = level_info.get("current_level")
+            if raw_level is None:
+                raw_level = card.get("level")
+            raw_follower = fallback.get("follower")
+            if raw_follower is None:
+                raw_follower = card.get("fans")
+            raw_following = card.get("attention")
+
             normalized = dict(card)
             normalized.update(
                 mid=int(card.get("mid") or uid),
@@ -64,7 +125,13 @@ class UserAPIMixin:
                 )
             if not normalized["name"]:
                 raise BilibiliAPIError("公开名片接口未返回用户名称")
-            return {"data": normalized}
+            # 兼容 data 里仍可能是补 0；_meta 按原始字段给出权威状态，missing 不被 0 掩盖。
+            return {
+                "data": normalized,
+                "_meta": _build_profile_meta(
+                    'public_card', raw_level, raw_follower, raw_following
+                ),
+            }
         except Exception as fallback_error:
             logger.error(
                 "获取用户信息失败 (uid=%s)，主接口=%s，回退接口=%s",

@@ -74,7 +74,23 @@ class ProfileCollector:
             "lottery_repost_ratio": None,
             "observable_account_days": None,
         }
-        level = self._optional_int(info.get("level")) if "level" in info else None
+        # 消费上游 wrapper 的 _meta.field_status：缺 meta 时退化为“字段是否存在”。
+        def _field_state(meta_status: Any, key: str, present: bool) -> str:
+            """返回字段级状态 ok/missing/invalid，优先使用上游 _meta。"""
+            if isinstance(meta_status, dict) and key in meta_status:
+                return str(meta_status.get(key))
+            return "ok" if present else "missing"
+
+        info_meta = info_response.get("_meta") if isinstance(info_response.get("_meta"), dict) else {}
+        relation_meta = relation_response.get("_meta") if isinstance(relation_response.get("_meta"), dict) else {}
+        video_meta = video_response.get("_meta") if isinstance(video_response.get("_meta"), dict) else {}
+        info_status = info_meta.get("field_status") if isinstance(info_meta.get("field_status"), dict) else {}
+        relation_status = relation_meta.get("field_status") if isinstance(relation_meta.get("field_status"), dict) else {}
+        video_field_status = video_meta.get("field_status") if isinstance(video_meta.get("field_status"), dict) else {}
+
+        # 兼容 data.level=0 不能覆盖 _meta 的 missing/invalid（规格 §3.2）。
+        level_state = _field_state(info_status, "level", "level" in info)
+        level = self._optional_int(info.get("level")) if level_state == "ok" else None
         vip = info.get("vip")
         vip_fields_present = isinstance(vip, dict) and any(
             key in vip for key in ("status", "vipStatus", "type", "vipType")
@@ -82,6 +98,13 @@ class ProfileCollector:
         vip_status = self._optional_int((vip or {}).get("status", (vip or {}).get("vipStatus"))) if vip_fields_present else None
         vip_type = self._optional_int((vip or {}).get("type", (vip or {}).get("vipType"))) if vip_fields_present else None
         is_vip = bool((vip_status or 0) or (vip_type or 0)) if vip_fields_present else None
+        # 来源接口失败/字段缺失时数值必须为 None，不允许补 0（规格 §6.5）。
+        follower_state = _field_state(relation_status, "follower", "follower" in relation)
+        following_state = _field_state(relation_status, "following", "following" in relation)
+        follower = self._optional_int(relation.get("follower")) if follower_state == "ok" else None
+        following = self._optional_int(relation.get("following")) if following_state == "ok" else None
+        video_count_state = _field_state(video_field_status, "count", "count" in videos)
+        video_count = self._optional_int(videos.get("count")) if video_count_state == "ok" else None
         return {
             "uid": int(uid),
             "name": str(info.get("name") or f"UID {uid}"),
@@ -91,10 +114,25 @@ class ProfileCollector:
             "vip_label": (
                 "年度大会员" if vip_type == 2 else "大会员" if is_vip else "非会员"
             ) if is_vip is not None else "会员未知",
-            "follower": self._optional_int(relation.get("follower")) if "follower" in relation else None,
-            "following": self._optional_int(relation.get("following")) if "following" in relation else None,
-            "video_count": self._optional_int(videos.get("count")) if "count" in videos else None,
+            "follower": follower,
+            "following": following,
+            "video_count": video_count,
             **activity,
+            # 采集时间与字段级状态，供 v3 缓存命中和证据门禁使用（规格 §6.5）。
+            "collected_at": int(time.time()),
+            "field_status": {
+                "level": level_state,
+                "is_vip": "ok" if vip_fields_present else "missing",
+                "follower": follower_state,
+                "following": following_state,
+                "video_count": video_count_state,
+                "recent_activity_count": "ok" if dynamic_state == "ok" else dynamic_state,
+                "lottery_repost_ratio": "ok" if dynamic_state == "ok" else dynamic_state,
+                "observable_account_days": (
+                    "ok" if dynamic_state == "ok" and activity.get("observable_account_days") is not None
+                    else ("missing" if dynamic_state == "ok" else dynamic_state)
+                ),
+            },
             "account_age_note": "公开接口无精确注册时间，此值为近期样本中最早可观察动态距今天数",
             "source_status": {
                 "info": {"state": info_state},

@@ -243,6 +243,13 @@ function diagnosisNumber(value, fallback = 0) {
     return Number.isFinite(number) ? number : fallback;
 }
 
+// 业务图表专用可空数值：空值/布尔/非法保持 null（不落 0），供柱状/雷达区分“缺失”与“真实 0”。
+function diagnosisNullableNumber(value) {
+    if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+}
+
 // 格式化自诊指标：数字千分位 + 可选后缀，空值统一显示“暂无数据”。
 function formatDiagnosisMetric(value, suffix = '') {
     if (value === null || value === undefined || value === '') return '暂无数据';
@@ -255,19 +262,23 @@ function formatDiagnosisMetric(value, suffix = '') {
 function engagementScores(engagement) {
     // 自诊接口的三项互动指标均为百分比；图表按 0-100% 映射，超过上限显示到顶。
     const dimensions = [
-        { name: '粉丝触达', raw: diagnosisNumber(engagement.play_to_fans_ratio) },
-        { name: '评论效率', raw: diagnosisNumber(engagement.comment_to_play_ratio) },
-        { name: '收藏效率', raw: diagnosisNumber(engagement.favorite_to_play_ratio) },
+        { name: '粉丝触达', raw: diagnosisNullableNumber(engagement.play_to_fans_ratio) },
+        { name: '评论效率', raw: diagnosisNullableNumber(engagement.comment_to_play_ratio) },
+        { name: '收藏效率', raw: diagnosisNullableNumber(engagement.favorite_to_play_ratio) },
     ];
+    // 缺失维度 score 保持 null，不画成 0 分；真实 0 仍映射为 0。
     return dimensions.map(item => ({
         ...item,
-        score: Math.min(100, Math.max(0, item.raw)),
+        score: item.raw === null ? null : Math.min(100, Math.max(0, item.raw)),
     }));
 }
 
 // 把百分比指标格式化为带 % 的展示字符串。
 function formatEngagementPercent(value) {
-    return `${diagnosisNumber(value).toLocaleString('zh-CN', { maximumFractionDigits: 2 })}%`;
+    if (value === null || value === undefined || value === '') return '暂无数据';
+    const number = Number(value);
+    if (!Number.isFinite(number)) return '暂无数据';
+    return `${number.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}%`;
 }
 
 // 渲染账号全部视频的词云：按词频加权字号，最多展示 40 个标签。
@@ -310,7 +321,7 @@ function renderDiagnosisVolumeChart(volumeChart, videoStats, theme) {
         grid: { left: 56, right: 24, top: 28, bottom: 34 },
         xAxis: { type: 'category', data: ['累计播放', '累计评论', '累计收藏'], axisLabel: { color: theme.text }, axisLine: { lineStyle: { color: theme.border } } },
         yAxis: { type: 'value', axisLabel: { color: theme.text }, splitLine: { lineStyle: { color: theme.border, type: 'dashed' } } },
-        series: [{ type: 'bar', barMaxWidth: 44, data: [videoStats.total_play, videoStats.total_comment, videoStats.total_favorite].map(value => diagnosisNumber(value)), itemStyle: { color: theme.primary, borderRadius: [6, 6, 0, 0] } }],
+        series: [{ type: 'bar', barMaxWidth: 44, data: [videoStats.total_play, videoStats.total_comment, videoStats.total_favorite].map(value => diagnosisNullableNumber(value)), itemStyle: { color: theme.primary, borderRadius: [6, 6, 0, 0] } }],
     }, true);
 }
 
@@ -326,7 +337,7 @@ function renderDiagnosisEngagementChart(engagementChart, engagement, theme) {
         tooltip: {
             ...getDashboardTooltipTheme('item'),
             formatter: () => scores.map(item => {
-                const capped = item.raw > 100 ? '（图表按 100% 封顶）' : '';
+                const capped = item.raw !== null && item.raw > 100 ? '（图表按 100% 封顶）' : '';
                 return `${escapeHtml(item.name)}：${formatEngagementPercent(item.raw)}${capped}`;
             }).join('<br>'),
         },

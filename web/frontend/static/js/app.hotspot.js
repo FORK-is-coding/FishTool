@@ -291,7 +291,7 @@ async function loadHotspotTimeline(bvid, titleRow) {
                 type: 'line',
                 smooth: true,
                 symbolSize: 5,
-                data: recent.map(p => p[m.key] || 0),
+                data: recent.map(p => (p[m.key] === undefined ? null : p[m.key])),
                 itemStyle: { color: m.color },
                 lineStyle: { width: 2 },
             })),

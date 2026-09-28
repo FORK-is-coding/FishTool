@@ -127,6 +127,15 @@ class VideoStats(Base):
     view_status = Column(String(20), comment='播放量质量: ok/missing/invalid')
     # 整条统计的质量：ok=全部指标有效；partial=部分缺失；missing=全部缺失。
     stat_status = Column(String(20), comment='统计完整度: ok/partial/missing')
+
+    # 采集响应实际到达时间（UTC 秒级 epoch）：v2 只用明确 epoch，不猜本地时区。
+    captured_epoch_s = Column(Integer, nullable=True, comment='采集时间(UTC epoch秒)')
+    # 采集入口的分区ID（用于读取分组），与接口原始 tid 区分。
+    collection_tid = Column(Integer, nullable=True, comment='采集入口分区ID')
+    # 接口返回的原始 tid，另存快照，避免与入口 tid 混同。
+    raw_tid = Column(Integer, nullable=True, comment='原始分区ID')
+    # 各指标质量三态：{view:'ok/missing/invalid', ...}，供读端区分真实 0 与缺失。
+    metric_status = Column(JSON, nullable=True, comment='各指标质量状态')
     
     video = relationship("Video", back_populates="stats_history")
 

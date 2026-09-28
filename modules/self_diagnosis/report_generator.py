@@ -46,6 +46,15 @@ from core.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _format_metric(value: Any, *, suffix: str = "") -> str:
+    """None 感知数值格式化：缺失 -> 暂无数据，真实 0 -> 0（规格 §5.5）。"""
+    if value is None or isinstance(value, bool):
+        return "暂无数据"
+    if isinstance(value, (int, float)):
+        return f"{value:,}{suffix}"
+    return "暂无数据"
+
+
 class ReportGenerator:
     """诊断报告生成器 - 支持PDF和Markdown格式"""
     
@@ -184,20 +193,34 @@ class ReportGenerator:
         # 三、投稿数据分析
         md_parts.append("## 🎬 投稿数据分析\n\n")
         # 追加到列表
-        md_parts.append(f"- **总投稿数**: {video_stats.get('total_count', 0)} 个视频\n")
+        md_parts.append(f"- **总投稿数**: {_format_metric(video_stats.get('total_count'))} 个视频\n")
         # 追加到列表
-        md_parts.append(f"- **总播放量**: {video_stats.get('total_play', 0):,}\n")
+        md_parts.append(f"- **总播放量**: {_format_metric(video_stats.get('total_play'))}\n")
         # 追加到列表
-        md_parts.append(f"- **总评论数**: {video_stats.get('total_comment', 0):,}\n")
+        md_parts.append(f"- **总评论数**: {_format_metric(video_stats.get('total_comment'))}\n")
         # 追加到列表
-        md_parts.append(f"- **总收藏数**: {video_stats.get('total_favorite', 0):,}\n")
+        md_parts.append(f"- **总收藏数**: {_format_metric(video_stats.get('total_favorite'))}\n")
         # 追加到列表
         md_parts.append(
-            f"- **平均播放**: {video_stats.get('avg_play', 0):,}"
+            f"- **平均播放**: {_format_metric(video_stats.get('avg_play'))}"
             f"（{video_stats.get('stats_scope_label', '全部已采集投稿的全历史累计口径')}）\n"
         )
         # 追加到列表
-        md_parts.append(f"- **平均评论**: {video_stats.get('avg_comment', 0):,}\n")
+        md_parts.append(f"- **平均评论**: {_format_metric(video_stats.get('avg_comment'))}\n")
+        # 采集覆盖与状态：局部数据不得被整体模板掩盖（§5.5）。
+        coverage = video_stats.get('coverage')
+        if isinstance(coverage, dict) and coverage:
+            coverage_bits = [
+                f"{key} 有效 {item.get('valid_count', 0)}/缺失 {item.get('missing_count', 0)}"
+                for key, item in coverage.items()
+                if isinstance(item, dict)
+            ]
+            if coverage_bits:
+                # 追加到列表
+                md_parts.append(f"- **指标覆盖度**: {'；'.join(coverage_bits)}\n")
+        if video_stats.get('collection_status'):
+            # 追加到列表
+            md_parts.append(f"- **采集状态**: {video_stats.get('collection_status')}\n")
         
         # 最高播放视频（如有）
         max_play = video_stats.get('max_play_video')
@@ -209,7 +232,7 @@ class ReportGenerator:
             # 追加到列表
             md_parts.append(f"- 标题: {max_play['title']}\n")
             # 追加到列表
-            md_parts.append(f"- 播放: {max_play['play']:,}\n")
+            md_parts.append(f"- 播放: {_format_metric(max_play.get('play'))}\n")
             # 追加到列表
             md_parts.append(f"- BV号: {max_play['bvid']}\n")
         
@@ -219,20 +242,24 @@ class ReportGenerator:
         # 四、投稿节奏
         md_parts.append("## ⏰ 投稿节奏\n\n")
         # 追加到列表
-        md_parts.append(f"- **投稿频率**: {post_rhythm.get('videos_per_week', 0)} 视频/周\n")
+        md_parts.append(f"- **投稿频率**: {_format_metric(post_rhythm.get('videos_per_week'))} 视频/周\n")
         # 追加到列表
-        md_parts.append(f"- **投稿频率**: {post_rhythm.get('videos_per_month', 0)} 视频/月\n")
+        md_parts.append(f"- **投稿频率**: {_format_metric(post_rhythm.get('videos_per_month'))} 视频/月\n")
         # 追加到列表
-        md_parts.append(f"- **活跃天数**: {post_rhythm.get('total_days_active', 0)} 天\n")
+        md_parts.append(f"- **活跃天数**: {_format_metric(post_rhythm.get('total_days_active'))} 天\n")
         # 追加到列表
-        md_parts.append(f"- **最长断更**: {post_rhythm.get('longest_gap_days', 0)} 天\n")
+        md_parts.append(f"- **最长断更**: {_format_metric(post_rhythm.get('longest_gap_days'))} 天\n")
         # 追加到列表
-        md_parts.append(f"- **近30天投稿**: {post_rhythm.get('recent_30d_count', 0)} 个视频\n")
+        md_parts.append(f"- **近30天投稿**: {_format_metric(post_rhythm.get('recent_30d_count'))} 个视频\n")
         
         # 节奏评价（按周更频率分级）
-        freq = post_rhythm.get('videos_per_week', 0)
+        freq = post_rhythm.get('videos_per_week')
         # 边界/有效性检查
-        if freq >= 3:
+        if freq is None:
+            # 追加到列表
+            md_parts.append("\nℹ️ **评价**: 投稿频率数据缺失，暂不评分\n")
+        # 边界/有效性检查
+        elif freq >= 3:
             # 追加到列表
             md_parts.append("\n✅ **评价**: 投稿频率高，保持稳定产出\n")
         # 边界/有效性检查
@@ -249,22 +276,26 @@ class ReportGenerator:
         # 五、互动指标
         md_parts.append("## 💬 互动指标\n\n")
         # 追加到列表
-        md_parts.append(f"- **粉丝触达率**: {engagement.get('play_to_fans_ratio', 0)}%\n")
+        md_parts.append(f"- **粉丝触达率**: {_format_metric(engagement.get('play_to_fans_ratio'), suffix='%')}\n")
         # 追加到列表
         md_parts.append(f"  > 平均播放量占粉丝数的比例，反映粉丝活跃度\n\n")
         # 追加到列表
-        md_parts.append(f"- **评论率**: {engagement.get('comment_to_play_ratio', 0)}%\n")
+        md_parts.append(f"- **评论率**: {_format_metric(engagement.get('comment_to_play_ratio'), suffix='%')}\n")
         # 追加到列表
         md_parts.append(f"  > 评论数占播放量的比例，反映内容互动性\n\n")
         # 追加到列表
-        md_parts.append(f"- **收藏率**: {engagement.get('favorite_to_play_ratio', 0)}%\n")
+        md_parts.append(f"- **收藏率**: {_format_metric(engagement.get('favorite_to_play_ratio'), suffix='%')}\n")
         # 追加到列表
         md_parts.append(f"  > 收藏数占播放量的比例，反映内容价值度\n\n")
         
         # 触达率评价
-        touch_rate = engagement.get('play_to_fans_ratio', 0)
+        touch_rate = engagement.get('play_to_fans_ratio')
         # 边界/有效性检查
-        if touch_rate >= 30:
+        if touch_rate is None:
+            # 追加到列表
+            md_parts.append("ℹ️ **触达评价**: 触达率数据缺失，暂不评分\n")
+        # 边界/有效性检查
+        elif touch_rate >= 30:
             # 追加到列表
             md_parts.append("✅ **触达评价**: 粉丝触达率高，说明粉丝粘性强\n")
         # 边界/有效性检查
@@ -339,22 +370,26 @@ class ReportGenerator:
         suggestions = []
         
         # 投稿频率低
-        if post_rhythm.get('videos_per_week', 0) < 1:
+        _vpw = post_rhythm.get('videos_per_week')
+        if _vpw is not None and _vpw < 1:
             # 追加到列表
             suggestions.append("1. **提升投稿频率**: 建议保持每周至少1-2更，稳定的产出节奏有助于维持粉丝活跃")
         
         # 评论率低
-        if engagement.get('comment_to_play_ratio', 0) < 0.5:
+        _comment_rate = engagement.get('comment_to_play_ratio')
+        if _comment_rate is not None and _comment_rate < 0.5:
             # 追加到列表
             suggestions.append("2. **增强互动引导**: 视频结尾引导评论、置顶话题讨论、及时回复评论")
         
         # 触达率低
-        if engagement.get('play_to_fans_ratio', 0) < 20:
+        _touch_rate = engagement.get('play_to_fans_ratio')
+        if _touch_rate is not None and _touch_rate < 20:
             # 追加到列表
             suggestions.append("3. **提升粉丝触达**: 优化发布时间（晚8-10点）、增强标题吸引力、提升内容质量")
         
         # 断更过长
-        if post_rhythm.get('longest_gap_days', 0) > 30:
+        _gap_days = post_rhythm.get('longest_gap_days')
+        if _gap_days is not None and _gap_days > 30:
             # 追加到列表
             suggestions.append("4. **避免长期断更**: 超过30天未更新会导致粉丝流失，建议提前储备内容")
         
@@ -419,6 +454,25 @@ class ReportGenerator:
             # 抛出异常中断流程
             raise
     
+    def _save_markdown_fallback(self,
+                                self_data: Dict[str, Any],
+                                benchmark_data: Optional[Dict[str, Any]],
+                                filename: Optional[str]) -> str:
+        """PDF 依赖缺失时的降级：输出 .md 文件，绝不把 Markdown 写成 .pdf（§9-17）。
+
+        Args:
+            self_data: 账号数据。
+            benchmark_data: benchmark 数据。
+            filename: 原请求文件名（可能以 .pdf 结尾）。
+
+        Returns:
+            实际保存的 Markdown 文件路径。
+        """
+        md_filename = filename
+        if md_filename:
+            md_filename = str(Path(md_filename).with_suffix(".md"))
+        return self.save_markdown_report(self_data, benchmark_data, md_filename)
+
     def generate_pdf_report(self,
                            self_data: Dict[str, Any],
                            benchmark_data: Optional[Dict[str, Any]] = None,
@@ -454,7 +508,7 @@ class ReportGenerator:
                 import pdfkit
             except ImportError:
                 logger.warning("[报告生成] 缺少PDF依赖（markdown2/pdfkit），降级为Markdown")
-                return self.save_markdown_report(self_data, benchmark_data, filename)
+                return self._save_markdown_fallback(self_data, benchmark_data, filename)
             
             # Markdown转HTML
             html_content = markdown2.markdown(md_content, extras=['tables', 'fenced-code-blocks'])
@@ -535,5 +589,5 @@ class ReportGenerator:
             
         except Exception as e:
             logger.error(f"[报告生成] PDF生成失败: {e}，降级为Markdown")
-            # 降级为Markdown
-            return self.save_markdown_report(self_data, benchmark_data, filename)
+            # 降级为 Markdown，返回 .md 路径而非伪装成 PDF。
+            return self._save_markdown_fallback(self_data, benchmark_data, filename)

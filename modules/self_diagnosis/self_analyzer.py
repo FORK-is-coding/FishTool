@@ -42,6 +42,90 @@ import asyncio
 # 从 typing 导入符号
 from collections import Counter
 from typing import Dict, Any, Optional, List
+
+from core.data_quality import parse_count
+
+
+def current_metric(row: Dict[str, Any], key: str) -> tuple[Optional[int], str]:
+    """读取本轮新解析投稿字典中单个指标的有效值（规格 §5.2）。
+
+    只有 ``metric_status[key] == 'ok'`` 且原始数值本身合法时才返回有效值；
+    缺整图 / 空图 / 缺 key / 非 dict 状态一律不隐式视作 ok。
+
+    Args:
+        row: 单条投稿字典，需带 ``metric_status``。
+        key: 指标名，如 ``"play"`` / ``"favorite"``。
+
+    Returns:
+        ``(value, status)``；无效时为 ``(None, 'unknown')``。
+    """
+    value, parsed_status = parse_count(row.get(key))
+    states = row.get('metric_status')
+    if not isinstance(states, dict) or states.get(key) != 'ok':
+        return None, 'unknown'
+    if parsed_status != 'ok':
+        return None, parsed_status  # 显式 ok 也不能使 NULL/非法值有效
+    return value, 'ok'
+
+
+def summarize_metric(videos: List[Dict[str, Any]], key: str) -> Dict[str, Any]:
+    """只按有效样本汇总单个指标的 total/mean/覆盖度（规格 §5.2）。
+
+    缺失/未知样本不进分母，避免“全列表分母”把均值稀释成伪值。
+
+    Args:
+        videos: 本轮新解析投稿字典列表。
+        key: 指标名。
+
+    Returns:
+        ``{total, mean, valid_count, missing_count, status}``。
+    """
+    values = []
+    for row in videos:
+        value, status = current_metric(row, key)
+        if status == 'ok':
+            values.append(value)
+    n = len(values)
+    return {
+        'total': sum(values) if n else None,
+        'mean': sum(values) / n if n else None,
+        'valid_count': n,
+        'missing_count': len(videos) - n,
+        'status': 'ok' if n else 'unavailable',
+    }
+
+
+def paired_rate(
+    videos: List[Dict[str, Any]],
+    numerator_key: str,
+    denominator_key: str = 'play',
+) -> tuple[Optional[float], str, int]:
+    """按同稿有效配对计算百分比比率（规格 §5.3）。
+
+    收藏率 / 评论率各自取同一稿件上分子与分母均有效的配对，不拿不同有效
+    集合的均值相除。
+
+    Args:
+        videos: 本轮新解析投稿字典列表。
+        numerator_key: 分子指标名。
+        denominator_key: 分母指标名，默认 play。
+
+    Returns:
+        ``(ratio_percent, status, pair_count)``；无有效配对时 ``(None, 'unavailable', 0)``，
+        分母合计为 0 时 ``(None, 'zero_denominator', n)``。
+    """
+    pairs = []
+    for row in videos:
+        n, ns = current_metric(row, numerator_key)
+        d, ds = current_metric(row, denominator_key)
+        if ns == ds == 'ok':
+            pairs.append((n, d))
+    if not pairs:
+        return None, 'unavailable', 0
+    denominator = sum(d for _, d in pairs)
+    if denominator == 0:
+        return None, 'zero_denominator', len(pairs)
+    return 100 * sum(n for n, _ in pairs) / denominator, 'ok', len(pairs)
 # 从 datetime 导入符号
 from datetime import datetime, timedelta
 # 从 sqlalchemy.orm 导入符号
@@ -314,7 +398,20 @@ class SelfAnalyzer:
             result['data_availability']['tag_cloud'] = bool(
                 result['tag_cloud'].get('tagged_video_count')
             )
-            result['video_stats'] = self._analyze_video_stats(videos)
+            result['video_stats'] = self._analyze_video_stats(videos, fetch_meta)
+            # 列表采集覆盖率：complete 与 availability 分开表达，局部数据不隐藏（§5.4）。
+            result['video_collection'] = {
+                'complete': video_list_complete,
+                'requested_total': fetch_meta.get('expected_total'),
+                'fetched_unique_count': len({str(v.get('bvid')) for v in videos if v.get('bvid')}),
+                'stop_reason': (
+                    'page_limit' if fetch_meta.get('hit_page_limit')
+                    else 'error' if fetch_meta.get('truncated_by_error')
+                    else 'complete' if video_list_complete
+                    else 'pending'
+                ),
+                'status': 'ok' if video_list_complete else 'partial',
+            }
             result['data_availability']['video_stats'] = video_list_complete
             if not video_list_complete:
                 result['data_errors']['video_pagination'] = (
@@ -331,10 +428,13 @@ class SelfAnalyzer:
             # 4. 互动率估算
             # 需要粉丝数作为分母，因此必须在前面的步骤完成后执行
             result['engagement_metrics'] = self._calculate_engagement(
-                videos, 
-                result['fan_stats'].get('follower') or 0
+                videos,
+                result['fan_stats'].get('follower')
             )
-            result['data_availability']['engagement_metrics'] = True
+            result['data_availability']['engagement_metrics'] = any(
+                result['engagement_metrics'].get(metric_key) is not None
+                for metric_key in ('play_to_fans_ratio', 'comment_to_play_ratio', 'favorite_to_play_ratio')
+            )
             
             # 5. 尝试从三方数据源补充数据
             logger.info("[自诊] 尝试从三方数据源补充...")
@@ -376,11 +476,12 @@ class SelfAnalyzer:
                 为 ``None`` 表示采集入口被替换（如测试替身），无依据可判。
 
         Returns:
-            ``True`` 表示可以标记为已获取。无依据时不判定失败，
-            因为空投稿列表只代表该账号没有投稿，不代表采集残缺。
+            ``True`` 表示可以标记为已获取。无依据（``None``）时不能证明完整，
+            保守返回 ``False``；空投稿列表须由调用方以完整元信息表达。
         """
+        # 缺采集元信息时无法证明完整，保守判为 False（§5.4）。
         if fetch_meta is None:
-            return True
+            return False
         return bool(fetch_meta.get('complete'))
 
     async def _fetch_all_videos(self, uid: int) -> List[Dict[str, Any]]:
@@ -417,6 +518,8 @@ class SelfAnalyzer:
             视频列表（可能是不完整的部分数据，需配合元信息判断）
         """
         all_videos = []
+        # 按 bvid 去重，避免分页边界重复被当成独立投稿（§5.4）。
+        seen_bvids: set[str] = set()
         page = 1
         page_size = 50
         # 接口声明的投稿总数与中断原因，供上层判断数据是否完整。
@@ -452,8 +555,16 @@ class SelfAnalyzer:
                     # 退出循环
                     break
                 
-                # 当前页视频追加到总列表
-                all_videos.extend(vlist)
+                # 当前页视频按 bvid 去重后追加；无 bvid 的不冒充独立视频。
+                for item in vlist:
+                    if not isinstance(item, dict):
+                        continue
+                    bvid = str(item.get('bvid') or '').strip()
+                    if bvid and bvid in seen_bvids:
+                        continue
+                    if bvid:
+                        seen_bvids.add(bvid)
+                    all_videos.append(item)
                 logger.info(f"[自诊] 已采集{len(all_videos)}个视频...")
                 
                 # 检查是否还有更多
@@ -491,14 +602,16 @@ class SelfAnalyzer:
                 break
         
         fetched_count = len(all_videos)
-        # 完整性判定：接口异常中断、触顶分页上限，或实际条数少于接口声明总数，
+        fetched_unique_count = len(seen_bvids)
+        # 完整性判定：接口异常中断、触顶分页上限，或去重后条数少于接口声明总数，
         # 任一成立即视为不完整，上层不得把该批数据标记为“已完整获取”。
         complete = not truncated_by_error and not hit_page_limit and (
-            expected_total is None or fetched_count >= expected_total
+            expected_total is None or fetched_unique_count >= expected_total
         )
         self._last_video_fetch_meta = {
             "expected_total": expected_total,
             "fetched_count": fetched_count,
+            "fetched_unique_count": fetched_unique_count,
             "truncated_by_error": truncated_by_error,
             "hit_page_limit": hit_page_limit,
             "complete": complete,
@@ -544,13 +657,30 @@ class SelfAnalyzer:
             # 空间投稿列表不含收藏数，view 接口的 stat.favorite 才是目标字段。
             if isinstance(stat_result, Exception):
                 logger.warning(f"[自诊] 视频 {bvid} 收藏统计获取失败: {stat_result}")
-                video['favorite'] = 0
+                video['favorite'] = None
+                favorite_status = 'missing'
             elif isinstance(stat_result, dict):
                 stat_fields = stat_result.get('stat', {})
-                video['favorite'] = int(stat_fields.get('favorite') or 0)
-                stats_video_count += 1
+                favorite_value, favorite_status = parse_count(stat_fields.get('favorite'))
+                video['favorite'] = favorite_value
+                # 只有确实解析到 ok 才计入覆盖；响应 dict 存在不等于收藏有效。
+                if favorite_status == 'ok':
+                    stats_video_count += 1
             else:
-                video['favorite'] = 0
+                video['favorite'] = None
+                favorite_status = 'invalid'
+            # 播放/评论来自空间投稿列表，同样严格解析并逐项记质量状态。
+            play_value, play_status = parse_count(video.get('play'))
+            comment_value, comment_status = parse_count(video.get('comment'))
+            if play_status == 'ok':
+                video['play'] = play_value
+            if comment_status == 'ok':
+                video['comment'] = comment_value
+            video['metric_status'] = {
+                'play': play_status,
+                'comment': comment_status,
+                'favorite': favorite_status,
+            }
 
             # 新版 view 接口不再返回 tag，标签必须取 archive/tags 的 tag_name。
             if isinstance(tag_result, Exception):
@@ -584,7 +714,7 @@ class SelfAnalyzer:
             'source_endpoint': '/x/tag/archive/tags',
         }
     
-    def _analyze_video_stats(self, videos: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _analyze_video_stats(self, videos: List[Dict[str, Any]], fetch_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """分析视频统计数据
         
         汇总播放/评论/收藏，计算均值与最高播放视频。
@@ -612,29 +742,45 @@ class SelfAnalyzer:
             统计结果
         """
         if not videos:
+            # 确认零投稿（confirmed_empty）与采集失败（unavailable）由 fetch meta 决定，
+            # 不凭空列表猜测：真实空账号总量可为 0，失败时总量与均值均 None（§5.2）。
+            meta = fetch_meta or {}
+            empty_status = 'unavailable' if meta.get('complete') is False else 'confirmed_empty'
             return {
                 'total_count': 0,
-                'total_play': 0,
-                'total_comment': 0,
-                'total_favorite': 0,
-                'avg_play': 0,
-                'avg_comment': 0,
-                'avg_favorite': 0,
+                'total_play': 0 if empty_status == 'confirmed_empty' else None,
+                'total_comment': 0 if empty_status == 'confirmed_empty' else None,
+                'total_favorite': 0 if empty_status == 'confirmed_empty' else None,
+                'avg_play': None,
+                'avg_comment': None,
+                'avg_favorite': None,
                 'max_play_video': None,
+                'collection_status': empty_status,
+                'coverage': {
+                    key: {'valid_count': 0, 'missing_count': 0}
+                    for key in ('play', 'comment', 'favorite')
+                },
                 'stats_scope': 'all_history',
                 'stats_scope_label': '全部已采集投稿的全历史累计口径'
             }
         
         # 汇总总量
         # 逐视频累加播放/评论/收藏，v.get 缺省为 0 防报错
-        total_play = sum(v.get('play', 0) for v in videos)
-        total_comment = sum(v.get('comment', 0) for v in videos)
-        total_favorite = sum(v.get('favorite', 0) for v in videos)
+        summary_play = summarize_metric(videos, 'play')
+        summary_comment = summarize_metric(videos, 'comment')
+        summary_favorite = summarize_metric(videos, 'favorite')
+        total_play = summary_play['total']
+        total_comment = summary_comment['total']
+        total_favorite = summary_favorite['total']
         
         # 找到播放量最高的视频
         # 用于展示"代表作"；key 指定按 play 字段比较
         # 将内容呈现到界面上
-        max_play_video = max(videos, key=lambda x: x.get('play', 0))
+        valid_play_rows = [v for v in videos if current_metric(v, 'play')[1] == 'ok']
+        max_play_video = (
+            max(valid_play_rows, key=lambda x: current_metric(x, 'play')[0])
+            if valid_play_rows else None
+        )
         
         # 组装统计结果
         # 均值取整，避免报告出现小数
@@ -643,9 +789,14 @@ class SelfAnalyzer:
             'total_play': total_play,
             'total_comment': total_comment,
             'total_favorite': total_favorite,
-            'avg_play': int(total_play / len(videos)),
-            'avg_comment': int(total_comment / len(videos)),
-            'avg_favorite': int(total_favorite / len(videos)),
+            'avg_play': summary_play['mean'],
+            'avg_comment': summary_comment['mean'],
+            'avg_favorite': summary_favorite['mean'],
+            'coverage': {
+                'play': {'valid_count': summary_play['valid_count'], 'missing_count': summary_play['missing_count']},
+                'comment': {'valid_count': summary_comment['valid_count'], 'missing_count': summary_comment['missing_count']},
+                'favorite': {'valid_count': summary_favorite['valid_count'], 'missing_count': summary_favorite['missing_count']},
+            },
             # 口径标识：均值来自全历史投稿累计，不能与近窗口采集样本直接比较。
             'stats_scope': 'all_history',
             'stats_scope_label': '全部已采集投稿的全历史累计口径',
@@ -653,12 +804,11 @@ class SelfAnalyzer:
             'max_play_video': {
                 'title': max_play_video.get('title'),
                 'bvid': max_play_video.get('bvid'),
-                'play': max_play_video.get('play')
-            }
+                'play': current_metric(max_play_video, 'play')[0]
+            } if max_play_video is not None else None
         }
         
-        logger.info(f"[统计] 总视频数: {stats['total_count']}, "
-                   f"平均播放: {stats['avg_play']:,}")
+        logger.info("[统计] 总视频数: %s, 平均播放: %s", stats['total_count'], stats['avg_play'])
         
         return stats
     
@@ -750,7 +900,7 @@ class SelfAnalyzer:
         
         return rhythm
     
-    def _calculate_engagement(self, videos: List[Dict[str, Any]], fans: int) -> Dict[str, Any]:
+    def _calculate_engagement(self, videos: List[Dict[str, Any]], fans: Optional[int]) -> Dict[str, Any]:
         """计算互动率指标
         # 对输入做运算得到结果
         
@@ -780,53 +930,57 @@ class SelfAnalyzer:
         """
         if not videos:
             return {
-                'play_to_fans_ratio': 0,
-                'comment_to_play_ratio': 0,
-                'favorite_to_play_ratio': 0
+                'play_to_fans_ratio': None,
+                'comment_to_play_ratio': None,
+                'favorite_to_play_ratio': None,
+                'play_to_fans_status': 'unavailable',
+                'comment_to_play_status': 'unavailable',
+                'favorite_to_play_status': 'unavailable',
+                'comment_pair_count': 0,
+                'favorite_pair_count': 0,
             }
         
         # 计算均值
         # 三个维度的平均播放/评论/收藏，作为互动率分子
-        avg_play = sum(v.get('play', 0) for v in videos) / len(videos)
+        avg_play = summarize_metric(videos, 'play')['mean']
         # 计算结果存入 avg_comment
         # 对输入做运算得到结果
-        avg_comment = sum(v.get('comment', 0) for v in videos) / len(videos)
+        avg_comment = summarize_metric(videos, 'comment')['mean']  # 仅供留档，比率改用配对口径
         # 计算结果存入 avg_favorite
         # 对输入做运算得到结果
-        avg_favorite = sum(v.get('favorite', 0) for v in videos) / len(videos)
+        avg_favorite = summarize_metric(videos, 'favorite')['mean']  # 仅供留档，比率改用配对口径
         
-        # 播放/粉丝比（粗略估算粉丝触达率）
-        # 平均播放量占粉丝数的比例，>100% 说明有外部流量
-        play_to_fans_ratio = 0
-        # 边界/有效性检查
-        if fans > 0:
-            play_to_fans_ratio = round((avg_play / fans) * 100, 2)
+        # 均播/当前粉丝数：follower=None 不可用，follower=0 视为零分母，均不输出伪 0。
+        if fans is None or avg_play is None:
+            play_to_fans_ratio, play_to_fans_status = None, 'unavailable'
+        elif fans <= 0:
+            play_to_fans_ratio, play_to_fans_status = None, 'zero_denominator'
+        else:
+            play_to_fans_ratio, play_to_fans_status = round((avg_play / fans) * 100, 2), 'ok'
         
-        # 评论/播放比
-        # 评论率反映观众讨论意愿，越高越好
-        comment_to_play_ratio = 0
-        # 边界/有效性检查
-        if avg_play > 0:
-            comment_to_play_ratio = round((avg_comment / avg_play) * 100, 4)
+        # 评论率：只取同稿 play/comment 均有效的配对（§5.3）。
+        comment_ratio_value, comment_status, comment_pairs = paired_rate(videos, 'comment', 'play')
+        comment_to_play_ratio = round(comment_ratio_value, 4) if comment_status == 'ok' else None
         
-        # 收藏/播放比
-        # 收藏率反映内容实用价值，是优质内容的标志
-        favorite_to_play_ratio = 0
-        # 边界/有效性检查
-        if avg_play > 0:
-            favorite_to_play_ratio = round((avg_favorite / avg_play) * 100, 4)
+        # 收藏率：与评论率各自独立配对，不共用有效集合。
+        favorite_ratio_value, favorite_status, favorite_pairs = paired_rate(videos, 'favorite', 'play')
+        favorite_to_play_ratio = round(favorite_ratio_value, 4) if favorite_status == 'ok' else None
         
         # 组装互动率指标
         # 三个比率全部用百分比表示，报告直接展示
         # 将内容呈现到界面上
         metrics = {
-            'play_to_fans_ratio': play_to_fans_ratio,  # 粉丝触达率（%）
-            'comment_to_play_ratio': comment_to_play_ratio,  # 评论率（%）
-            'favorite_to_play_ratio': favorite_to_play_ratio  # 收藏率（%）
+            'play_to_fans_ratio': play_to_fans_ratio,
+            'comment_to_play_ratio': comment_to_play_ratio,
+            'favorite_to_play_ratio': favorite_to_play_ratio,
+            'play_to_fans_status': play_to_fans_status,
+            'comment_to_play_status': comment_status,
+            'favorite_to_play_status': favorite_status,
+            'comment_pair_count': comment_pairs,
+            'favorite_pair_count': favorite_pairs,
         }
         
-        logger.info(f"[互动] 粉丝触达率: {play_to_fans_ratio}%, "
-                   f"评论率: {comment_to_play_ratio}%")
+        logger.info("[互动] 均播/粉丝: %s, 评论率: %s", play_to_fans_ratio, comment_to_play_ratio)
         
         return metrics
     

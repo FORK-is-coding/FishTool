@@ -137,12 +137,23 @@ class DatabaseManager:
                 "run_id": "ALTER TABLE video_stats ADD COLUMN run_id VARCHAR(64)",
                 "view_status": "ALTER TABLE video_stats ADD COLUMN view_status VARCHAR(20)",
                 "stat_status": "ALTER TABLE video_stats ADD COLUMN stat_status VARCHAR(20)",
+                "captured_epoch_s": "ALTER TABLE video_stats ADD COLUMN captured_epoch_s INTEGER",
+                "collection_tid": "ALTER TABLE video_stats ADD COLUMN collection_tid INTEGER",
+                "raw_tid": "ALTER TABLE video_stats ADD COLUMN raw_tid INTEGER",
+                "metric_status": "ALTER TABLE video_stats ADD COLUMN metric_status JSON",
             }
             with self.engine.begin() as connection:
                 for column_name, statement in statements.items():
                     if column_name not in existing:
                         connection.execute(text(statement))
                         logger.info("数据库迁移完成: video_stats.%s", column_name)
+                # 历史读取按 (video_id, captured_epoch_s) 提速；仅在两列都存在时幂等创建，
+                # 避免对极端残缺旧表（缺 video_id）误建索引导致迁移失败。
+                if {"video_id", "captured_epoch_s"} <= (existing | set(statements)):
+                    connection.execute(text(
+                        "CREATE INDEX IF NOT EXISTS ix_video_stats_video_captured "
+                        "ON video_stats (video_id, captured_epoch_s)"
+                    ))
         except Exception:
             logger.exception("视频统计来源字段迁移失败")
             raise

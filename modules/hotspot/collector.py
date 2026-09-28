@@ -20,10 +20,12 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from bilibili.api import BilibiliAPI
+from core.data_quality import utc_now_epoch_s
 from core.database import Video, VideoStats, get_session
 from core.logger import get_logger
 from modules.comment.collector import CommentCollector
 from modules.comment.sentiment import SentimentAnalyzer
+from modules.hotspot.snapshot_store import persist_snapshot
 
 from .risk_control import RequestBudget
 from .signal_store import HotspotSignalStore
@@ -430,68 +432,32 @@ class HotspotCollector:
         Returns:
             成功写入的标题信号数量，失败时由上层统一处理异常。
         """
-        bvid = view_data.get("bvid") or ""
+        bvid = str(view_data.get("bvid") or "").strip()
         if not bvid:
             return 0
-        stat = view_data.get("stat") or {}
+        captured_epoch_s = utc_now_epoch_s()
         session = get_session()
         try:
-            video = session.query(Video).filter(Video.bvid == bvid).first()
-            if video is None:
-                video = Video(bvid=bvid, aid=view_data.get("aid"))
-                session.add(video)
-                session.flush()
-            # 刷新基础字段与最新互动统计，保证详情页数据不过期。
-            owner = view_data.get("owner") or {}
-            video.title = view_data.get("title") or video.title
-            video.aid = view_data.get("aid") or video.aid
-            video.desc = view_data.get("desc") or video.desc
-            video.duration = view_data.get("duration") or video.duration
-            video.mid = owner.get("mid") or video.mid
-            video.author = owner.get("name") or video.author
-            # view 接口的 tid 是实际投稿子分区；生命周期筛选使用采集入口的
-            # 一级分区归属，避免“已入库但按选择分区查询为空”。
-            video.tid = int(collection_tid) if collection_tid is not None else (view_data.get("tid") or video.tid)
-            video.tname = view_data.get("tname") or video.tname
-            # 发布时间：view 接口 pubdate 为 Unix 秒级时间戳，落库便于按时间窗过滤
-            # （如绘画区 7 天窗口 PAINT_WINDOW_DAYS）与生命周期排序。
-            pubdate_raw = view_data.get("pubdate")
-            if pubdate_raw:
-                try:
-                    video.pubdate = datetime.fromtimestamp(int(pubdate_raw))
-                except (ValueError, TypeError, OSError):
-                    pass
-            # 播放量质量：仅接口明确返回的非负整数视为真实值，
-            # 缺失或非法不得静默落成 0。互动量同源同待遇，逐项判定后聚合出整条完整度。
-            view_status, stat_status = self._classify_stat_quality(stat)
-            video.view = self._read_stat_int(stat, "view") or 0
-            video.danmaku = self._read_stat_int(stat, "danmaku") or 0
-            video.reply = self._read_stat_int(stat, "reply") or 0
-            video.favorite = self._read_stat_int(stat, "favorite") or 0
-            video.coin = self._read_stat_int(stat, "coin") or 0
-            video.share = self._read_stat_int(stat, "share") or 0
-            video.like = self._read_stat_int(stat, "like") or 0
-            session.add(VideoStats(
-                video_id=video.id,
-                view=video.view,
-                danmaku=video.danmaku,
-                reply=video.reply,
-                favorite=video.favorite,
-                coin=video.coin,
-                share=video.share,
-                like=video.like,
-                snapshot_time=datetime.now(),
-                source=source,
-                run_id=run_id,
-                view_status=view_status,
-                stat_status=stat_status,
-            ))
-            session.commit()
-            # 标题信号：供生命周期算法按 bvid 关联到视频元信息。
+            # 完整写入内核在自有事务内完成；成功后再单独落标题信号。
+            with session.begin():
+                row = persist_snapshot(
+                    session,
+                    view_data,
+                    source=source,
+                    run_id=run_id,
+                    captured_epoch_s=captured_epoch_s,
+                    collection_tid=collection_tid,
+                )
+            video = session.query(Video).filter(Video.id == row.video_id).first()
+            signal_tid = int((video.tid if video is not None else 0) or 0)
             self._save_signal(
                 source="title",
-                tid=int(video.tid or 0),
-                payload={"title": video.title or "", "view": video.view},
+                tid=signal_tid,
+                payload={
+                    "bvid": bvid,
+                    "title": (video.title if video is not None else "") or "",
+                    "view": (video.view if video is not None else None),
+                },
             )
             return 1
         except Exception:

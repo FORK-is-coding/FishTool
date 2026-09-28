@@ -25,11 +25,20 @@ class Snapshot:
     bvid: str
     tid: int
     captured_at: datetime
-    view: int
+    view: int | None
     title: str = ""
     owner_mid: int = 0
     owner_name: str = ""
     source: str = "unknown"
+    # ---- 03 读端质量/时间元数据（规格 §4.3 / §4.4）----
+    # 由 routes_lifecycle 从 VideoStats 质量列读出；02 生命周期 adapter 消费这些
+    # marker 做断段，03 只负责传递，不在此改动 02 算法。
+    captured_epoch_s: int | None = None
+    view_quality: str = "unknown"
+    raw_view: int | None = None
+    metric_status: dict[str, str] | None = None
+    collection_tid: int | None = None
+    raw_tid: int | None = None
 
 
 @dataclass(frozen=True)

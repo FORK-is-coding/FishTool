@@ -5,6 +5,8 @@ LLM 只能根据调用方传入的结构化画像判断，不允许补充外部�
 
 # JSON 解析用于处理模型返回与二次编码。
 import json
+# 数值校验：拒绝 NaN/inf 置信度。
+import math
 # 正则用于剥离 Markdown 围栏与残留 JSON。
 import re
 # 类型标注保证接口一致性与 IDE 提示。
@@ -158,7 +160,14 @@ def evaluate_evidence_quality(profile: Dict[str, Any]) -> tuple[bool, List[str]]
         "lottery_repost_ratio": "missing_lottery_ratio",
         "video_count": "missing_video_count",
     }
-    reasons = [reason for field, reason in required.items() if profile.get(field) is None]
+    field_status = profile.get("field_status") if isinstance(profile.get("field_status"), dict) else {}
+    reasons: List[str] = []
+    for field, reason in required.items():
+        value = profile.get(field)
+        state = field_status.get(field)
+        # 值缺失，或来源字段状态非 ok（missing/invalid/soft legacy）都视为证据不足。
+        if value is None or (state is not None and state != "ok"):
+            reasons.append(reason)
     return not reasons, reasons
 
 
@@ -293,14 +302,26 @@ def _normalize_results(
         # 理由必须是列表，否则视为缺失。
         reasons = item.get("reasons") if isinstance(item.get("reasons"), list) else []
         # 组装归一化结果，置信度限制在 0-1。
+        # 置信度归一化：拒绝 NaN/inf/非数值，避免污染下游比较（规格 §7.3）。
+        confidence: Optional[float] = None
+        if item["classification"] != "indeterminate":
+            raw_confidence = item.get("confidence")
+            if raw_confidence is None:
+                confidence = 0.5
+            else:
+                try:
+                    parsed_confidence = float(raw_confidence)
+                except (TypeError, ValueError):
+                    parsed_confidence = math.nan
+                confidence = (
+                    max(0.0, min(1.0, parsed_confidence))
+                    if math.isfinite(parsed_confidence)
+                    else None
+                )
         normalized[uid] = {
             "uid": uid,
             "classification": item["classification"],
-            "confidence": (
-                None
-                if item["classification"] == "indeterminate"
-                else max(0.0, min(1.0, float(item.get("confidence") or 0.5)))
-            ),
+            "confidence": confidence,
             "reasons": [_clean_analysis_text(reasons, fallback[uid]["reasons"])],
             "analysis_text": _clean_analysis_text(reasons, fallback[uid]["reasons"]),
             "source": "llm",

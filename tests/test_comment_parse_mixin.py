@@ -78,8 +78,13 @@ def test_parse_comment_reply_marks_non_hot_by_default():
     assert parsed["is_hot"] is False
 
 
-def test_parse_comment_reply_fills_defaults_for_empty_payload():
-    """空响应体必须给全默认值，保证下游不崩。"""
+def test_parse_comment_reply_keeps_missing_vip_and_ctime_unknown():
+    """反例修复（规格 §6.6）：空响应体缺会员/时间时保持未知，不伪造值。
+
+    旧预期把 level_info/vip 归零为 {}、is_vip=False、vip_type=0、ctime 落到
+    Unix 纪元，等于在最早入口给“未采集”盖上“非会员 + 1970-01-01”的假事实，
+    会让下游把未知用户当已知。新预期这些字段为 None，其余结构默认值不变。
+    """
     parsed = build_parser()._parse_comment_reply({})
 
     assert parsed["rpid"] is None
@@ -87,28 +92,28 @@ def test_parse_comment_reply_fills_defaults_for_empty_payload():
     assert parsed["uid"] is None
     assert parsed["uname"] == ""
     assert parsed["avatar"] == ""
-    assert parsed["level_info"] == {}
-    assert parsed["vip"] == {}
+    assert parsed["level_info"] is None
+    assert parsed["vip"] is None
     assert parsed["level"] is None
-    assert parsed["is_vip"] is False
-    assert parsed["vip_type"] == 0
+    assert parsed["is_vip"] is None
+    assert parsed["vip_type"] is None
     assert parsed["content"] == ""
-    # 缺省时间戳按 0 处理，即 Unix 纪元本地时间。
-    assert parsed["ctime"] == datetime.fromtimestamp(0)
+    assert parsed["ctime"] is None
     assert parsed["like"] == 0
     assert parsed["reply_count"] == 0
 
 
 def test_parse_comment_reply_tolerates_null_nested_objects():
-    """member/content 子对象为 None 时按空字典回退。"""
+    """member/content 子对象为 None 时保持未知，不伪造非会员。"""
     parsed = build_parser()._parse_comment_reply(
         {"rpid": 1, "member": {"mid": 9, "level_info": None, "vip": None}, "content": {}, "ctime": 1}
     )
 
     assert parsed["uid"] == 9
     assert parsed["level"] is None
-    assert parsed["is_vip"] is False
-    assert parsed["vip_type"] == 0
+    # 反例（规格 §6.6）：vip 为 None 是未知，不是已知非会员。
+    assert parsed["is_vip"] is None
+    assert parsed["vip_type"] is None
     assert parsed["content"] == ""
 
 
@@ -143,14 +148,16 @@ def test_parse_comment_reply_keeps_partial_fields_when_missing():
     assert parsed["uname"] == ""
 
 
-def test_parse_comment_reply_raises_on_non_numeric_ctime():
-    """固化现状：ctime 为 None 或非数字时直接抛 TypeError，不做兜底。"""
+def test_parse_comment_reply_returns_none_for_non_numeric_ctime():
+    """反例修复（规格 §6.6）：ctime 为 None/非法时返回 None，不再抛 TypeError。
+
+    旧契约用 fromtimestamp(ctime) 直接抛错，一条坏时间戳会炸掉整批解析，
+    且缺失时间被当成真实采集事实。新契约缺失/非法时间保持 None，交由下游按未知处理。
+    """
     parser = build_parser()
 
-    with pytest.raises(TypeError):
-        parser._parse_comment_reply({"rpid": 1, "ctime": None})
-    with pytest.raises(TypeError):
-        parser._parse_comment_reply({"rpid": 1, "ctime": "not-a-timestamp"})
+    assert parser._parse_comment_reply({"rpid": 1, "ctime": None})["ctime"] is None
+    assert parser._parse_comment_reply({"rpid": 1, "ctime": "not-a-timestamp"})["ctime"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -182,9 +189,11 @@ def test_parse_comment_replies_on_empty_input_returns_empty_list():
     assert parser._parse_comment_replies([None, {}, 0, ""]) == []
 
 
-def test_parse_comment_replies_raises_on_bad_item_deep_in_list():
-    """固化现状：非法 ctime 的坏数据会让整批解析失败，不会单条跳过。"""
+def test_parse_comment_replies_keeps_bad_ctime_item_as_unknown():
+    """反例修复（规格 §6.6）：一条坏 ctime 不再炸掉整批，缺失时间保持 None。"""
     replies = [make_raw_reply(rpid=1), {"rpid": 2, "ctime": None}]
 
-    with pytest.raises(TypeError):
-        build_parser()._parse_comment_replies(replies)
+    parsed = build_parser()._parse_comment_replies(replies)
+
+    assert [item["rpid"] for item in parsed] == [1, 2]
+    assert parsed[1]["ctime"] is None

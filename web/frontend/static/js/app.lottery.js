@@ -40,11 +40,26 @@ function renderLotteryUser(item) {
                 <span>${stateText}</span>
             </div>
             <div class="lottery-user-metadata">${renderLotteryMetadata({ ...profile, ...item })}</div>
-            <p>UID ${escapeHtml(item.uid)} · 投稿 ${Number(profile.video_count) || 0}</p>
-            <p>近期活动 ${Number(profile.recent_activity_count) || 0} · 抽奖转发占比 ${((Number(profile.lottery_repost_ratio) || 0) * 100).toFixed(0)}%</p>
+            <p>UID ${escapeHtml(item.uid)} · 投稿 ${knownNumeric(profile.video_count)}</p>
+            <p>近期活动 ${knownNumeric(profile.recent_activity_count)} · 抽奖转发占比 ${knownRatioPercent(profile.lottery_repost_ratio)}</p>
             <p class="lottery-reasons">${escapeHtml(analysis)}</p>
             <small>${item.confidence === null || item.confidence === undefined ? '置信度未评估' : `置信度 ${Math.round(Number(item.confidence) * 100)}%`} · ${item.source === 'llm' ? 'AI受限数据判定' : (item.source === 'evidence_gate' ? '证据不足' : '可解释规则兜底')}</small>
         </article>`;
+}
+
+// 质量感知的数值展示：空/布尔/非法显示“未知”，真实 0 照常显示 0（规格 §7.1）。
+function knownNumeric(value, suffix = '') {
+    if (value === null || value === undefined || value === '') return '未知';
+    if (typeof value === 'boolean') return '未知';
+    const n = Number(value);
+    return Number.isFinite(n) ? `${n}${suffix}` : '未知';
+}
+
+// 比例值先判 null 再乘 100，避免 Number(null)=0 伪装成 0%（规格 §7.1）。
+function knownRatioPercent(value) {
+    if (value === null || value === undefined || value === '' || typeof value === 'boolean') return '未知';
+    const n = Number(value);
+    return Number.isFinite(n) ? `${(n * 100).toFixed(0)}%` : '未知';
 }
 
 /** 启动评论区全用户筛选并持续展示采集与 AI 阶段进度。 */

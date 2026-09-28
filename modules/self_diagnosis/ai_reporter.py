@@ -20,6 +20,8 @@ class AIDiagnosisReporter:
         # 约束模型：只依据真实数据判断、建议可执行可量化，避免幻觉污染结论。
         "你是资深B站内容运营分析师。只依据提供的真实公开数据判断，"
         "不得虚构完播率、观众画像或流量来源。建议必须具体、可执行、可量化。"
+        "禁止把未知当 0、把部分采集当全部、把均播/粉丝比当触达率或流量来源；"
+        "遇到不可用/部分采集字段时必须明确说明数据不足。"
     )
 
     async def generate(self, self_data: dict[str, Any]) -> dict[str, Any]:
@@ -90,6 +92,9 @@ class AIDiagnosisReporter:
             "账号": self_data.get("basic_info", {}).get("name"),
             "粉丝": self_data.get("fan_stats", {}).get("follower"),
             "投稿统计": self_data.get("video_stats", {}),
+            # 采集覆盖：让模型知道部分/失败状态，禁止把 partial 当全部（§5.5）。
+            "视频采集覆盖": self_data.get("video_collection", {}),
+            "指标覆盖度": self_data.get("video_stats", {}).get("coverage", {}),
             "互动指标": self_data.get("engagement_metrics", {}),
             "投稿节奏": self_data.get("post_rhythm", {}),
             "高频标签": list(self_data.get("tag_cloud", {}).get("word_frequency", {}).items())[:20],

@@ -678,6 +678,7 @@
                                 <p>3. 数据与隐私边界限定<br>公开数据原则：本工具默认仅获取B站平台向公众公开的数据。<br>本地化与隐私：本工具未设置任何后门或云端数据收集机制。用户的API Key、Cookie等敏感凭证均由用户自行配置，并以加密形式仅存储于本地设备。因用户本地环境不安全或操作不当导致的凭证泄露，开发者不承担任何责任。</p>
                                 <p>4. 知识产权与禁止滥用<br>本项目的源代码、UI设计及文档遵循开源协议发布。未经原作者书面授权，任何个人或组织不得将本工具或其衍生版本用于非法用途、恶意攻击或大规模商业化运营。</p>
                                 <p>5. 最终解释权<br>本免责声明适用于所有下载、克隆、Fork或使用本项目源码的用户。用户一旦开始使用本工具，即视为已充分阅读、理解并同意接受本协议的全部约束。</p>
+                                <p>6. 数据字段说明<br>本工具对公开数据的质量状态做了显式区分：<strong>真实 0</strong>（接口明确返回 0）显示为 0；<strong>未知/缺失</strong>（接口未返回、越权或采集失败）显示为“未知”或“暂无数据”，不会用 0 冒充；<strong>部分采集</strong>（分页未采全）会在指标旁标注实际有效/缺失条数。抽奖画像缓存中的旧数据未经来源与时效校验，标记为“未验证”，需重新采集后才参与自动资格判断。</p><!-- 说明未知/缺失/部分采集与旧缓存的展示语义，避免把缺失误读为 0。 -->
                             </div>
                         </div>
                     </section>
@@ -690,12 +691,12 @@
     <script src="/static/vendor/echarts.min.js"></script>
     <!-- 版本参数用于让 8000 端口加载本次弹窗修复后的脚本，避免旧 JS 缓存导致 onclick 无响应。 -->
     <script src="/static/js/app.core.js?v=split-20260824"></script>
-<script src="/static/js/app.hotspot.js?v=split-20260824-tagcard"></script>
+<script src="/static/js/app.hotspot.js?v=split-20260824-tagcard-dq03"></script>
 <script src="/static/js/app.comment.js?v=split-20260824"></script>
 <script src="/static/js/app.config.js?v=split-20260824"></script>
-<script src="/static/js/app.up.js?v=split-20260824"></script>
+<script src="/static/js/app.up.js?v=split-20260824-dq03"></script>
 <script src="/static/js/app.auth.js?v=split-20260824"></script>
-<script src="/static/js/app.lottery.js?v=split-20260824"></script>
+<script src="/static/js/app.lottery.js?v=split-20260824-dq03"></script>
 <script src="/static/js/app.ui.js?v=split-20260824"></script>
 </body>
 </html>

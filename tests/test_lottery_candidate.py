@@ -102,15 +102,19 @@ def test_comment_row_to_dict_accepts_short_vip_keys() -> None:
     assert payload["vip_label"] == "大会员"
 
 
-def test_comment_row_to_dict_marks_empty_vip_as_non_member() -> None:
-    """空会员对象属于"已知无会员"，应判为非会员而非未知。"""
+def test_comment_row_to_dict_treats_empty_vip_as_unknown() -> None:
+    """反例修复（规格 §6.6）：空会员对象是“未知”而非“已知非会员”。
+
+    旧预期 is_vip=False / vip_type=0 / vip_label="非会员" 把空 dict 当成已确认
+    无会员，等价于给缺证据的记录伪造事实；新预期保持 None，由下游按未知处理。
+    """
     row = _make_comment(vip={})
 
     payload = comment_row_to_dict(row)
 
-    assert payload["is_vip"] is False
-    assert payload["vip_type"] == 0
-    assert payload["vip_label"] == "非会员"
+    assert payload["is_vip"] is None
+    assert payload["vip_type"] is None
+    assert payload["vip_label"] is None
     assert payload["ctime"] is None
 
 
@@ -152,7 +156,7 @@ def test_parse_reply_falls_back_to_numeric_rpid_and_default_uname() -> None:
 
 
 def test_parse_reply_tolerates_missing_optional_blocks() -> None:
-    """缺少 content/vip/level_info/ctime 时使用安全默认值。"""
+    """缺少 content/vip/level_info/ctime 时使用安全默认值，会员保持未知。"""
     reply = {"member": {"mid": "7"}}
 
     payload = parse_reply(reply)
@@ -161,8 +165,9 @@ def test_parse_reply_tolerates_missing_optional_blocks() -> None:
     assert payload["uid"] == 7
     assert payload["level_info"] is None
     assert payload["level"] is None
-    assert payload["is_vip"] is False
-    assert payload["vip_label"] == "非会员"
+    # 反例（规格 §6.6）：缺 vip 是未知，不是非会员。
+    assert payload["is_vip"] is None
+    assert payload["vip_label"] is None
     assert payload["content"] == ""
     assert payload["ctime"] is None
     assert payload["like"] == 0
@@ -215,13 +220,17 @@ def test_profile_from_user_info_accepts_legacy_vip_keys() -> None:
     assert profile["vip_label"] == "大会员"
 
 
-def test_profile_from_user_info_defaults_level_and_stamps_time() -> None:
-    """等级缺失时按 0 处理，并写入可解析的更新时间。"""
+def test_profile_from_user_info_keeps_missing_level_and_vip_unknown() -> None:
+    """反例修复（规格 §6.6）：缺 level 不按 0、缺 vip 不按非会员。
+
+    旧预期把缺字段伪造为 level=0 / is_vip=False / “非会员”，会让未知用户
+    以伪 0 等级进入等级筛选；新预期保持 None，仍写入可解析的更新时间。
+    """
     profile = profile_from_user_info({})
 
-    assert profile["level"] == 0
-    assert profile["is_vip"] is False
-    assert profile["vip_label"] == "非会员"
+    assert profile["level"] is None
+    assert profile["is_vip"] is None
+    assert profile["vip_label"] is None
     # updated_at 必须是可被 parse_comment_time 解析的 ISO 字符串。
     assert isinstance(parse_comment_time(profile["updated_at"]), datetime)
 
@@ -297,12 +306,12 @@ def test_merge_profile_metadata_derives_label_from_is_vip() -> None:
     assert merged[0]["vip_label"] == "大会员"
 
 
-def test_merge_profile_metadata_defaults_to_non_member_label() -> None:
-    """画像完全缺失时标签回退为非会员。"""
+def test_merge_profile_metadata_keeps_label_unknown_without_evidence() -> None:
+    """反例修复（规格 §6.6）：画像完全缺失时标签保持未知，不伪造“非会员”。"""
     merged = merge_profile_metadata([{"uid": 77}], {})
 
     assert merged[0]["level"] is None
-    assert merged[0]["vip_label"] == "非会员"
+    assert merged[0]["vip_label"] is None
 
 
 # ------------------------------------------------- parse_comment_time

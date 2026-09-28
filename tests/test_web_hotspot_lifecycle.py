@@ -24,6 +24,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from sqlalchemy import null
+
 from core.database import DatabaseManager, Video, VideoStats
 from web.routers.hotspot import routes_lifecycle
 
@@ -101,6 +103,41 @@ def _seed_video_with_stats(db, bvid: str = "BV1LIFE00001", mid: int = 12345, poi
             session.add(
                 VideoStats(video_id=video.id, view=100 * (points - index), snapshot_time=now - timedelta(hours=index))
             )
+        session.commit()
+    finally:
+        session.close()
+
+
+def _seed_quality_rows(db, bvid: str = "BV1QLT00001", mid: int = 12345) -> None:
+    """写入带质量列的三条快照：ok(100) / missing(NULL) / ok(300)，均带 epoch。
+
+    坏点用 SQL ``null()`` 强制写入 NULL，绕过 ``Column(default=0)``（与
+    ``snapshot_store.persist_snapshot`` 同一手法）。
+    """
+    session = db.get_session()
+    try:
+        video = Video(bvid=bvid, title="质量视频", tid=4, mid=mid, author="UP主")
+        session.add(video)
+        session.commit()
+        now = datetime.now()
+        session.add(VideoStats(
+            video_id=video.id, view=100, view_status="ok", stat_status="ok",
+            metric_status={"view": "ok", "like": "ok"},
+            captured_epoch_s=1000, collection_tid=4, raw_tid=30,
+            snapshot_time=now - timedelta(hours=2),
+        ))
+        session.add(VideoStats(
+            video_id=video.id, view=null(), view_status="missing", stat_status="missing",
+            metric_status={"view": "missing"},
+            captured_epoch_s=2000, collection_tid=4, raw_tid=30,
+            snapshot_time=now - timedelta(hours=1),
+        ))
+        session.add(VideoStats(
+            video_id=video.id, view=300, view_status="ok", stat_status="ok",
+            metric_status={"view": "ok"},
+            captured_epoch_s=3000, collection_tid=4, raw_tid=30,
+            snapshot_time=now,
+        ))
         session.commit()
     finally:
         session.close()
@@ -207,7 +244,12 @@ def test_timeline_returns_points(client, db):
     assert data["bvid"] == "BV1LIFE00002"
     assert data["title"] == "热点视频"
     assert len(data["points"]) == 2
-    assert data["points"][0]["view"] == 100
+    # 反例说明见 out_fishtool03/progress.md（红线）：该行只有旧 snapshot_time，
+    # view_status/metric_status 均为 NULL，按 §4.3 两边都 NULL => unknown；
+    # 旧预期把它当已验证播放量 100 是错的，原始值改放 raw 供审计。
+    assert data["points"][0]["view"] is None
+    assert data["points"][0]["raw"]["view"] == 100
+    assert data["points"][0]["status"]["view"] == "unknown"
 
 
 def test_timeline_missing_video_returns_404(client):
@@ -326,3 +368,79 @@ def test_collect_progress_passthrough(client):
     response = client.get("/api/hotspot/collect/progress")
     assert response.status_code == 200
     assert response.json() == {"success": True, "data": {"status": "idle", "progress": 0}}
+
+
+# ---------------------------------------------------------------------------
+# 批 3：质量 marker / epoch 读端传递（规格 §4.3 / §4.4）
+# ---------------------------------------------------------------------------
+
+
+def test_load_snapshots_passes_quality_marker_and_epoch(db, monkeypatch):
+    """读端应把质量 marker 与 epoch 传给 Snapshot，坏点 view 为 None（§4.4）。"""
+    monkeypatch.setattr(routes_lifecycle, "get_session", db.get_session)
+    _seed_quality_rows(db)
+
+    snapshots = routes_lifecycle._load_snapshots(tid=4)
+
+    assert [s.view for s in snapshots] == [100, None, 300]
+    assert [s.view_quality for s in snapshots] == ["ok", "missing", "ok"]
+    assert [s.captured_epoch_s for s in snapshots] == [1000, 2000, 3000]
+    assert snapshots[0].collection_tid == 4
+    assert snapshots[0].raw_tid == 30
+    # 坏点保留 raw_view 供审计，但绝不兜底成 0
+    assert snapshots[1].raw_view is None
+
+
+def test_load_snapshots_flags_inconsistent_quality(db, monkeypatch):
+    """view_status 与 metric_status.view 矛盾时标 inconsistent_quality（§4.3）。"""
+    monkeypatch.setattr(routes_lifecycle, "get_session", db.get_session)
+    session = db.get_session()
+    try:
+        video = Video(bvid="BV1INC00001", title="矛盾", tid=4)
+        session.add(video)
+        session.commit()
+        session.add(VideoStats(
+            video_id=video.id, view=100, view_status="ok", stat_status="ok",
+            metric_status={"view": "missing"}, snapshot_time=datetime.now(),
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+    snapshots = routes_lifecycle._load_snapshots(bvid="BV1INC00001")
+    assert snapshots[0].view is None
+    assert snapshots[0].view_quality == "inconsistent_quality"
+
+
+def test_lifecycle_excludes_quality_markers(client, db, monkeypatch):
+    """生命周期回放只吃整数有效快照，坏点计入 rejected，不送进旧算式（§4.4）。"""
+    monkeypatch.setattr(routes_lifecycle, "get_session", db.get_session)
+    _seed_quality_rows(db)
+
+    async def fake_metrics(api, mids):
+        """UP 主轻量指标替身，避免测试触网。"""
+        return {}
+
+    monkeypatch.setattr(routes_lifecycle, "get_up_light_metrics", fake_metrics)
+
+    response = client.get("/api/hotspot/lifecycle", params={"tid": 4})
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["sample_count"] == 3
+    assert data["valid_count"] == 2
+    assert data["rejected_count"] == 1
+    assert data["history_limited"] is True
+
+
+def test_timeline_quality_aware_marks_missing_not_zero(client, db, monkeypatch):
+    """时间轴：缺 view 的真实 NULL 返回 null 而非伪造 0，epoch 一并透出。"""
+    monkeypatch.setattr(routes_lifecycle, "get_session", db.get_session)
+    _seed_quality_rows(db, bvid="BV1QLT00002")
+
+    response = client.get("/api/hotspot/lifecycle/timeline", params={"bvid": "BV1QLT00002"})
+    assert response.status_code == 200
+    points = response.json()["data"]["points"]
+    assert [p["view"] for p in points] == [100, None, 300]
+    assert [p["captured_epoch_s"] for p in points] == [1000, 2000, 3000]
+    assert points[1]["raw"]["view"] is None
+    assert points[1]["status"]["view"] == "missing"

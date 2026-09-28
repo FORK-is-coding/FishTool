@@ -1,6 +1,7 @@
 """抽奖服务重构前的核心行为护栏测试。"""
 
 import asyncio
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
@@ -61,15 +62,20 @@ def test_complete_draw_metadata_reuses_cache_and_preserves_values(tmp_path: Path
     """补齐候选资料时应复用缓存，并且只填充原本缺失的字段。"""
     api = FakeAPI({})
     service = LotteryService(api=api, cache_dir=tmp_path)
-    service._save_profile_cache({
-        "42": {
+    # 反例修复（规格 §6.5）：draw 资格走 v3 info 组，不再用扁平缓存命中。
+    now_s = int(time.time())
+    seq = service._cache.begin_attempt(42, namespace="draw", group="info", now_s=now_s)
+    service._cache.merge_attempt(
+        42, namespace="draw", group="info", attempt=seq,
+        success_payload={
             "level": 6,
             "vip": {"vipStatus": 1, "vipType": 2},
             "is_vip": True,
             "vip_type": 2,
             "vip_label": "年度大会员",
-        }
-    })
+        },
+        now_s=now_s,
+    )
     comments = [{
         "uid": 42,
         "ctime": "2026-08-10T12:00:00",

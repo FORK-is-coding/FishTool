@@ -219,7 +219,8 @@ def test_comment_row_to_dict_delegates_to_candidate() -> None:
     row.content = "c"
     row.vip = {}
 
-    assert LotteryService._comment_row_to_dict(row)["vip_label"] == "非会员"
+    # 反例（规格 §6.6）：空 vip 是未知，不再回退为“非会员”。
+    assert LotteryService._comment_row_to_dict(row)["vip_label"] is None
 
 
 def test_parse_reply_delegates_to_candidate() -> None:
@@ -559,6 +560,27 @@ def test_quick_filter_pairs_profile_with_assessment(
     assert fake.focus_templates == ["重点看活跃度"]
 
 
+def _seed_cache_group(
+    service: LotteryService, uid: int, namespace: str, group: str, payload: dict
+) -> None:
+    """按 v3 规则写入一个新鲜的 source-group（规格 §6.4）。"""
+    import time as _time
+
+    now_s = int(_time.time())
+    seq = service._cache.begin_attempt(uid, namespace=namespace, group=group, now_s=now_s)
+    service._cache.merge_attempt(
+        uid, namespace=namespace, group=group, attempt=seq,
+        success_payload=payload, now_s=now_s,
+    )
+
+
+def _seed_full_profile(service: LotteryService, uid: int, *, info: dict, dynamics: dict, videos: dict) -> None:
+    """按 full 命中规则写入 info / dynamics / videos 三组。"""
+    _seed_cache_group(service, uid, "full", "info", info)
+    _seed_cache_group(service, uid, "full", "dynamics", dynamics)
+    _seed_cache_group(service, uid, "full", "videos", videos)
+
+
 # ================================================================ verify_winners
 
 def test_verify_winners_rejects_empty_list(service: LotteryService) -> None:
@@ -585,16 +607,13 @@ def test_verify_winners_reuses_cache_and_counts_sources(
     service: LotteryService, monkeypatch
 ) -> None:
     """命中缓存的画像不重复采集，并区分本地命中与在线补取数量。"""
-    service._save_profile_cache(
-        {
-            "1": {
-                "uid": 1,
-                "level": 6,
-                "recent_activity_count": 5,
-                "lottery_repost_ratio": 0.1,
-                "observable_account_days": 300,
-            }
-        }
+    # 反例修复（规格 §6.4）：v3 命中要求 level/动态/投稿数分来源组均新鲜，
+    # 旧的“三键存在”不再构成命中；此处按组写入完整证据。
+    _seed_full_profile(
+        service, 1,
+        info={"level": 6},
+        dynamics={"recent_activity_count": 5, "lottery_repost_ratio": 0.1, "observable_account_days": 300},
+        videos={"video_count": 9},
     )
     seen = _install_profile_fetch(
         service,
@@ -636,16 +655,12 @@ def test_verify_winners_backfills_name_and_winner_fields(
     service: LotteryService, monkeypatch
 ) -> None:
     """画像缺失的昵称/等级应从缓存或中奖名单补齐，且不覆盖真实值。"""
-    service._save_profile_cache(
-        {
-            "1": {
-                "uid": 1,
-                "level": 6,
-                "recent_activity_count": 1,
-                "lottery_repost_ratio": 0,
-                "observable_account_days": 100,
-            }
-        }
+    # 反例修复（规格 §6.4）：按来源组写入 fresh 证据，四字段齐全才命中。
+    _seed_full_profile(
+        service, 1,
+        info={"level": 6},
+        dynamics={"recent_activity_count": 1, "lottery_repost_ratio": 0, "observable_account_days": 100},
+        videos={"video_count": 3},
     )
     monkeypatch.setattr("modules.lottery.service.classify_profiles", _ContractClassify())
 
@@ -820,8 +835,10 @@ def test_complete_draw_metadata_merges_profile_cache(
     service: LotteryService, isolated_db: DatabaseManager
 ) -> None:
     """缺失字段应优先由画像缓存补全。"""
-    service._save_profile_cache(
-        {"42": {"level": 6, "is_vip": True, "vip_type": 1, "vip_label": "大会员"}}
+    # 反例修复（规格 §6.5）：draw 资格需来源可确认的 info 组，写入 v3 空间。
+    _seed_cache_group(
+        service, 42, "draw", "info",
+        {"level": 6, "is_vip": True, "vip_type": 1, "vip_label": "大会员"},
     )
     comments = [
         {
@@ -866,7 +883,7 @@ def test_complete_draw_metadata_fetches_uncached_profiles(
 
     assert result[0]["level"] == 5
     assert result[0]["is_vip"] is True
-    assert "77" in service._load_profile_cache()
+    assert "77" in service._load_profile_cache("draw")  # 反例：draw 空间与 full 分离
     assert "completing_profiles" in progress.stages
 
 
@@ -902,7 +919,7 @@ def test_resolve_missing_profiles_splits_cached_and_uncached(
     service: LotteryService
 ) -> None:
     """已缓存且字段完整的 UID 不重复请求接口。"""
-    service._save_profile_cache({"1": {"level": 6, "is_vip": True}})
+    _seed_cache_group(service, 1, "draw", "info", {"level": 6, "is_vip": True})
     seen = _install_profile_fetch(service, {})
 
     async def fake_user_info(uid):
@@ -912,7 +929,7 @@ def test_resolve_missing_profiles_splits_cached_and_uncached(
 
     service.api.get_user_info = fake_user_info
 
-    profiles, cache, fetched = asyncio.run(
+    profiles, fetched = asyncio.run(
         asyncio.wait_for(service._resolve_missing_profiles({1, 2}, None), timeout=5)
     )
 
@@ -935,7 +952,7 @@ def test_resolve_missing_profiles_records_none_on_failure(
 
     service.api.get_user_info = fake_user_info
 
-    profiles, _, fetched = asyncio.run(
+    profiles, fetched = asyncio.run(
         asyncio.wait_for(service._resolve_missing_profiles({5, 6}, None), timeout=5)
     )
 
@@ -949,9 +966,9 @@ def test_resolve_missing_profiles_returns_false_without_uncached(
     service: LotteryService
 ) -> None:
     """全部命中缓存时不应标记执行过在线补取。"""
-    service._save_profile_cache({"9": {"level": 6, "is_vip": False}})
+    _seed_cache_group(service, 9, "draw", "info", {"level": 6, "is_vip": False})
 
-    _, _, fetched = asyncio.run(
+    _, fetched = asyncio.run(
         asyncio.wait_for(service._resolve_missing_profiles({9}, None), timeout=5)
     )
 
