@@ -210,11 +210,19 @@ class ReportGenerator:
         # 采集覆盖与状态：局部数据不得被整体模板掩盖（§5.5）。
         coverage = video_stats.get('coverage')
         if isinstance(coverage, dict) and coverage:
-            coverage_bits = [
-                f"{key} 有效 {item.get('valid_count', 0)}/缺失 {item.get('missing_count', 0)}"
-                for key, item in coverage.items()
-                if isinstance(item, dict)
-            ]
+            coverage_bits = []
+            for key, item in coverage.items():
+                if not isinstance(item, dict):
+                    continue
+                # 缺键 / 非法值一律渲染为「未知」，绝不用 0 冒充（规格 §5.5）：
+                # 真实 0（int 且 >= 0）照常显示 0，与「没拿到」严格区分。
+                _valid = item.get('valid_count')
+                _missing = item.get('missing_count')
+                _valid_ok = isinstance(_valid, int) and not isinstance(_valid, bool) and _valid >= 0
+                _missing_ok = isinstance(_missing, int) and not isinstance(_missing, bool) and _missing >= 0
+                _valid_text = f"{_valid:,}" if _valid_ok else "未知"
+                _missing_text = f"{_missing:,}" if _missing_ok else "未知"
+                coverage_bits.append(f"{key} 有效 {_valid_text}/缺失 {_missing_text}")
             if coverage_bits:
                 # 追加到列表
                 md_parts.append(f"- **指标覆盖度**: {'；'.join(coverage_bits)}\n")
@@ -393,10 +401,21 @@ class ReportGenerator:
             # 追加到列表
             suggestions.append("4. **避免长期断更**: 超过30天未更新会导致粉丝流失，建议提前储备内容")
         
-        # 空值/异常保护：不满足条件时跳过
+        # 兜底结论：必须区分「指标正常」与「指标不可得」，两者不得走同一条好结论。
+        # 「有效指标足够」判定依据：上面四条阈值判断分属两个互相独立的评价维度——
+        # 「投稿节奏」(_vpw / _gap_days) 与「互动表现」(_comment_rate / _touch_rate)。
+        # 只有当两个维度各自至少有 1 个指标通过 ``is not None`` 守卫、真正参与过
+        # 阈值判断时，才认定证据足以支撑**整体**结论「整体表现良好」；任一维度全为
+        # None（含全未知）时整体评价无证据，只能提示「指标不足」，禁止下良好结论。
         if not suggestions:
-            # 追加到列表
-            suggestions.append("✅ 整体表现良好，继续保持！")
+            _rhythm_has_valid = _vpw is not None or _gap_days is not None
+            _engagement_has_valid = _comment_rate is not None or _touch_rate is not None
+            if _rhythm_has_valid and _engagement_has_valid:
+                # 两维度均有明确数值参与过阈值判断，且均未越界 -> 证据充分。
+                suggestions.append("✅ 整体表现良好，继续保持！")
+            else:
+                # 有效指标不足（含全未知）-> 不得下「良好」结论。
+                suggestions.append("ℹ️ 指标不足，暂不能评价整体表现，请先完成数据采集。")
         
         # 追加到列表
         md_parts.append("\n".join(suggestions))

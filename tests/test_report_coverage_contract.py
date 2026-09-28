@@ -10,7 +10,8 @@
 
 2. 阈值建议跳过未知指标
    「改进建议」中的四条阈值判断（投稿频率 / 评论率 / 触达率 / 断更）在指标为
-   ``None``（unknown）时必须整条跳过，只能落到兜底结论「整体表现良好」；
+   ``None``（unknown）时必须整条跳过；四条全为 None（全未知）时兜底结论必须是
+   「指标不足」而**不是**「整体表现良好」（v0.2.3 收口：证据不足不得说良好）。
    反过来，已知数值越界时四条建议必须照常触发，证明「跳过」断言不是空转。
    「节奏评价 / 触达评价」同属阈值判断，未知时也必须改为缺失提示而不评分。
 
@@ -93,8 +94,10 @@ def test_threshold_suggestions_skip_unknown_metrics(tmp_path: Path) -> None:
     assert "增强互动引导" not in report
     assert "提升粉丝触达" not in report
     assert "避免长期断更" not in report
-    # 全部跳过后应落到兜底结论，证明建议区正常渲染、只是没被未知值触发
-    assert "整体表现良好" in report
+    # 全未知时两个维度都没有效指标 -> 兜底结论必须是「指标不足」，不得说良好。
+    # 见 v0.2.3 收口：兜底结论必须区分「指标正常」与「指标不可得」。
+    assert "整体表现良好" not in report
+    assert "指标不足" in report
 
 
 def test_threshold_suggestions_fire_for_known_out_of_range_metrics(tmp_path: Path) -> None:
