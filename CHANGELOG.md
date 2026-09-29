@@ -8,6 +8,58 @@
 > **v0.2.2 之前未逐条记录。** 更早版本只保留 tag：
 > v0.1.0 / v0.2.0 / v0.2.1
 
+## [未发布]
+
+**主题：参评集合内的账号排名（01 · 方案 A 阶段性交付）。**
+
+只新增一个排名子包和一张快照表，不改既有采集链路，不引入独立部署。
+排名是**明确参评集合内**的账号对账号排名，不是全站排名，也不代表抽样代表性。
+
+### 新增
+
+- **`modules/self_diagnosis/benchmark/`** —— 排名子包
+  - `contracts.py` —— `BenchmarkPolicy` / `CreatorSample` / `BenchmarkResult`（schema=3）
+  - `metrics.py` —— `median_twice` / `rank_one`，用 `score_twice` 整数比较，避免浮点导致并列误判
+  - `collector.py` —— 只采排名必需字段，不跑整套自诊；含 `discover_candidates`
+  - `store.py` —— `BenchmarkRun` 短事务，`id+status+lease_token` 条件 UPDATE 并检查 rowcount
+  - `service.py` —— 编排、冻结、重试、取消，以及 2 小时观测窗约束
+- **`core/database/models_benchmark.py`** —— `BenchmarkRun` 快照表，已从 `core/database/__init__.py` 导出
+- **`core/request_budget.py`** —— ContextVar 请求预算，默认 `None`，不改变旧调用行为
+- **`web/routers/benchmark.py`** —— `/api/analysis/benchmark` 候选发现、发起、查询、取消、重试
+- **`web/local_guard.py`** —— 本机写端点校验（同源 + CSRF + session token）
+
+### 变更
+
+- **`bilibili/api/client.py` / `signer.py`** —— 在真实 HTTP 发送点接预算钩子；`RequestBudgetExceeded` 保留类型，不被包装成可重试的普通 API 错误
+- **`web/main.py`** —— 装配 `BenchmarkService`；清理改 `try/finally`，只关闭自己拥有的 client
+- **`web/routers/analysis.py`** —— 自诊与导出可带 `benchmark_run_id`，读取同一份冻结结果，不重新触发采集
+- **`report_generator.py`** —— 新增 `creator_ranking` 段；keyword-only 参数，旧位置参数不受影响
+- **前端** —— `app.up.js` / `index.html` / `style.up.css` 增加同行名单、指标说明、发起/取消/重试
+
+### 指标口径
+
+`recent10_age7_30_median_views_v1`：请求时刻往前 30 天内、稿龄 7—30 天的最近最多 10 条
+公开稿件，取**中位累计播放**；至少 3 条；选中稿件缺失不打替补，该作者本轮不参与自动排名。
+播放取自同次详情请求的 `stat.view`，真实 0 有效。名次为 competition rank，并列同名次。
+
+### 验证
+
+- 全量测试 1586 passed / 0 failed（本机未装 PyQt5，桌面组四个文件排除在外）
+- 数值验收：`rank=4 / rank_end=5 / total=6 / percentile=30`；全等并列 1—N 且 P50；
+  单 peer 有名次无百分位；peer 列表含目标 UID 重复时只算一次
+- `tools/verify_creator_ranking.py` 端到端 16 步全绿
+
+### 尚未验证
+
+- 真实 B 站接口 —— 本轮全程 stub，未使用真实账号与 Cookie
+- 浏览器 UI 交互 —— JS 仅通过 `node --check` 并与后端契约对齐
+- PDF 真实格式 —— 本机未安装 pdfkit / wkhtmltopdf
+
+### 发布说明
+
+- 本次为**阶段性提交**，不单独打 tag
+- 回滚只需切回旧界面或关闭新功能，不影响既有自诊、词云与抽奖
+
 ## [0.2.2] - 2026-09-29
 
 **主题：把「未知」和「真实的 0」分开。**
