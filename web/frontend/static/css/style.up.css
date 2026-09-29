@@ -290,3 +290,44 @@
 .tag-cloud-word.tone-2 { color: #9b6f73; }
 .tag-cloud-word.tone-3 { color: #667f8c; }
 .tag-cloud-word.tone-4 { color: #8c765d; }
+
+/* ==========================================================================
+   01 同行排名（有限参评集合）：沿用现有卡片/表格风格，不引入新框架。
+   ========================================================================== */
+.analysis-hint {
+    margin: 6px 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.7;
+}
+
+.candidate-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.candidate-item { font-size: 13px; }
+
+.ranking-table {
+    width: 100%;
+    margin-top: 14px;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.ranking-table th,
+.ranking-table td {
+    padding: 8px 10px;
+    text-align: left;
+    border-bottom: 1px solid var(--border, #e3e6ea);
+}
+
+.ranking-table thead th {
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.ranking-table tbody tr:hover { background: rgba(0, 161, 214, 0.06); }
+.ranking-row-target { font-weight: 600; }

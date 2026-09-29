@@ -49,8 +49,18 @@ from core.database import init_database
 from core.logger import get_logger
 from core.exceptions import format_exception
 from core.monitor_service import ResidentCommentMonitor
+# 排名服务由本层组装（modules 不反向 import web）；client 限定自己拥有、只关自己。
+from bilibili.api import BilibiliAPI
+from bilibili.cookie_pool import get_cookie_pool
+from bilibili.rate_limiter import get_rate_limiter
+from core.database import get_session
+from modules.self_diagnosis.benchmark.service import BenchmarkService
+from modules.self_diagnosis.benchmark.store import BenchmarkStore
 # 从 routers 导入符号
-from .routers import hotspot, comment, config as config_router, logs, analysis, auth as auth_router, lottery
+from .routers import (
+    hotspot, comment, config as config_router, logs, analysis,
+    auth as auth_router, lottery, benchmark,
+)
 
 # 统一使用 core.logger 的日志实例，避免重复配置
 logger = get_logger(__name__)
@@ -60,6 +70,55 @@ logger = get_logger(__name__)
 config_manager = None
 # 常驻评论监控服务由 FastAPI lifespan 统一创建和销毁。
 monitor_service = None
+# 排名服务与它拥有的 client：由 lifespan 组装 / 关闭（只关自己的 client）。
+benchmark_service = None
+benchmark_client = None
+
+
+class _LazyBilibiliClient:
+    """惰性构造的 BilibiliAPI：首次真正请求时才创建。
+
+    启动期不读 ``config/``、不连数据库；底层限频复用 ``get_rate_limiter()`` 单例，
+    因此排名的任务级预算不会改变其它任务上限。校验目标是「只关闭自己拥有的 client」。
+    """
+
+    def __init__(self) -> None:
+        """初始化：此时不创建任何会话或网络资源。"""
+        self._api = None
+
+    def _ensure(self):
+        """确保真实 client 已创建并返回（构造过程无网络请求）。
+
+        Returns:
+            BilibiliAPI: 共享限频器的真实 client。
+        """
+        if self._api is None:
+            self._api = BilibiliAPI(rate_limiter=get_rate_limiter(), cookie_pool=get_cookie_pool())
+        return self._api
+
+    def __getattr__(self, name: str):
+        """把任意方法访问代理给真实 client（先惰性构造）。
+
+        Args:
+            name: 被访问的属性名。
+
+        Returns:
+            可 await 的代理方法。
+        """
+        async def _call(*args, **kwargs):
+            """构造真实 client 后转调同名方法。"""
+            return await getattr(self._ensure(), name)(*args, **kwargs)
+
+        return _call
+
+    async def aclose(self) -> None:
+        """关闭真实 client（从未创建则什么也不做）。
+
+        Returns:
+            无。
+        """
+        if self._api is not None:
+            await self._api.close()
 
 
 @asynccontextmanager
@@ -91,14 +150,37 @@ async def lifespan(app: FastAPI):
     global monitor_service
     monitor_service = ResidentCommentMonitor(comment.get_monitor, config_manager)
     await monitor_service.start()
+
+    # 排名服务：由 Web 层组装 client + service 再注入；启动期不读 config/、不连库。
+    global benchmark_service, benchmark_client
+    benchmark_client = _LazyBilibiliClient()
+    benchmark_service = BenchmarkService(
+        benchmark_client,
+        BenchmarkStore(get_session),
+        None,
+        {'max_http_attempts': 3000},
+    )
+    benchmark.set_benchmark_service(benchmark_service)
     logger.info("Web服务已启动")
     
-    yield
-    
-    # 关闭常驻任务，确保 asyncio 任务和数据库会话完整退出。
-    if monitor_service is not None:
-        await monitor_service.shutdown()
-    logger.info("Web服务关闭中...")
+    try:
+        yield
+    finally:
+        # 分别 await 各子系统清理：排名任务 -> 评论常驻监控 -> 排名自己的 client。
+        # 排名只取消 / await 自己创建的任务，绝不 close 由其它模块拥有的共享 client。
+        if benchmark_service is not None:
+            try:
+                await benchmark_service.shutdown()
+            except Exception as exc:  # noqa: BLE001 - 关闭失败不阻塞进程退出
+                logger.error("排名服务关闭失败: %s", exc)
+        if monitor_service is not None:
+            await monitor_service.shutdown()
+        if benchmark_client is not None:
+            try:
+                await benchmark_client.aclose()
+            except Exception as exc:  # noqa: BLE001
+                logger.error("排名 client 关闭失败: %s", exc)
+        logger.info("Web服务关闭中...")
 
 
 # 创建FastAPI应用
@@ -203,6 +285,8 @@ app.include_router(logs.router, prefix="/api/logs", tags=["日志查看"])
 # 抽奖工具（目标预览、真人筛选与随机抽奖）
 app.include_router(lottery.router, prefix="/api", tags=["抽奖工具"])
 app.include_router(analysis.router, prefix="/api", tags=["UP分析与自诊"])
+# 01 正确排名：候选发现 / 任务编排 / 冻结结果读取
+app.include_router(benchmark.router, prefix="/api", tags=["同行排名"])
 # 登录态管理（B站扫码登录的 Web 端入口）
 app.include_router(auth_router.router, prefix="/api/auth", tags=["登录态"])
 

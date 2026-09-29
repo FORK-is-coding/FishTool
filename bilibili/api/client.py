@@ -23,6 +23,7 @@ from core.exceptions import (
     is_retryable_error
 )
 from core.logger import get_logger
+from core.request_budget import RequestBudgetExceeded, before_http_attempt
 from .signer import WBISigner
 
 logger = get_logger(__name__)
@@ -105,6 +106,8 @@ class BilibiliAPICore:
             # B站动态/搜索等接口对无指纹的匿名请求风控严格（412），
             # 补上指纹可显著降低被拦概率；获取失败静默忽略不影响主流程
             try:
+                # 指纹请求同样是一次真实 HTTP 尝试，需在发送前计入任务预算。
+                before_http_attempt()
                 async with self.session.get(
                     "https://api.bilibili.com/x/frontend/finger/spi",
                     timeout=10
@@ -128,6 +131,9 @@ class BilibiliAPICore:
                                 # request() 每次从 self.headers 复制请求头，指纹会随 Cookie 发出。
                                 self.headers["Cookie"] = "; ".join(cookie_parts)
                             logger.info(f"已获取B站指纹: buvid3={cookies.get('buvid3', '')[:16]}...")
+            except RequestBudgetExceeded:
+                # 预算耗尽不属于「指纹获取失败」，必须向上抛出而不是静默忽略。
+                raise
             except Exception as e:
                 # 指纹获取失败不阻塞主流程，仅调试日志记录
                 logger.debug(f"获取B站指纹失败(忽略): {e}")
@@ -234,6 +240,8 @@ class BilibiliAPICore:
         for attempt in range(retry_times):
             # 异常保护：局部失败不影响主流程
             try:
+                # 每次真实 HTTP 发送前记入当前任务预算（默认无上下文时不做任何事）。
+                before_http_attempt()
                 # 上下文管理：确保资源自动释放
                 async with self.session.request(
                     method=method,
@@ -338,6 +346,11 @@ class BilibiliAPICore:
                     
                     return result.get('data', {})
                     
+            except RequestBudgetExceeded:
+                # 预算耗尽/超 deadline 不是可重试网络异常：立即向上抛出，
+                # 绝不能被下面的通用分支当作「可重试」再循环。
+                raise
+
             except asyncio.TimeoutError:
                 # 将 asyncio 超时转换为项目统一异常，再按统一规则判断是否重试。
                 last_exception = CustomTimeoutError(30)
@@ -422,6 +435,8 @@ class BilibiliAPICore:
         """
         try:
             await self.init_session()
+            # 扫码轮询是一次真实 HTTP 尝试，需在发送前计入任务预算。
+            before_http_attempt()
             async with self.session.get(
                 "https://passport.bilibili.com/x/passport-login/web/qrcode/poll",
                 params={"qrcode_key": qrcode_key},
@@ -430,6 +445,9 @@ class BilibiliAPICore:
                 if response.status != 200:
                     raise BilibiliAPIError(f"扫码轮询失败: HTTP {response.status}")
                 return await response.json(), response.headers.getall("Set-Cookie", [])
+        except RequestBudgetExceeded:
+            # 预算耗尽必须保留原类型，不能被包装成 NetworkError。
+            raise
         except Exception as exc:
             logger.error(f"扫码轮询请求失败: {exc}")
             if isinstance(exc, BilibiliAPIError):

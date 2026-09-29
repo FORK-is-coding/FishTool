@@ -181,6 +181,8 @@ class SelfDiagnosisRequest(BaseModel):
     uid: int = Field(..., description="自己的B站UID")
     # 赋值并准备后续使用
     category: Optional[str] = Field(None, description="对比分区（可选）")
+    # 01 新增：传入冻结排名 run id 时读取同一 run 的 creator_ranking（不重采同行）
+    benchmark_run_id: Optional[str] = Field(None, description="冻结排名 run id（可选）")
 
 
 class ReportExportRequest(BaseModel):
@@ -196,6 +198,46 @@ class ReportExportRequest(BaseModel):
     format: str = Field("markdown", description="导出格式: markdown/pdf")
     # 赋值并准备后续使用
     category: Optional[str] = Field(None, description="对比分区")
+    # 01 新增：导出报告时携带同一个冻结排名 run（拒绝跨 UID）
+    benchmark_run_id: Optional[str] = Field(None, description="冻结排名 run id（可选）")
+
+
+def _load_creator_ranking(uid: int, run_id: Optional[str]):
+    """读取冻结排名结果（规格 §10.3）。
+
+    不传 ``run_id`` 时返回 ``(None, 'not_requested')``：原自诊继续运行，界面提供
+    「选择同行并计算」入口，而不是报错或删除入口。传了 ``run_id`` 时校验
+    ``run.target_uid == uid`` 且 ``status == completed``，只读冻结结果，
+    **绝不重新触发同行采集**。
+
+    Args:
+        uid: 账号自诊的 UID。
+        run_id: 冻结排名 run id（可为 None）。
+
+    Returns:
+        tuple: ``(creator_ranking 或 None, benchmark_status)``。
+
+    Raises:
+        HTTPException: 404 run 不存在；409 跨 UID / 未完成；503 排名服务未启用。
+    """
+    if not run_id:
+        return None, 'not_requested'
+    # 延迟导入避免 web.routers 包内循环引用
+    from web.routers import benchmark as benchmark_router
+
+    service = benchmark_router.get_benchmark_service()
+    row = service.read_result(run_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail='benchmark_run_not_found')
+    if int(row.get('target_uid') or 0) != int(uid):
+        raise HTTPException(status_code=409, detail='benchmark_run_target_mismatch')
+    if row.get('status') != 'completed' or not row.get('result'):
+        raise HTTPException(status_code=409, detail='benchmark_run_not_completed')
+    result = dict(row['result'])
+    result['benchmark_run_id'] = run_id
+    result['selection_as_of_s'] = row.get('selection_as_of_s')
+    result['snapshot_hash'] = row.get('snapshot_hash')
+    return result, 'completed'
 
 
 # ========== API端点 ==========
@@ -422,15 +464,23 @@ async def self_diagnosis(request: SelfDiagnosisRequest):
         # 3. AI调研独立降级，模型不可用时仍返回完整真实数据。
         ai_report = await AIDiagnosisReporter().generate(self_data)
 
+        # 4. 冻结排名（可选）：传 run_id 时读同一 run；不传则保持 not_requested。
+        creator_ranking, benchmark_status = _load_creator_ranking(request.uid, request.benchmark_run_id)
+
         return {
             'success': True,
             'data': {
                 'self_data': self_data,
-                'benchmark': benchmark_data,
+                'benchmark': benchmark_data,          # 旧兼容字段保持 disabled，不让旧 UI 复用
+                'benchmark_status': benchmark_status,
+                'creator_ranking': creator_ranking,
                 'ai_report': ai_report,
             }
         }
         
+    except HTTPException:
+        # 排名 run 校验失败等 HTTP 语义异常原样透传，避免被兜底成 500
+        raise
     except Exception as e:
         logger.error(f"[API] 账号自诊失败: {e}")
         # 抛出异常中断流程
@@ -473,27 +523,36 @@ async def export_report(request: ReportExportRequest):
                 request.category
             )
         
-        # 3. 生成报告
+        # 3. 生成报告（携带同一冻结 run 时抛出 creator_ranking；保持旧位置参数不变）
         # 按 format 分支调用不同的生成器
+        creator_ranking, benchmark_status = _load_creator_ranking(request.uid, request.benchmark_run_id)
         generator = ReportGenerator()
-        
-        # 边界/有效性检查
+
         if request.format == 'pdf':
-            # 赋值并准备后续使用
-            filepath = generator.generate_pdf_report(self_data, benchmark_data)
-        # 分支判断
+            if creator_ranking is None:
+                filepath = generator.generate_pdf_report(self_data, benchmark_data)
+            else:
+                filepath = generator.generate_pdf_report(self_data, benchmark_data, creator_ranking=creator_ranking)
         else:
-            # 赋值并准备后续使用
-            filepath = generator.save_markdown_report(self_data, benchmark_data)
-        
+            if creator_ranking is None:
+                filepath = generator.save_markdown_report(self_data, benchmark_data)
+            else:
+                filepath = generator.save_markdown_report(self_data, benchmark_data, creator_ranking=creator_ranking)
+
         return {
             'success': True,
             'data': {
                 'filepath': filepath,
-                'format': request.format
+                'format': request.format,
+                'benchmark_status': benchmark_status,
+                'benchmark_run_id': request.benchmark_run_id,
+                'as_of': (creator_ranking or {}).get('selection_as_of_s'),
             }
         }
         
+    except HTTPException:
+        # 排名 run 校验失败（含跨 UID 拒绝）原样透传
+        raise
     except Exception as e:
         logger.error(f"[API] 报告导出失败: {e}")
         # 抛出异常中断流程

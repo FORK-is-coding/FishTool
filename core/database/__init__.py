@@ -57,6 +57,7 @@ from .models_comment import Comment, CommentAlert
 from .models_hotspot import Hotspot, Topic, Activity
 from .models_hotspot_signal import HotspotSignal
 from .models_system import Task, OperationLog, LLMUsage, MonitorState
+from .models_benchmark import BenchmarkRun
 from .manager import DatabaseManager
 from .api import init_database, get_session, get_db, db_manager
 
@@ -64,6 +65,6 @@ __all__ = [
     'Base', 'logger',
     'Account', 'CookiePool', 'Video', 'VideoStats', 'UPMaster',
     'Comment', 'CommentAlert', 'Hotspot', 'Topic', 'Activity', 'HotspotSignal',
-    'Task', 'OperationLog', 'LLMUsage', 'MonitorState',
+    'Task', 'OperationLog', 'LLMUsage', 'MonitorState', 'BenchmarkRun',
     'DatabaseManager', 'init_database', 'get_session', 'get_db', 'db_manager',
 ]

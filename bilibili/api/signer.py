@@ -20,6 +20,7 @@ from functools import reduce
 
 from core.exceptions import WBISignError
 from core.logger import get_logger
+from core.request_budget import RequestBudgetExceeded, before_http_attempt
 
 logger = get_logger(__name__)
 
@@ -144,6 +145,9 @@ class WBISigner:
         """
         try:
             nav_url = 'https://api.bilibili.com/x/web-interface/nav'
+            # 直接取 WBI 密钥是一次真实 HTTP 尝试，同样接预算钩子；
+            # 经 client 走的已覆盖请求不会重复到这里。
+            before_http_attempt()
             # 上下文管理：确保资源自动释放
             async with session.get(nav_url) as resp:
                 # 边界/有效性检查
@@ -178,6 +182,9 @@ class WBISigner:
                 
                 logger.info("WBI密钥更新成功")
                 
+        except RequestBudgetExceeded:
+            # 预算耗尽不是签名失败：保留类型向上抛出，避免被转成 WBISignError 后重试。
+            raise
         except Exception as e:
             logger.error(f"更新WBI密钥失败: {e}")
             # 抛出异常中断流程

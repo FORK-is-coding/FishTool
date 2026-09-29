@@ -435,6 +435,44 @@
                     <button class="btn btn-secondary" onclick="exportDiagnosisReport()">导出报告</button>
                     <div id="diagnosis-result" class="result-area"></div>
                 </section>
+
+                <!-- 01 同行排名：有限参评集合内的真实名次（不代表全站排名） -->
+                <section class="section">
+                    <h2>🏆 同行排名（有限参评集合）</h2>
+                    <p class="subtitle">在这些明确参评账号中按同一指标排名，不代表全站排名</p>
+                    <div class="form-group">
+                        <label>同行 UID（每行一个，或用逗号/空格分隔，最多 50 个）：</label>
+                        <textarea id="ranking-peer-uids" class="form-control" rows="3" placeholder="例如：12345, 67890"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>指标说明：</label>
+                        <p class="analysis-hint">过去 30 天内、稿龄 7—30 天的最近最多 10 条公开稿件，取<b>中位累计播放</b>；一个账号一票，多 P 不加权，选中稿缺播放时标记缺失而不从后面替补。</p>
+                    </div>
+                    <div class="form-group">
+                        <label>内容范围（content_scope）：</label>
+                        <select id="ranking-content-scope" class="form-control">
+                            <option value="all_public_uploads">全部公开投稿</option>
+                            <option value="exact_raw_tid">指定原始投稿分区（exact_raw_tid）</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>原始 tid（仅 exact_raw_tid 需要）：</label>
+                        <input type="text" id="ranking-raw-tid" class="form-control" placeholder="例如 4">
+                    </div>
+                    <div class="form-group">
+                        <label><input type="checkbox" id="ranking-size-match"> 仅同粉丝规模（same_follower_band）</label>
+                    </div>
+                    <div class="form-group">
+                        <label>从分区发现候选作者（可选，仅发现不排名）：</label>
+                        <input type="text" id="ranking-rid" class="form-control" placeholder="分区 rid，例如 4">
+                        <button class="btn btn-secondary" onclick="discoverRankingCandidates()">发现候选</button>
+                        <div id="ranking-candidates" class="result-area"></div>
+                    </div>
+                    <button class="btn btn-primary" onclick="startCreatorRanking()">发起排名</button>
+                    <button class="btn btn-secondary" onclick="cancelCreatorRanking()">取消排名</button>
+                    <button class="btn btn-secondary" onclick="retryCreatorRanking()">重试排名</button>
+                    <div id="ranking-result" class="result-area"></div>
+                </section>
             </div>
 
             <!-- 配置页：AI大模型教程引导 + 密钥/地址/模型配置 + 用量统计。 -->
@@ -694,7 +732,7 @@
 <script src="/static/js/app.hotspot.js?v=split-20260824-tagcard-dq03"></script>
 <script src="/static/js/app.comment.js?v=split-20260824"></script>
 <script src="/static/js/app.config.js?v=split-20260824"></script>
-<script src="/static/js/app.up.js?v=split-20260824-dq03"></script>
+<script src="/static/js/app.up.js?v=split-20260824-dq03-ranking01"></script>
 <script src="/static/js/app.auth.js?v=split-20260824"></script>
 <script src="/static/js/app.lottery.js?v=split-20260824-dq03"></script>
 <script src="/static/js/app.ui.js?v=split-20260824"></script>

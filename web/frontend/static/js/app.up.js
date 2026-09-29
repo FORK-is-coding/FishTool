@@ -390,9 +390,14 @@ async function runSelfDiagnosis() {
 
     showLoading('diagnosis-result');
     try {
-        const response = await apiRequest('/analysis/self-diagnosis', { method: 'POST', body: JSON.stringify({ uid, category }) });
+        const payload = { uid, category };
+        // 已绑定冻结排名 run 时携带 run_id（不重新触发同行采集，读同一冻结结果）
+        const boundRunId = rankingRunIdFor(uid);
+        if (boundRunId) payload.benchmark_run_id = boundRunId;
+        const response = await apiRequest('/analysis/self-diagnosis', { method: 'POST', body: JSON.stringify(payload) });
         const result = response.data || {};
         renderSelfDiagnosisResult(uid, result);
+        attachRankingToDiagnosis(uid, result);
     } catch (error) {
         document.getElementById('diagnosis-result').innerHTML = `<p class="analysis-error">自诊失败: ${escapeHtml(error.message)}</p>`;
     }
@@ -462,9 +467,13 @@ async function exportDiagnosisReport() {
     }
     
     try {
+        const payload = { uid, format: 'markdown', category };
+        // 导出携带已绑定的冻结排名 run_id（后端拒绝跨 UID）
+        const boundRunId = rankingRunIdFor(uid);
+        if (boundRunId) payload.benchmark_run_id = boundRunId;
         const data = await apiRequest('/analysis/export-report', {
             method: 'POST',
-            body: JSON.stringify({ uid, format: 'markdown', category })
+            body: JSON.stringify(payload)
         });
         
         const result = data.data;
@@ -473,3 +482,345 @@ async function exportDiagnosisReport() {
         showAppAlert(`导出失败: ${error.message}`);
     }
 }
+
+// ============================================================================
+// 01 正确排名：同行 UID / 候选发现 / 发起-取消-重试 / 渲染（有限参评集合）
+// 说明：本段沿用现有渲染与样式体系，不引入新框架；写请求带同源取得的本机 token。
+// ============================================================================
+const creatorRankingState = {
+    runId: null,
+    uid: null,
+    peers: [],
+    candidateUids: [],
+    discoveryToken: null,
+    candidates: [],
+    polling: false,
+};
+
+let _rankingLocalToken = null;
+
+// 同源取得本机 session token（写请求必须带；token 不进 URL / 日志）。
+async function getRankingLocalToken(force) {
+    if (_rankingLocalToken && !force) return _rankingLocalToken;
+    try {
+        const response = await apiRequest('/analysis/benchmark/local-token', {}, false);
+        _rankingLocalToken = (response.data || {}).token || null;
+    } catch (error) {
+        _rankingLocalToken = null;
+    }
+    return _rankingLocalToken;
+}
+
+// 组装写请求头（缺 token 时为空对象，后端会以 403 明确拒绝）。
+async function rankingWriteHeaders() {
+    const token = await getRankingLocalToken(false);
+    return token ? { 'X-Local-Token': token } : {};
+}
+
+// 解析同行 UID 输入：换行 / 逗号 / 空格分隔，去重、剔除非法值与目标自己。
+function parseRankingUids(text, targetUid) {
+    const parts = String(text || '').split(/[\s,，;；]+/);
+    const seen = new Set();
+    const uids = [];
+    parts.forEach(item => {
+        if (!item) return;
+        if (!/^\d+$/.test(item)) return;   // 只接受纯整数字符串，拒绝 1.5 / true
+        const value = parseInt(item, 10);
+        if (!Number.isFinite(value) || value <= 0) return;
+        if (targetUid && value === targetUid) return;
+        if (seen.has(value)) return;
+        seen.add(value);
+        uids.push(value);
+    });
+    return uids;
+}
+
+// run_id 与 uid / 名单绑定：任一条件改变即返回 null（清空绑定）。
+function rankingRunIdFor(uid) {
+    if (!creatorRankingState.runId) return null;
+    if (creatorRankingState.uid !== uid) return null;
+    return creatorRankingState.runId;
+}
+
+// 解除与上一轮冻结结果的绑定（输入变更时调用，避免旧 run 冒充新一轮）。
+function resetCreatorRankingRun(reason) {
+    if (!creatorRankingState.runId) return;
+    creatorRankingState.runId = null;
+    creatorRankingState.uid = null;
+    creatorRankingState.peers = [];
+    const container = document.getElementById('ranking-result');
+    if (container) {
+        container.innerHTML = `<p class="analysis-hint">${escapeHtml(reason || '输入已变更，已解除与上一轮冻结结果的绑定。')}</p>`;
+    }
+}
+
+// 输入变更监听：UID / 名单变化即清空绑定。
+function bindRankingInputListeners() {
+    const uidInput = document.getElementById('diagnosis-uid');
+    const peerInput = document.getElementById('ranking-peer-uids');
+    if (uidInput) {
+        uidInput.addEventListener('change', () => resetCreatorRankingRun('目标 UID 已变更，请重新发起排名。'));
+    }
+    if (peerInput) {
+        peerInput.addEventListener('change', () => resetCreatorRankingRun('同行名单已变更，请重新发起排名。'));
+    }
+}
+
+// null 一律显示「无法计算」，不显示 0。
+function formatRankingValue(value) {
+    if (value === null || value === undefined || typeof value === 'boolean') return '无法计算';
+    const number = Number(value);
+    if (!Number.isFinite(number)) return '无法计算';
+    return number.toLocaleString('zh-CN');
+}
+
+// 名次展示：rank=null -> 无法计算；并列时展示 1—6 形式。
+function formatRankingRank(row) {
+    if (!row || row.rank === null || row.rank === undefined) return '无法计算';
+    if (row.rank_end !== null && row.rank_end !== undefined && row.rank_end !== row.rank) {
+        return `第 ${row.rank}–${row.rank_end} 名`;
+    }
+    return `第 ${row.rank} 名`;
+}
+
+// 分区候选发现（仅发现候选，不等于排名）。
+async function discoverRankingCandidates() {
+    const container = document.getElementById('ranking-candidates');
+    const ridInput = document.getElementById('ranking-rid');
+    const ridText = (ridInput ? ridInput.value : '').trim();
+    if (!/^\d+$/.test(ridText)) {
+        showAppAlert('请输入分区 rid（整数）');
+        return;
+    }
+    if (container) container.innerHTML = '<p class="analysis-hint">正在发现候选作者…</p>';
+    try {
+        const headers = await rankingWriteHeaders();
+        const response = await apiRequest('/analysis/benchmark/candidates', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ taxonomy: 'pid_v2', rid: parseInt(ridText, 10), limit: 20 }),
+        });
+        const data = response.data || {};
+        creatorRankingState.candidates = data.candidates || [];
+        creatorRankingState.candidateUids = creatorRankingState.candidates.map(item => item.uid);
+        creatorRankingState.discoveryToken = data.discovery_token || null;
+        if (!container) return;
+        if (!creatorRankingState.candidates.length) {
+            container.innerHTML = '<p class="analysis-hint">未发现候选作者（可能榜单不可用或已降级）。</p>';
+            return;
+        }
+        container.innerHTML = `
+            <p class="analysis-hint">热门作品作者参评集合候选（仅发现，不代表排名）。点击「加入」写入同行名单。</p>
+            <div class="candidate-list">
+                ${creatorRankingState.candidates.map(item => `
+                    <button class="btn btn-secondary candidate-item" onclick="selectRankingCandidate(${item.uid})">
+                        ${escapeHtml(item.name || ('UID ' + item.uid))} (${item.uid}) 加入
+                    </button>`).join('')}
+            </div>`;
+    } catch (error) {
+        if (container) container.innerHTML = `<p class="analysis-error">候选发现失败: ${escapeHtml(error.message)}</p>`;
+    }
+}
+
+// 把候选 UID 加入同行名单。
+function selectRankingCandidate(uid) {
+    const peerInput = document.getElementById('ranking-peer-uids');
+    if (!peerInput) return;
+    const uidInput = document.getElementById('diagnosis-uid');
+    const targetUid = uidInput ? parseInt(uidInput.value, 10) : null;
+    const uids = parseRankingUids(peerInput.value, targetUid);
+    if (!uids.includes(uid)) uids.push(uid);
+    peerInput.value = uids.join('\n');
+    resetCreatorRankingRun('同行名单已变更，请重新发起排名。');
+}
+
+// 发起排名（创建任务 + 专用轮询）。
+async function startCreatorRanking() {
+    const uidInput = document.getElementById('diagnosis-uid');
+    const uid = uidInput ? parseInt(uidInput.value, 10) : NaN;
+    if (!uid) { showAppAlert('请输入有效的B站UID'); return null; }
+
+    const peerInput = document.getElementById('ranking-peer-uids');
+    const peers = parseRankingUids(peerInput ? peerInput.value : '', uid);
+    if (peers.length === 0) { showAppAlert('请至少输入 1 个同行 UID'); return null; }
+    if (peers.length > 50) { showAppAlert('同行最多 50 个'); return null; }
+
+    const scopeSelect = document.getElementById('ranking-content-scope');
+    const contentScope = scopeSelect ? scopeSelect.value : 'all_public_uploads';
+    const rawTidInput = document.getElementById('ranking-raw-tid');
+    const sizeToggle = document.getElementById('ranking-size-match');
+
+    const payload = {
+        target_uid: uid,
+        peer_uids: peers,
+        content_scope: contentScope,
+        size_match: sizeToggle && sizeToggle.checked ? 'same_follower_band' : 'none',
+    };
+    if (contentScope === 'exact_raw_tid') {
+        const rawTidText = rawTidInput ? rawTidInput.value.trim() : '';
+        if (!/^\d+$/.test(rawTidText)) { showAppAlert('exact_raw_tid 需要填写正整数原始 tid'); return null; }
+        payload.raw_tid = parseInt(rawTidText, 10);
+    }
+    // 仅当本次名单完全来自候选发现时才附带签名 token（来源证明）
+    const discovered = creatorRankingState.discoveryToken
+        && creatorRankingState.candidateUids.length
+        && peers.every(item => creatorRankingState.candidateUids.includes(item));
+    if (discovered) payload.discovery_token = creatorRankingState.discoveryToken;
+
+    showLoading('ranking-result', { message: '正在创建排名任务' });
+    try {
+        const headers = await rankingWriteHeaders();
+        const response = await apiRequest('/analysis/benchmark/tasks', {
+            method: 'POST', headers, body: JSON.stringify(payload),
+        });
+        const data = response.data || {};
+        creatorRankingState.runId = data.run_id;
+        creatorRankingState.uid = uid;
+        creatorRankingState.peers = peers;
+        return pollCreatorRanking(data.run_id);
+    } catch (error) {
+        const container = document.getElementById('ranking-result');
+        if (container) container.innerHTML = `<p class="analysis-error">发起排名失败: ${escapeHtml(error.message)}</p>`;
+        return null;
+    }
+}
+
+// 专用轮询：识别 queued/running/completed/failed/cancelled/interrupted，不改动通用 pollTask 语义。
+async function pollCreatorRanking(runId) {
+    const container = document.getElementById('ranking-result');
+    creatorRankingState.polling = true;
+    try {
+        for (let attempt = 0; attempt < 1800; attempt += 1) {
+            const response = await apiRequest(`/analysis/benchmark/tasks/${runId}`, {}, false);
+            const task = response.data || {};
+            if (task.status === 'queued' || task.status === 'running') {
+                showLoading('ranking-result', { progress: task.progress, message: task.message || '正在采集同行数据' });
+                await sleep(1200);
+                continue;
+            }
+            if (task.status === 'completed') {
+                renderCreatorRanking(task.result || {});
+                return task.result || {};
+            }
+            const message = task.status === 'cancelled' ? '排名任务已取消。'
+                : task.status === 'interrupted' ? '排名任务被中断（服务重启），请重试。'
+                : `排名失败: ${escapeHtml((task.error_codes || []).join(','))}`;
+            if (container) container.innerHTML = `<p class="analysis-error">${message}</p>`;
+            return null;
+        }
+        if (container) container.innerHTML = '<p class="analysis-error">排名等待超时，请稍后重试。</p>';
+        return null;
+    } finally {
+        creatorRankingState.polling = false;
+    }
+}
+
+// 渲染冻结排名：null 显示「无法计算」，不显示 0。
+function renderCreatorRanking(result) {
+    const container = document.getElementById('ranking-result');
+    if (!container) return;
+    if (!result || result.schema_version !== 3 || result.unit !== 'creator') {
+        container.innerHTML = '<p class="analysis-error">返回结果不是有效的 creator 排名契约。</p>';
+        return;
+    }
+    const policy = result.policy || {};
+    const target = result.target || {};
+    const leaderboard = result.leaderboard || [];
+    const excluded = result.excluded_peers || [];
+    const warnings = result.warnings || [];
+    const stateLabels = {
+        complete: '完整比较（请求的同行均参与）',
+        partial: `已成功取得的 ${formatRankingValue(result.valid_peer_count)} 个参评账号`,
+        insufficient_peers: '目标有效，但有效同行不足',
+        target_unavailable: '目标账号本轮无有效指标，仅展示同行事实',
+    };
+    const sourceLabel = policy.peer_source === 'ranking_discovered_peer_set'
+        ? '热门作品作者参评集合' : '手动指定同行名单';
+    const percentileText = (target.rank === null || target.rank === undefined)
+        ? '无法计算'
+        : ((target.percentile === null || target.percentile === undefined)
+            ? '有效同行不足 5 个，不展示百分位'
+            : `${target.percentile}%（参照样本百分位，越高越靠前）`);
+
+    container.innerHTML = `
+        <div class="diagnosis-dashboard">
+            <header class="diagnosis-header">
+                <div>
+                    <p class="dashboard-eyebrow">CREATOR RANKING · SELECTED SET</p>
+                    <h3>${escapeHtml(stateLabels[result.comparison_state] || '状态未知')}</h3>
+                    <p>peer 来源：${escapeHtml(sourceLabel)} · 有效参评 ${formatRankingValue(result.valid_peer_count)} / 请求 ${formatRankingValue(result.requested_peer_count)}</p>
+                </div>
+                <div class="diagnosis-score"><strong>${formatRankingValue(target.metric_value)}</strong><span>中位累计播放</span></div>
+            </header>
+            <p class="analysis-hint">指标：过去 ${formatRankingValue(policy.window_days)} 天内、稿龄 ${formatRankingValue(policy.minimum_age_days)}—${formatRankingValue(policy.window_days)} 天的最近最多 ${formatRankingValue(policy.max_videos)} 条公开稿件的中位累计播放（一个账号一票）。本排名只针对本次明确参评账号，<strong>不代表全站排名</strong>。</p>
+            <div class="diagnosis-metrics">
+                <article class="metric-item"><span>你的名次</span><strong>${formatRankingRank(target)}</strong><small>共 ${formatRankingValue(target.total)} 个参评账号</small></article>
+                <article class="metric-item"><span>中位累计播放</span><strong>${formatRankingValue(target.metric_value)}</strong><small>选中稿件 ${formatRankingValue(target.selected_count)} 条</small></article>
+                <article class="metric-item"><span>参照样本百分位</span><strong>${escapeHtml(percentileText)}</strong><small>越高越靠前</small></article>
+                <article class="metric-item"><span>排除账号</span><strong>${excluded.length}</strong><small>失败或指标无效，不排末尾</small></article>
+            </div>
+            <table class="ranking-table">
+                <thead><tr><th>UID</th><th>选中稿件</th><th>中位累计播放</th><th>名次</th><th>并列范围</th><th>质量</th></tr></thead>
+                <tbody>
+                    ${leaderboard.map(row => `
+                        <tr class="${row.is_target ? 'ranking-row-target' : ''}">
+                            <td>${row.uid}${row.is_target ? '（你）' : ''}</td>
+                            <td>${formatRankingValue(row.selected_count)}</td>
+                            <td>${formatRankingValue(row.metric_value)}</td>
+                            <td>${formatRankingRank(row)}</td>
+                            <td>${row.rank_end === null || row.rank_end === undefined ? '—' : row.rank_end}</td>
+                            <td>${escapeHtml(row.is_target ? (row.status || '—') : '有效')}</td>
+                        </tr>`).join('')}
+                </tbody>
+            </table>
+            ${excluded.length ? `<div class="diagnosis-detail-card"><h4>被排除的请求账号</h4><ul>${excluded.map(item => `<li>UID ${item.uid}: ${escapeHtml(item.reason || '未知原因')}</li>`).join('')}</ul></div>` : ''}
+            ${warnings.map(item => `<p class="analysis-hint">⚠️ ${escapeHtml(item.message || item.code || '')}</p>`).join('')}
+            <p class="analysis-hint">快照 hash：${escapeHtml(result.snapshot_hash || '—')} · 刷新读取同一 run，名次不会重算。</p>
+        </div>`;
+}
+
+// 把自诊返回的冻结排名附加到诊断结果。
+function attachRankingToDiagnosis(uid, result) {
+    const ranking = result ? result.creator_ranking : null;
+    if (!ranking || ranking.schema_version !== 3 || ranking.unit !== 'creator') {
+        const container = document.getElementById('ranking-result');
+        if (container && (result || {}).benchmark_status === 'not_requested' && !creatorRankingState.runId) {
+            container.innerHTML = '<p class="analysis-hint">尚未绑定同行排名。选择同行后点「发起排名」，再把结果附加到自诊报告。</p>';
+        }
+        return null;
+    }
+    creatorRankingState.runId = ranking.benchmark_run_id || creatorRankingState.runId;
+    creatorRankingState.uid = uid;
+    renderCreatorRanking(ranking);
+    return ranking;
+}
+
+// 取消当前 run（后端拒绝取消已 completed 的 run）。
+async function cancelCreatorRanking() {
+    if (!creatorRankingState.runId) { showAppAlert('当前没有正在进行的排名任务'); return; }
+    try {
+        const headers = await rankingWriteHeaders();
+        await apiRequest(`/analysis/benchmark/tasks/${creatorRankingState.runId}/cancel`, { method: 'POST', headers });
+        const container = document.getElementById('ranking-result');
+        if (container) container.innerHTML = '<p class="analysis-hint">已请求取消排名任务。</p>';
+    } catch (error) {
+        showAppAlert(`取消失败: ${error.message}`);
+    }
+}
+
+// 以新 as_of 重试（生成新 run，不把新观测拼回旧 run）。
+async function retryCreatorRanking() {
+    if (!creatorRankingState.runId) { showAppAlert('当前没有可重试的排名 run'); return null; }
+    try {
+        const headers = await rankingWriteHeaders();
+        const response = await apiRequest(`/analysis/benchmark/runs/${creatorRankingState.runId}/retry`, { method: 'POST', headers });
+        const data = response.data || {};
+        creatorRankingState.runId = data.run_id;
+        return pollCreatorRanking(data.run_id);
+    } catch (error) {
+        showAppAlert(`重试失败: ${error.message}`);
+        return null;
+    }
+}
+
+bindRankingInputListeners();

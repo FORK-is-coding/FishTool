@@ -55,6 +55,51 @@ def _format_metric(value: Any, *, suffix: str = "") -> str:
     return "暂无数据"
 
 
+#: 目标无法排名时的原因文案（区分「未知」与「真实 0」，规格 §10.5）
+RANK_UNAVAILABLE_REASONS = {
+    'insufficient_posts': '窗口内有效稿件不足最少条数',
+    'incomplete_selection': '无法证明选稿完整',
+    'missing_selected_metrics': '选中稿件缺少播放指标',
+    'error': '采集失败',
+}
+
+
+def _format_ranking_metric(value: Any) -> str:
+    """排名专用数值格式化：None / bool -> 「无法计算」，真实 0 保持 0。
+
+    Args:
+        value: 指标值（中位累计播放等）。
+
+    Returns:
+        str: 展示文本；缺失时必须是「无法计算」而不是 0。
+    """
+    if value is None or isinstance(value, bool):
+        return '无法计算'
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if isinstance(value, (int, float)):
+        return f"{value:,}"
+    return '无法计算'
+
+
+def _format_ranking_percent(value: Any) -> str:
+    """百分位格式化：整数值去掉多余小数（30.0 -> 30%），缺失 -> 「无法计算」。
+
+    Args:
+        value: 百分位数值。
+
+    Returns:
+        str: 展示文本。
+    """
+    if value is None or isinstance(value, bool):
+        return '无法计算'
+    if isinstance(value, float):
+        return f"{int(value)}%" if value.is_integer() else f"{round(value, 1)}%"
+    if isinstance(value, int):
+        return f"{value}%"
+    return '无法计算'
+
+
 class ReportGenerator:
     """诊断报告生成器 - 支持PDF和Markdown格式"""
     
@@ -72,12 +117,16 @@ class ReportGenerator:
     
     def generate_markdown_report(self, 
                                  self_data: Dict[str, Any],
-                                 benchmark_data: Optional[Dict[str, Any]] = None) -> str:
+                                 benchmark_data: Optional[Dict[str, Any]] = None,
+                                 *,
+                                 creator_ranking: Optional[Dict[str, Any]] = None) -> str:
         """生成Markdown格式的诊断报告
         
         Args:
             self_data: 账号数据
             benchmark_data: benchmark对比数据（可选）
+            creator_ranking: 冻结的同行排名结果（schema=3 / unit=creator，可选）；
+                仅 keyword-only，不破坏旧位置参数调用
             
         Returns:
             Markdown文本
@@ -371,6 +420,11 @@ class ReportGenerator:
             # 追加到列表
             md_parts.append("\n---\n\n")
         
+        # 六之二、同行排名（creator_ranking，schema=3 / unit=creator）
+        # 允许显示真实新名次，不永久禁用「排名」二字；只消费冻结结果，不重算。
+        if creator_ranking:
+            self._append_creator_ranking_section(md_parts, creator_ranking)
+
         # 七、改进建议
         md_parts.append("## 💡 改进建议\n\n")
         
@@ -426,11 +480,146 @@ class ReportGenerator:
         md_parts.append("*本报告由B站运营工具箱自动生成*\n")
         
         return "".join(md_parts)
+
+    def _append_creator_ranking_section(self, md_parts: list, result: Any) -> None:
+        """把冻结的同行排名（schema=3 / unit=creator）追加到 Markdown 章节。
+
+        处理要点（规格 §10.5）：
+        - ``rank=None`` 显示「无法计算」，绝不显示 0；
+        - ``partial`` 标题必须写「已成功取得的 X 个参评账号」，不声称请求的所有账号均已比较；
+        - 明确写出「不代表全站排名」，不编造全区 / 全站口径；
+        - 只渲染传入的冻结结果，不调用任何不存在的 ready 渲染方法。
+
+        Args:
+            md_parts: Markdown 片段累积列表（原地追加）。
+            result: 冻结排名结果（dict）；非 schema=3 / unit=creator 时直接跳过。
+
+        Returns:
+            无。
+        """
+        if not isinstance(result, dict):
+            return
+        if result.get('schema_version') != 3 or result.get('unit') != 'creator':
+            # 旧契约 / 非 creator 单位：不渲染，避免错误排名复活
+            return
+
+        policy = result.get('policy') if isinstance(result.get('policy'), dict) else {}
+        peer_source = policy.get('peer_source')
+        source_label = (
+            '热门作品作者参评集合' if peer_source == 'ranking_discovered_peer_set' else '手动指定同行名单'
+        )
+        comparison_state = result.get('comparison_state')
+        valid_peer_count = result.get('valid_peer_count')
+        requested_peer_count = result.get('requested_peer_count')
+        excluded = result.get('excluded_peers') or []
+        valid_text = _format_ranking_metric(valid_peer_count)
+
+        # 标题：partial 必须写「已成功取得的 X 个参评账号」
+        if comparison_state == 'partial':
+            md_parts.append(f"## 🏆 同行排名：已成功取得的 {valid_text} 个参评账号\n\n")
+        else:
+            md_parts.append("## 🏆 同行排名（有限参评集合）\n\n")
+
+        state_label = {
+            'complete': '完整比较（请求的同行均参与）',
+            'partial': f'部分比较（请求 {_format_ranking_metric(requested_peer_count)} 个，仅 {valid_text} 个成功参评）',
+            'insufficient_peers': '目标有效，但有效同行不足，无法比较',
+            'target_unavailable': '目标账号本轮无有效指标，仅展示同行事实',
+        }.get(comparison_state, '状态未知')
+        md_parts.append(f"- **比较状态**: {state_label}\n")
+        md_parts.append(f"- **peer 来源**: {source_label}\n")
+        md_parts.append(
+            f"- **请求同行 / 有效参评**: {_format_ranking_metric(requested_peer_count)}"
+            f" / {valid_text}\n"
+        )
+        md_parts.append(
+            "- **指标口径**: 过去 {window} 天内、稿龄 {min_age}—{window} 天的最近最多 {maxv} 条公开稿件，"
+            "取中位累计播放（一个账号一票，多 P 不加权）\n".format(
+                window=policy.get('window_days', 30),
+                min_age=policy.get('minimum_age_days', 7),
+                maxv=policy.get('max_videos', 10),
+            )
+        )
+        if excluded:
+            md_parts.append(f"- **排除账号**: {len(excluded)} 个（失败或指标无效，不排末尾、不当 0 分）\n")
+        md_parts.append(
+            "\n> ℹ️ 这是「在这些明确参评账号中按同一指标的名次」，**不代表全站排名**；"
+            "参评账号由用户选定或从热门作品作者中发现，采集窗口相同，"
+            "未消除稿龄、内容类型和选样偏差。\n\n"
+        )
+
+        # 目标卡片
+        target = result.get('target') if isinstance(result.get('target'), dict) else {}
+        md_parts.append("### 你的位置\n\n")
+        if target.get('rank') is None:
+            reason_key = target.get('status')
+            reason = RANK_UNAVAILABLE_REASONS.get(reason_key, '本轮无有效指标')
+            md_parts.append(f"- **名次**: 无法计算（{reason}）\n")
+        else:
+            rank_text = f"第 {target['rank']}"
+            if target.get('rank_end') and target['rank_end'] != target['rank']:
+                rank_text += f"–{target['rank_end']}"
+            rank_text += f" 名 / 共 {_format_ranking_metric(target.get('total'))} 个参评账号"
+            md_parts.append(f"- **名次**: {rank_text}\n")
+            md_parts.append(f"- **中位累计播放**: {_format_ranking_metric(target.get('metric_value'))}\n")
+            if target.get('percentile') is None:
+                md_parts.append("- **参照样本百分位**: 有效同行不足 5 个，不展示百分位（名次仍真实）\n")
+            else:
+                md_parts.append(
+                    f"- **参照样本百分位**: {_format_ranking_percent(target.get('percentile'))}"
+                    "（参照样本百分位，越高越靠前）\n"
+                )
+            md_parts.append(f"- **选中稿件数**: {_format_ranking_metric(target.get('selected_count'))}\n")
+
+        # 参照分布
+        distribution = result.get('reference_distribution')
+        if isinstance(distribution, dict):
+            md_parts.append(
+                "\n- **参照分布（peer 成绩，不含目标）**: "
+                f"P25 {_format_ranking_metric(distribution.get('p25'))} / "
+                f"P50 {_format_ranking_metric(distribution.get('p50'))} / "
+                f"P75 {_format_ranking_metric(distribution.get('p75'))}；"
+                f"样本数 {_format_ranking_metric(distribution.get('count'))}\n"
+            )
+
+        # 参评名单
+        leaderboard = result.get('leaderboard') or []
+        if leaderboard:
+            md_parts.append("\n### 参评名单\n\n")
+            md_parts.append("| UID | 中位累计播放 | 名次 | 并列范围 | 选中稿件 |\n")
+            md_parts.append("|---|---|---|---|---|\n")
+            for row in leaderboard:
+                if not isinstance(row, dict):
+                    continue
+                rank_cell = '无法计算' if row.get('rank') is None else str(row.get('rank'))
+                end_cell = '—' if row.get('rank_end') is None else str(row.get('rank_end'))
+                marker = '（你）' if row.get('is_target') else ''
+                md_parts.append(
+                    f"| {row.get('uid')}{marker} | {_format_ranking_metric(row.get('metric_value'))} "
+                    f"| {rank_cell} | {end_cell} | {_format_ranking_metric(row.get('selected_count'))} |\n"
+                )
+
+        # 排除清单
+        if excluded:
+            md_parts.append("\n### 被排除的请求账号\n\n")
+            for item in excluded:
+                if not isinstance(item, dict):
+                    continue
+                md_parts.append(f"- UID {item.get('uid')}: {item.get('reason')}\n")
+
+        # 警告
+        for warning in result.get('warnings') or []:
+            if isinstance(warning, dict) and warning.get('message'):
+                md_parts.append(f"\n> ⚠️ {warning['message']}\n")
+
+        md_parts.append("\n---\n\n")
     
     def save_markdown_report(self, 
                             self_data: Dict[str, Any],
                             benchmark_data: Optional[Dict[str, Any]] = None,
-                            filename: Optional[str] = None) -> str:
+                            filename: Optional[str] = None,
+                            *,
+                            creator_ranking: Optional[Dict[str, Any]] = None) -> str:
         """保存Markdown报告到文件
         # 持久化数据，防止丢失
         
@@ -438,13 +627,14 @@ class ReportGenerator:
             self_data: 账号数据
             benchmark_data: benchmark数据
             filename: 文件名（可选，默认使用时间戳）
+            creator_ranking: 冻结的同行排名结果（仅 keyword-only）
             
         Returns:
             保存的文件路径
             # 持久化数据，防止丢失
         """
         # 生成报告内容
-        md_content = self.generate_markdown_report(self_data, benchmark_data)
+        md_content = self.generate_markdown_report(self_data, benchmark_data, creator_ranking=creator_ranking)
         
         # 确定文件名
         # 默认格式: diagnosis_report_{uid}_{时间戳}.md
@@ -476,13 +666,16 @@ class ReportGenerator:
     def _save_markdown_fallback(self,
                                 self_data: Dict[str, Any],
                                 benchmark_data: Optional[Dict[str, Any]],
-                                filename: Optional[str]) -> str:
+                                filename: Optional[str],
+                                *,
+                                creator_ranking: Optional[Dict[str, Any]] = None) -> str:
         """PDF 依赖缺失时的降级：输出 .md 文件，绝不把 Markdown 写成 .pdf（§9-17）。
 
         Args:
             self_data: 账号数据。
             benchmark_data: benchmark 数据。
             filename: 原请求文件名（可能以 .pdf 结尾）。
+            creator_ranking: 冻结的同行排名结果（仅 keyword-only）。
 
         Returns:
             实际保存的 Markdown 文件路径。
@@ -490,12 +683,14 @@ class ReportGenerator:
         md_filename = filename
         if md_filename:
             md_filename = str(Path(md_filename).with_suffix(".md"))
-        return self.save_markdown_report(self_data, benchmark_data, md_filename)
+        return self.save_markdown_report(self_data, benchmark_data, md_filename, creator_ranking=creator_ranking)
 
     def generate_pdf_report(self,
                            self_data: Dict[str, Any],
                            benchmark_data: Optional[Dict[str, Any]] = None,
-                           filename: Optional[str] = None) -> str:
+                           filename: Optional[str] = None,
+                           *,
+                           creator_ranking: Optional[Dict[str, Any]] = None) -> str:
         """生成PDF格式的诊断报告
         
         依赖 markdown2 + pdfkit + wkhtmltopdf，
@@ -505,6 +700,7 @@ class ReportGenerator:
             self_data: 账号数据
             benchmark_data: benchmark数据
             filename: 文件名（可选）
+            creator_ranking: 冻结的同行排名结果（仅 keyword-only）
             
         Returns:
             保存的PDF文件路径
@@ -515,7 +711,7 @@ class ReportGenerator:
         # 异常保护：局部失败不影响主流程
         try:
             # 先生成Markdown
-            md_content = self.generate_markdown_report(self_data, benchmark_data)
+            md_content = self.generate_markdown_report(self_data, benchmark_data, creator_ranking=creator_ranking)
             
             # 使用markdown2转HTML，再用pdfkit转PDF
             # 需要安装: pip install markdown2 pdfkit
@@ -527,7 +723,8 @@ class ReportGenerator:
                 import pdfkit
             except ImportError:
                 logger.warning("[报告生成] 缺少PDF依赖（markdown2/pdfkit），降级为Markdown")
-                return self._save_markdown_fallback(self_data, benchmark_data, filename)
+                return self._save_markdown_fallback(self_data, benchmark_data, filename,
+                                                    creator_ranking=creator_ranking)
             
             # Markdown转HTML
             html_content = markdown2.markdown(md_content, extras=['tables', 'fenced-code-blocks'])
@@ -609,4 +806,5 @@ class ReportGenerator:
         except Exception as e:
             logger.error(f"[报告生成] PDF生成失败: {e}，降级为Markdown")
             # 降级为 Markdown，返回 .md 路径而非伪装成 PDF。
-            return self._save_markdown_fallback(self_data, benchmark_data, filename)
+            return self._save_markdown_fallback(self_data, benchmark_data, filename,
+                                                creator_ranking=creator_ranking)
