@@ -2,12 +2,15 @@
 import asyncio
 import random
 from datetime import datetime
+from time import time
 from typing import Callable, Optional
 
 from bilibili.cookie_pool import get_cookie_pool
+from core import quota_store
 from core.config import ConfigManager
 from core.database import MonitorState, get_session
 from core.logger import get_logger
+from core.request_budget import log_quota_usage
 
 logger = get_logger(__name__)
 
@@ -141,12 +144,38 @@ class ResidentCommentMonitor:
                     logger.exception("后台监控任务退出异常")
         self._update(status="stopped")
 
+    def _quota_housekeeping(self) -> None:
+        """调度循环每轮开头的配额维护，顺序固定：prune 配额桶 → 清 watch 到期行 → 打点。
+
+        为什么必须在「调度之前」：
+        - 25 小时前的配额桶不裁掉，表会无限增长且滚动窗口统计难对账；
+        - 已到期行/过期桶必须先清再调，否则过期目标会一直占名额（规格 §3.2）。
+
+        Returns:
+            无；任何失败只记日志，不阻断本轮调度。
+        """
+        try:
+            now = int(time())
+            # 步骤 1：裁掉保留窗口之前的配额桶（保留窗口见 config/budget.yaml）。
+            quota_store.prune(now)
+            # 步骤 2：清 watch 到期行。
+            #   02 单视频跟踪表（active + ttl_end_epoch + released_epoch）尚未落地：
+            #   本仓库当前既无 watch 模型、也无 watch 调度查询，因此这一步暂无落点。
+            #   02 迁移脚本交付后在此接入 §3.2 的清理查询；顺序不得下移到调度之后。
+            # 步骤 3：每轮打一行各类已用/上限。
+            log_quota_usage(now)
+        except Exception:
+            # 维护失败不阻断调度：桶裁剪失败最多让表变大，不影响放行判定。
+            logger.exception("配额维护失败，本轮跳过")
+
     async def _cookie_loop(self) -> None:
         """启动已有 auto_check_loop，并使用独立会话避免会话跨轮次泄漏。"""
         try:
             # 拉取全局 Cookie 池单例；巡检循环只在校验时短暂占用数据库会话。
             pool = get_cookie_pool()
             while not self.stop_event.is_set():
+                # 每轮开头先做配额维护（prune 配额桶 → 清 watch 到期行），再巡检。
+                self._quota_housekeeping()
                 session = get_session()
                 try:
                     # 批量校验池内 Cookie 有效性，失效项自动剔除或标记。
@@ -170,6 +199,8 @@ class ResidentCommentMonitor:
         failures = 0
         try:
             while not self.stop_event.is_set():
+                # 每轮开头先做配额维护（prune 配额桶 → 清 watch 到期行），再调度采集。
+                self._quota_housekeeping()
                 state = self.snapshot()
                 # 被停止后 enabled=False，循环在此退出，任务自然结束。
                 if not state.get("enabled"):

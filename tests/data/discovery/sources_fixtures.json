@@ -1,0 +1,133 @@
+{
+  "_comment": "06 采集广度 · 三源离线 fixture（不联网）。统一发现 envelope 契约：{code, message, data}。",
+  "search_square": {
+    "ok": {
+      "code": 0,
+      "message": "0",
+      "ttl": 1,
+      "data": {
+        "trending": {
+          "title": "热搜榜单",
+          "list": [
+            {"keyword": "中低端显卡价格冲击历史新高", "show_name": "数码", "heat_score": 6915339, "icon": "//i0.hdslb.com/1.png"},
+            {"keyword": "新番开播", "show_name": "番剧", "heat_score": 523100, "icon": "//i0.hdslb.com/2.png"}
+          ]
+        }
+      }
+    },
+    "code_nonzero": {"code": -352, "message": "风控校验失败", "ttl": 1, "data": null},
+    "empty": {"code": 0, "message": "0", "ttl": 1, "data": {"trending": {"title": "热搜榜单", "list": []}}},
+    "missing_fields": {
+      "code": 0,
+      "message": "0",
+      "ttl": 1,
+      "data": {
+        "trending": {
+          "title": "热搜榜单",
+          "list": [
+            {"keyword": "缺失分数的词", "show_name": "测试"},
+            {"keyword": "   "},
+            {"keyword": "缺展示名但有分", "heat_score": 100},
+            "not-a-dict",
+            {"show_name": "缺关键词"}
+          ]
+        }
+      }
+    },
+    "bad_heat": {
+      "code": 0,
+      "message": "0",
+      "ttl": 1,
+      "data": {
+        "trending": {
+          "list": [
+            {"keyword": "负分", "heat_score": -5},
+            {"keyword": "布尔分", "heat_score": true},
+            {"keyword": "文本分", "heat_score": "abc"},
+            {"keyword": "浮点分", "heat_score": 3.5},
+            {"keyword": "合法零分", "heat_score": 0},
+            {"keyword": "合法正常", "heat_score": 12345}
+          ]
+        }
+      }
+    }
+  },
+  "popular": {
+    "ok": {
+      "code": 0,
+      "message": "0",
+      "data": {
+        "list": [
+          {"bvid": "BV1PoP0001", "tid": 4, "tname": "游戏", "owner": {"mid": 101, "name": "UP甲"}, "stat": {"view": 120000}, "rcmd_reason": "热门推荐", "tidv2": 1004, "pid_v2": 1000, "tnamev2": "游戏区"},
+          {"bvid": "BV1PoP0002", "tid": 1, "tname": "动画", "owner": {"mid": 102, "name": "UP乙"}, "stat": {"view": 88000}, "rcmd_reason": "综合热门", "tidv2": 1001, "pid_v2": 1000, "tnamev2": "动画区"}
+        ],
+        "no_more": false
+      }
+    },
+    "code_nonzero": {"code": -509, "message": "请求过于频繁", "data": null},
+    "empty": {"code": 0, "message": "0", "data": {"list": [], "no_more": false}},
+    "missing_fields": {
+      "code": 0,
+      "message": "0",
+      "data": {
+        "list": [
+          {"bvid": "BV1PoP0100"},
+          {"bvid": "BV1PoP0101", "tid": 4, "stat": {}},
+          {"tid": 4, "owner": {"mid": 1}, "stat": {"view": 10}},
+          "not-a-dict"
+        ]
+      }
+    },
+    "bad_view": {
+      "code": 0,
+      "message": "0",
+      "data": {
+        "list": [
+          {"bvid": "BV1PoP0200", "stat": {"view": -1}},
+          {"bvid": "BV1PoP0201", "stat": {"view": true}},
+          {"bvid": "BV1PoP0202", "stat": {"view": "12a"}},
+          {"bvid": "BV1PoP0203", "stat": {"view": 3.5}},
+          {"bvid": "BV1PoP0204", "stat": {"view": 0}},
+          {"bvid": "BV1PoP0205", "stat": {"view": 999}}
+        ]
+      }
+    }
+  },
+  "ranking": {
+    "ok": {
+      "code": 0,
+      "message": "0",
+      "data": {
+        "list": [
+          {
+            "bvid": "BV1Rank001", "tid": 4, "owner": {"mid": 201}, "stat": {"view": 300000}, "tidv2": 1004, "pid_v2": 1000,
+            "others": [
+              {"bvid": "BV1Rank001o1", "tid": 4, "owner": {"mid": 201}, "stat": {"view": 50000}},
+              {"bvid": "BV1Rank001o2", "tid": 4, "owner": {"mid": 201}, "stat": {"view": 20000}}
+            ]
+          },
+          {
+            "bvid": "BV1Rank002", "tid": 5, "owner": {"mid": 202}, "stat": {"view": 200000},
+            "others": [
+              {"bvid": "BV1Rank002o1", "tid": 5, "owner": {"mid": 202}, "stat": {"view": 10000}}
+            ]
+          }
+        ]
+      }
+    },
+    "code_nonzero": {"code": -352, "message": "风控校验失败", "data": null},
+    "empty": {"code": 0, "message": "0", "data": {"list": []}},
+    "missing_fields": {
+      "code": 0,
+      "message": "0",
+      "data": {
+        "list": [
+          {"bvid": "BV1Rank100", "owner": {}, "stat": {"view": 10}},
+          {"bvid": "BV1Rank101"},
+          {"bvid": "BV1Rank102", "others": "not-a-list"},
+          {"bvid": "BV1Rank103", "others": [{"tid": 4}]}
+        ]
+      }
+    }
+  }
+}

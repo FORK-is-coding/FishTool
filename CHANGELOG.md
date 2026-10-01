@@ -8,14 +8,20 @@
 > **v0.2.2 之前未逐条记录。** 更早版本只保留 tag：
 > v0.1.0 / v0.2.0 / v0.2.1
 
-## [未发布]
+## [0.2.3] - 2026-10-02
 
-**主题：参评集合内的账号排名（01 · 方案 A 阶段性交付）。**
+**主题：配额账本落地（唯一账本 + 总闸挪位）与 06 采集广度发现通道；另含 01 排名方案 A。**
+
+这一版把 HTTP 尝试配额从「内存里的计数器」变成**落盘、可重启续算的唯一账本**，
+并新增**免 Cookie 的聚合入口发现通道**（06）——广度靠读、深度靠采，不再自采全站。
+三条线相互独立，均不改变既有采集链路的调用方式。
+
+### 新增
+
+**01 · 账号排名（方案 A 阶段性）**
 
 只新增一个排名子包和一张快照表，不改既有采集链路，不引入独立部署。
 排名是**明确参评集合内**的账号对账号排名，不是全站排名，也不代表抽样代表性。
-
-### 新增
 
 - **`modules/self_diagnosis/benchmark/`** —— 排名子包
   - `contracts.py` —— `BenchmarkPolicy` / `CreatorSample` / `BenchmarkResult`（schema=3）
@@ -28,6 +34,27 @@
 - **`web/routers/benchmark.py`** —— `/api/analysis/benchmark` 候选发现、发起、查询、取消、重试
 - **`web/local_guard.py`** —— 本机写端点校验（同源 + CSRF + session token）
 
+**配额账本**
+
+- **`config/budget.yaml`** —— 配额唯一账本（单账号总闸 1800 attempt / 滚动 24h）
+  - 五类配额：`discovery` 480 / `watch` 1000 / `ranking` 150 / `maintenance` 72 / `flex` 98
+  - 分域冷却与节流：`cookie` / `no_cookie` 两域各自独立，互不连坐
+  - 硬约束：业务与基础设施代码不得再出现硬编码配额数字
+- **`core/quota_store.py`** —— 小时桶窗口统计与 `http_attempt_log` 读写
+- **`core/database/models_quota.py`** —— `http_attempt_log` 模型
+
+**06 · 采集广度**
+
+- **`modules/hotspot/discovery/`** —— 聚合入口发现通道
+  - `contracts.py` —— `BroadKeyword` / `BroadVideo` DTO、质量三态、来源优先级、按 bvid 合并
+  - `sources.py` —— 三源读取与容错解析（纯 I/O，不含聚合逻辑）
+  - `store.py` —— 关键词与视频信号写入器
+  - `snapshot.py` —— 全局发现快照（原子 JSON，含更新与保留协议）
+  - `service.py` —— 调度、共享轮询缓存、去重落库、快照冻结
+- **`HotKeywordSignal`**（表 `hot_keyword_signal`）—— 热搜词观测事实表，唯一键 `(keyword, captured_epoch_s)`
+- `tests/data/discovery/sources_fixtures.json` —— 三源离线 fixture
+- `tools/discovery_smoke.py` —— 一次性低频联网冒烟（不发送 Cookie）
+
 ### 变更
 
 - **`bilibili/api/client.py` / `signer.py`** —— 在真实 HTTP 发送点接预算钩子；`RequestBudgetExceeded` 保留类型，不被包装成可重试的普通 API 错误
@@ -36,11 +63,39 @@
 - **`report_generator.py`** —— 新增 `creator_ranking` 段；keyword-only 参数，旧位置参数不受影响
 - **前端** —— `app.up.js` / `index.html` / `style.up.css` 增加同行名单、指标说明、发起/取消/重试
 
+**配额账本**
+
+- **`core/request_budget.py`** —— 配额判定接入落盘账本；**总闸校验从请求路径挪到配置加载期**
+  （分类配额本就是硬上限，留在请求路径上是死代码）
+- **`core/database/manager.py`** —— 幂等建表，旧库可原地升级
+- **`core/monitor_service.py`** —— 启动时读回窗口，重启后配额续算
+
+**06 · 采集广度**
+
+- **`core/database/models_hotspot_signal.py`** —— 新增 `HotKeywordSignal`
+- **`core/database/__init__.py`** —— 显式导入注册（不注册 `create_all` 不建表）
+- **`.gitignore`** —— `data/` 收窄为 `/data/`。此前裸 `data/` 连带忽略 `tests/data/`，
+  以致测试 fixture 从未进过仓库，clone 后 fixture 缺失
+
 ### 指标口径
 
 `recent10_age7_30_median_views_v1`：请求时刻往前 30 天内、稿龄 7—30 天的最近最多 10 条
 公开稿件，取**中位累计播放**；至少 3 条；选中稿件缺失不打替补，该作者本轮不参与自动排名。
 播放取自同次详情请求的 `stat.view`，真实 0 有效。名次为 competition rank，并列同名次。
+
+**06 · 采集广度（易错点，写死）**
+
+- `ranking` 全站榜**不复用** `get_ranking()`：其实现强制带 `day` + `pn`，实测三种组合全部 `-352`；
+  改为裸 URL 并单独覆写 `Referer` 为 `.../v/popular/rank/all` 才通。**属易变项**，由冒烟脚本持续验证。
+- 三源 parser 统一吃「已拆 data + 补 code 的统一 envelope」，逐源在 docstring 写明内层路径
+  （`data.trending.list` / `data.list` / `data.list` + `others`）。
+- 同一视频按 bvid 去重，**发现来源全部保留**；展示值按固定来源优先级
+  `ranking_all > popular > ranking_all_others` 取值，冲突打标记，**不按最大播放量挑**
+  （会引入向上选择偏差）。
+- `heat_score` 只作「平台接口返回热搜分数」，**不进入播放增量计算**；
+  缺失记 `NULL` / `missing`，非法值跳过且不写 0。
+- `pid_v2` / `tidv2` / legacy `tid` 三套分类字段并存，不合并成单一 tid。
+- 失败状态落**全局发现快照**，可区分四种情形：本轮真空榜 / 请求失败 / 仅第一页成功 / 用的是上轮缓存。
 
 ### 验证
 
@@ -48,17 +103,30 @@
 - 数值验收：`rank=4 / rank_end=5 / total=6 / percentile=30`；全等并列 1—N 且 P50；
   单 peer 有名次无百分位；peer 列表含目标 UID 重复时只算一次
 - `tools/verify_creator_ranking.py` 端到端 16 步全绿
+- **本版发布前全量复跑：1672 passed / 1 skipped / 0 failed**（含桌面组全部文件）
+- 配额持久化：独立复跑 17 passed；总闸判定挪位后行为不变
+- 06 联网冒烟（三入口各 1 次，含礼貌间隔，不发送 Cookie）：
+  `search/square` code=0 / 10 条、`popular` code=0 / 20 条、
+  `ranking/v2?rid=0` code=0 / 主榜 100 条 + `others` 5 条
 
 ### 尚未验证
 
 - 真实 B 站接口 —— 本轮全程 stub，未使用真实账号与 Cookie
 - 浏览器 UI 交互 —— JS 仅通过 `node --check` 并与后端契约对齐
 - PDF 真实格式 —— 本机未安装 pdfkit / wkhtmltopdf
+- **06 的易变项** —— `ranking` 端点的 `Referer` 要求由平台侧决定，本次实测通过不代表长期可用，
+  由 `tools/discovery_smoke.py` 持续验证
+- **06 与 04 的消费接口尚未接线** —— `DiscoveryService.iter_video_candidates()` /
+  `list_keyword_candidates()` 已备好，但接入 04 需改动 04 代码，本版未做
+- **06 的请求节奏实盘表现** —— 仅做过一次性冒烟，未跑满 24h 观察 discovery 480 的实际占用
 
 ### 发布说明
 
-- 本次为**阶段性提交**，不单独打 tag
+- 本 tag 覆盖 v0.2.2 之后的全部提交，含此前以阶段性提交合入 main、未单独打 tag 的 01 排名方案 A
+- 配额账本引入落盘表 `http_attempt_log`，`manager.py` 提供幂等建表，旧库可原地升级
+- 06 的发现通道在接 04 之前**不影响**既有链路：新模块无人调用，调度需显式启动
 - 回滚只需切回旧界面或关闭新功能，不影响既有自诊、词云与抽奖
+- 回滚配额改动时注意：旧库中 `http_attempt_log` 可保留不用，不影响旧行为
 
 ## [0.2.2] - 2026-09-29
 
@@ -109,3 +177,4 @@
 - 回滚时保留新增列与历史数据，不回滚成「缺失即伪 0」的旧行为
 
 [0.2.2]: https://github.com/FORK-is-coding/FishTool/compare/v0.2.1...v0.2.2
+[0.2.3]: https://github.com/FORK-is-coding/FishTool/compare/v0.2.2...v0.2.3

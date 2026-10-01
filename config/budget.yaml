@@ -1,0 +1,63 @@
+# FishTool｜HTTP 尝试配额账本（唯一账本）
+#
+# 依据：FishTool_前置方案_预算重分与02租约规格.md §2.2 / §2.4 / §2.6
+# 口径：单账号 HTTP attempt / 滚动 24h（含签名密钥请求、重试、限速后实际发送）
+#
+# 硬约束：业务代码与基础设施代码里都不得出现硬编码配额数字，
+#         一律从本文件读取（quota_store 读窗口，request_budget 读上限）。
+# 注意：§5「待拍清单」是另一件事，本文件只落本任务给定的数字，不得顺手改配额。
+version: 1
+
+quota:
+  # 单账号总闸：两域合计的硬上限（attempt / 滚动 24h）
+  global_limit: 1800
+
+  # 滚动统计窗口（小时）：used() 统计最近 window_hours 个小时桶
+  window_hours: 24
+
+  # 桶保留窗口（小时）：prune() 删除 retain 之前的桶（25 小时前的桶被裁掉）
+  retention_hours: 25
+
+  # 五类配额上限；domain 同时给出该类的归属域（总闸按全量 (域, 类别) 求和）
+  categories:
+    # 06 三个聚合入口（免 Cookie 域）：保底，优先保障
+    discovery:
+      domain: no_cookie
+      limit: 480
+    # 02 单视频时序采样（Cookie 域）：弹性，上限即止
+    watch:
+      domain: cookie
+      limit: 1000
+    # 01 现有榜单链路（Cookie 域）：固定
+    ranking:
+      domain: cookie
+      limit: 150
+    # 账号维护：cookie 校验 48 + wbi 刷新 24（C9 补入，Cookie 域）：固定
+    maintenance:
+      domain: cookie
+      limit: 72
+    # 机动：详情 / 标签 / 补采（Cookie 域）：应急
+    flex:
+      domain: cookie
+      limit: 98
+
+# 分域冷却与常规节流参数（§2.4）。两域各自冷却，互不连坐。
+domains:
+  cookie:
+    # 单域出现 412：该域冷却 15 分钟
+    cooldown_base_s: 900
+    # 单域连续 3 次 412：冷却翻倍，最长 2 小时
+    cooldown_max_s: 7200
+    # 常规间隔下限（秒）
+    min_interval_s: 1.5
+    # 并发上限
+    max_concurrency: 2
+  no_cookie:
+    cooldown_base_s: 900
+    cooldown_max_s: 7200
+    min_interval_s: 1.5
+    max_concurrency: 2
+
+# IP 级熔断：两域同时大量 412/403 时全局停采（两域共享同一 IP，必须一起停）
+ip_circuit_breaker:
+  cooldown_s: 3600

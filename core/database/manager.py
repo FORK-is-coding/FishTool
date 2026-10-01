@@ -8,11 +8,41 @@ from datetime import datetime
 from pathlib import Path
 import logging
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import StaticPool
 
 from .base import Base, logger
+
+
+# ============ SQLite 连接参数 ============
+
+#: SQLite 忙等待超时（毫秒）。配额计数与业务写入并发时靠它排队，而不是立刻抛 "database is locked"。
+SQLITE_BUSY_TIMEOUT_MS = 5000
+
+#: 同上，换算成 sqlite3 驱动的 ``timeout`` 参数口径（秒）。
+SQLITE_BUSY_TIMEOUT_S = SQLITE_BUSY_TIMEOUT_MS / 1000
+
+
+def _apply_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
+    """每条 SQLite 连接建立时开启 WAL 与 busy_timeout（规格 §2.6）。
+
+    Args:
+        dbapi_connection: sqlite3 原生连接。
+        _connection_record: SQLAlchemy 连接池记录（未使用）。
+
+    Returns:
+        无；PRAGMA 失败只记日志，不让连接建立直接失败。
+    """
+    cursor = dbapi_connection.cursor()
+    try:
+        # WAL 是库文件级设置，开启后读不阻塞写、写不阻塞读。
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+    except Exception:
+        logger.exception("SQLite PRAGMA（WAL / busy_timeout）设置失败，回退默认日志模式")
+    finally:
+        cursor.close()
 
 
 # ============ 数据库管理器 ============
@@ -52,9 +82,12 @@ class DatabaseManager:
         self.engine = create_engine(
             f"sqlite:///{self.db_path}",
             echo=False,
-            connect_args={"check_same_thread": False},
+            # timeout 是 sqlite3 驱动级忙等待秒数，与 PRAGMA busy_timeout 同口径。
+            connect_args={"check_same_thread": False, "timeout": SQLITE_BUSY_TIMEOUT_S},
             poolclass=StaticPool
         )
+        # 每条新连接都开 WAL + busy_timeout=5000，配额表与业务表共用同一库时不互相饿死。
+        event.listen(self.engine, "connect", _apply_sqlite_pragmas)
         
         # 创建会话工厂
         # autocommit=False 手动管理事务，autoflush=False 延迟刷新

@@ -21,6 +21,8 @@ B站运营工具箱 - 数据库模型
 四、热点与选题域
 - Hotspot: 热点表
 - Topic: 选题库表
+- HotspotSignal: 视频类热点信号表
+- HotKeywordSignal: 热搜关键词信号表（06 采集广度 · search/square）
 
 五、活动情报域
 - Activity: 活动情报表
@@ -31,6 +33,9 @@ B站运营工具箱 - 数据库模型
 
 七、LLM使用统计域
 - LLMUsage: LLM使用统计表
+
+八、HTTP 配额域
+- HttpQuotaBucket: HTTP 尝试配额小时桶（滚动 24h 计数持久化，规格 §2.6）
 
 数据库管理器（DatabaseManager）：
 - 使用 SQLite + SQLAlchemy ORM
@@ -48,6 +53,7 @@ B站运营工具箱 - 数据库模型
 - models_system.py: 任务/日志/LLM统计/监控状态模型（原始 L566-L688）
 - manager.py: DatabaseManager（原始 L693-L814）
 - api.py: 工厂函数 init_database/get_session/get_db（原始 L817-L885）
+- models_quota.py: HTTP 尝试配额小时桶（2026-10-02 新增，规格 §2.6）
 注释均原样保留，未删除未错位。外部兼容：from core.database import X 全部可用。
 """
 from .base import Base, logger
@@ -55,9 +61,10 @@ from .models_account import Account, CookiePool
 from .models_video import Video, VideoStats, UPMaster
 from .models_comment import Comment, CommentAlert
 from .models_hotspot import Hotspot, Topic, Activity
-from .models_hotspot_signal import HotspotSignal
+from .models_hotspot_signal import HotspotSignal, HotKeywordSignal
 from .models_system import Task, OperationLog, LLMUsage, MonitorState
 from .models_benchmark import BenchmarkRun
+from .models_quota import HttpQuotaBucket
 from .manager import DatabaseManager
 from .api import init_database, get_session, get_db, db_manager
 
@@ -65,6 +72,8 @@ __all__ = [
     'Base', 'logger',
     'Account', 'CookiePool', 'Video', 'VideoStats', 'UPMaster',
     'Comment', 'CommentAlert', 'Hotspot', 'Topic', 'Activity', 'HotspotSignal',
+    'HotKeywordSignal',
     'Task', 'OperationLog', 'LLMUsage', 'MonitorState', 'BenchmarkRun',
+    'HttpQuotaBucket',
     'DatabaseManager', 'init_database', 'get_session', 'get_db', 'db_manager',
 ]
