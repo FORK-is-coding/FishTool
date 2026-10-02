@@ -120,3 +120,22 @@ class TopicUpdateRequest(BaseModel):
     - 跟踪选题效果，分析哪些选题更受欢迎
     """
     status: str  # 选题状态: pending/adopted/published
+
+class WatchCreateRequest(BaseModel):
+    """
+    手动加入单视频跟踪请求模型（02 · 批 4）
+
+    用于把某个 bvid 手动加入持续跟踪池；同一 bvid 重复提交走库里幂等 UPSERT，
+    不会产生重复行，也不会重置已有的调度 / 到期时间。
+
+    Attributes:
+        bvid: 视频 BV 号（必填）；入库前 trim，长度上限 20。
+        collection_tid: 采集归属分区 ID，可选；None 时不写（保留库内既有值）。
+        sample_interval_s: 采样间隔（秒），可选；None 时用 watch_store 默认 3600。
+
+    使用示例:
+        request = WatchCreateRequest(bvid="BV1xx411c7mD", collection_tid=4)
+    """
+    bvid: str  # 视频BV号（必填）
+    collection_tid: Optional[int] = None  # 采集分区ID（可选）
+    sample_interval_s: Optional[int] = None  # 采样间隔秒（可选，缺省 3600）

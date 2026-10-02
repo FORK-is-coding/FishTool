@@ -43,12 +43,17 @@ class Snapshot:
 
 @dataclass(frozen=True)
 class Detection:
-    """算法输出的统一热点检测结果，展示层只依赖此结构。"""
+    """算法输出的统一热点检测结果，展示层只依赖此结构。
+
+    ``metadata`` 为非数值项通道（如 ``coverage_state`` / ``confidence_kind``），
+    与约定「仅数值或 None」的 ``metrics`` 分离，二者键集互斥。
+    """
 
     bvid: str
     stage: str
     confidence: float
     metrics: dict[str, float | int | None] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)  # 非数值项通道（coverage_state / confidence_kind 等）
     explain: str = ""
     algorithm_version: str = ""
     title: str = ""

@@ -173,3 +173,31 @@ def test_collect_progress_transitions_through_states():
     assert progress["progress"] == 100
     assert progress["updated_at"] is not None
     assert "采集完成" in progress["message"]
+
+
+def test_collect_reuses_public_collect_one_for_single_video_step():
+    """改动三：``collect()`` 把单视频采集反调公开入口 ``collect_one``（一份逻辑两个入口）。"""
+    collector, budget, store = build_collector()
+    calls = []
+    original = collector.collect_one
+
+    async def spy(bvid, *, collection_tid=None, source="ranking", run_id=None):
+        """记录参数后转调真实 ``collect_one``，证明整榜确实走公开单视频入口。"""
+        calls.append(
+            {"bvid": bvid, "collection_tid": collection_tid, "source": source, "run_id": run_id}
+        )
+        return await original(bvid, collection_tid=collection_tid, source=source, run_id=run_id)
+
+    collector.collect_one = spy
+
+    result = asyncio.run(
+        collector.collect(tid=4, limit=2, sample_comments=False, sample_danmaku=False)
+    )
+
+    assert result["ok"] == 2
+    assert [call["bvid"] for call in calls] == ["BV1", "BV2"]
+    assert {call["source"] for call in calls} == {"ranking"}
+    assert {call["collection_tid"] for call in calls} == {4}
+    # 整榜行为零变化：同一轮所有视频共用同一批次 run_id，格式 <时间戳>_<来源>_<分区>。
+    assert len({call["run_id"] for call in calls}) == 1
+    assert next(iter({call["run_id"] for call in calls})).endswith("_ranking_4")

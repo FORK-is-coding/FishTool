@@ -175,11 +175,11 @@ class HotspotCollector:
                 ratio = 10 + (index / total) * 65
                 _set_progress("running", ratio, f"正在采集第 {index}/{total} 个视频")
                 try:
-                    view_data = await self._fetch_view(item)
-                    saved = await self._save_snapshot(
-                        view_data,
-                        source=source_mark,
+                    # 单视频采集统一走公开入口 collect_one，与整榜共用同一份逻辑。
+                    saved = await self.collect_one(
+                        item.get("bvid") or "",
                         collection_tid=tid,
+                        source=source_mark,
                         run_id=run_id,
                     )
                     signal_count += saved
@@ -231,6 +231,46 @@ class HotspotCollector:
             _set_progress("failed", 0, f"采集失败：{exc}")
             logger.error("热点采集异常: %s", exc)
             raise
+
+    async def collect_one(
+        self,
+        bvid: str,
+        *,
+        collection_tid: int | None = None,
+        source: str = "ranking",
+        run_id: str | None = None,
+    ) -> int:
+        """采集单个视频的 view 快照并落库（公开单视频入口）。
+
+        本方法是 ``collect()`` 内层循环对**单个视频**所做两步动作的等价抽取：
+        ``_fetch_view``（拉详情，含预算 / 限频）→ ``_save_snapshot``（落
+        ``videos`` / ``video_stats`` 并写 title 信号）。``collect()`` 反过来调用本方法，
+        保证「一份逻辑两个入口」，避免整榜与单视频两条路径随时间漂移。
+
+        边界（对齐模块开篇「采集器不感知生命周期算法」）：本方法只做「采一条快照」，
+        不出现任何算法 / 阶段 / watch 概念，参数只含 bvid、归属分区与来源标签；
+        ``run_id`` 是采集批次标识（非算法概念），仅用于与整榜采集保持同一批次血缘。
+
+        Args:
+            bvid: 视频 BV 号。
+            collection_tid: 该视频归属的采集分区 ID（详情接口的 tid 可能是二级分区，
+                生命周期列表按一级分区筛选时必须用这个归属 ID），可为 None。
+            source: 快照来源标签（如 ranking / paint_c / watch）。
+            run_id: 采集批次标识；缺省 None 表示单条独立采集，不并入整榜批次。
+
+        Returns:
+            ``_save_snapshot`` 返回的信号条数（int）。
+
+        Raises:
+            异常: 详情拉取 / 落库失败时原样上抛，由上层决定失败隔离口径。
+        """
+        view_data = await self._fetch_view({"bvid": str(bvid or "").strip()})
+        return await self._save_snapshot(
+            view_data,
+            source=source,
+            collection_tid=collection_tid,
+            run_id=run_id,
+        )
 
     # ---------- 数据获取 ----------
 

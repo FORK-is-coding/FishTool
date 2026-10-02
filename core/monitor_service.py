@@ -3,7 +3,7 @@ import asyncio
 import random
 from datetime import datetime
 from time import time
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from bilibili.cookie_pool import get_cookie_pool
 from core import quota_store
@@ -14,22 +14,90 @@ from core.request_budget import log_quota_usage
 
 logger = get_logger(__name__)
 
+#: watch 常驻循环默认轮询间隔（秒）；与 modules/hotspot/watch_service.DEFAULT_LOOP_INTERVAL_S 一致。
+DEFAULT_WATCH_INTERVAL_S: int = 60
+
+#: discovery 发现循环默认轮询间隔（秒）；对齐 run_discovery_loop 的 interval_s 默认值。
+DEFAULT_DISCOVERY_INTERVAL_S: int = 600
+
+
+def build_watch_service(**kwargs: Any) -> Any:
+    """构造默认 watch 服务（照 modules.hotspot.discovery.service.build_discovery_service 样板）。
+
+    只在真正要跑 watch 循环时才被调用（``ResidentCommentMonitor.watch_service`` 惰性触发），
+    **导入期不构造客户端、不发任何网络请求**。采集端口 / 会话工厂 / 时钟三个依赖一律走
+    ``WatchService`` 自身的缺省装配（``collector_port`` 惰性构造既有 ``HotspotCollector``，
+    ``session_factory`` 用 ``core.database.get_session``，``now_fn`` 用 ``utc_now_epoch_s``），
+    本函数**不 new 任何 API 客户端**，避免与既有依赖获取方式分叉。
+
+    Args:
+        **kwargs: 透传给 ``modules.hotspot.watch_service.WatchService``（便于单测注入替身）。
+
+    Returns:
+        WatchService: 可直接接入常驻调度的编排层实例。
+    """
+    from modules.hotspot.watch_service import WatchService
+
+    return WatchService(**kwargs)
+
+
+def build_resident_discovery_service(**kwargs: Any) -> Any:
+    """构造默认发现服务（照 modules.hotspot.discovery.service.build_discovery_service 样板）。
+
+    只在真正要跑 discovery 发现循环时才被调用（``ResidentCommentMonitor.discovery_service``
+    惰性触发），**导入期不构造客户端、不发任何网络请求**。``api`` / ``snapshot_store`` /
+    各 ``*_store`` / ``clock`` 一律由 ``DiscoveryService`` 自身的缺省装配与
+    ``build_discovery_service`` 透传决定，本函数**不 new 任何 API 客户端**，
+    避免与既有依赖获取方式分叉。
+
+    Args:
+        **kwargs: 透传给 ``modules.hotspot.discovery.service.build_discovery_service``
+            （便于单测注入替身）。
+
+    Returns:
+        DiscoveryService: 可直接接入常驻调度的发现服务实例。
+    """
+    from modules.hotspot.discovery.service import build_discovery_service
+
+    return build_discovery_service(**kwargs)
+
 
 class ResidentCommentMonitor:
     """管理评论区常驻任务、状态持久化和可控启停。"""
 
-    def __init__(self, monitor_factory: Callable, config: Optional[ConfigManager] = None):
+    def __init__(
+        self,
+        monitor_factory: Callable,
+        config: Optional[ConfigManager] = None,
+        watch_service_factory: Optional[Callable] = None,
+        discovery_service_factory: Optional[Callable] = None,
+    ):
         """初始化服务。
 
         Args:
             monitor_factory: 返回 CommentMonitor 单例的工厂函数。
             config: 配置管理器；未传入时自动读取默认配置。
+            watch_service_factory: 返回 watch 服务的工厂函数；缺省用 :func:`build_watch_service`，
+                且**惰性调用** —— 只有真要跑 watch 循环时才装配，默认配置下永不调用。
+            discovery_service_factory: 返回发现服务的工厂函数；缺省用
+                :func:`build_resident_discovery_service`，同样**惰性调用** —— 只有真要跑
+                discovery 发现循环时才装配，默认配置下永不调用。
         """
         self.monitor_factory = monitor_factory
         self.config = config or ConfigManager()
         self.monitor_task: Optional[asyncio.Task] = None
         self.cookie_task: Optional[asyncio.Task] = None
+        # 第三条常驻 task：watch 采样循环（默认关闭，仅显式配置 monitor.watch_enable=True 才拉起）。
+        self.watch_task: Optional[asyncio.Task] = None
+        # 第四条常驻 task：discovery 发现循环（默认关闭，仅显式配置 monitor.discovery_enable=True 才拉起）。
+        self.discovery_task: Optional[asyncio.Task] = None
         self.stop_event = asyncio.Event()
+        # watch 服务的构造入口；缺省走缺省装配（导入期不建客户端、不发请求）。
+        self.watch_service_factory = watch_service_factory or build_watch_service
+        self._watch_service: Any = None
+        # discovery 服务的构造入口；同样惰性，导入期不建客户端、不发请求。
+        self.discovery_service_factory = discovery_service_factory or build_resident_discovery_service
+        self._discovery_service: Any = None
 
     def _state(self, session):
         """读取或创建 SQLite 中的单例状态记录。"""
@@ -60,6 +128,8 @@ class ResidentCommentMonitor:
                 "task_running": bool(self.monitor_task and not self.monitor_task.done()),  # 采集协程是否真实存活
                 
                 "cookie_task_running": bool(self.cookie_task and not self.cookie_task.done()),  # Cookie 巡检协程是否真实存活
+                "watch_task_running": bool(self.watch_task and not self.watch_task.done()),  # watch 采样协程是否真实存活
+                "discovery_task_running": bool(self.discovery_task and not self.discovery_task.done()),  # discovery 发现协程是否真实存活
                 
             }
         except Exception as exc:
@@ -84,13 +154,21 @@ class ResidentCommentMonitor:
             session.close()
 
     async def start(self) -> None:
-        """按配置启动 Cookie 巡检和评论监控任务；动态采集不在此处启动。"""
+        """按配置启动 Cookie 巡检、watch 采样（可选）、discovery 发现（可选）与评论监控任务；动态采集不在此处启动。"""
         self.stop_event.clear()
         state = self.snapshot()
         # Cookie 巡检协程没有存活实例时才新建，避免重复拉起多个巡检任务。
         if self.cookie_task is None or self.cookie_task.done():
             # 将耗时工作交给后台协程，接口立即返回任务 ID 供前端轮询。
             self.cookie_task = asyncio.create_task(self._cookie_loop(), name="bili-cookie-check")
+        # watch 采样循环默认关闭：只有显式配置 monitor.watch_enable=True 才拉起（会真采样、真烧配额）。
+        if bool(self.config.get("monitor.watch_enable", False)):
+            self._ensure_watch_task()
+        # discovery 发现循环默认关闭：只有显式配置 monitor.discovery_enable=True 才拉起。
+        # 注：入池（watch_ingest）跟着本开关走 —— 入池不发请求、不花钱；真正花钱的采样
+        # 仍由 monitor.watch_enable 单独把关，两个开关职责不重叠。
+        if bool(self.config.get("monitor.discovery_enable", False)):
+            self._ensure_discovery_task()
         # 配置开启且状态未被手动关闭时，跟随配置自动进入运行态。
         if bool(self.config.get("monitor.enable", False)) and state.get("enabled", False) is not False:
             await self.enable()
@@ -130,11 +208,11 @@ class ResidentCommentMonitor:
         """取消后台任务并等待退出，避免服务关闭时遗留任务。"""
         # 先置停止事件让循环自然退出，再取消协程，双保险防止任务悬挂。
         self.stop_event.set()
-        for task in (self.monitor_task, self.cookie_task):
+        for task in (self.monitor_task, self.cookie_task, self.watch_task, self.discovery_task):
             if task and not task.done():
                 task.cancel()
         # 逐个等待协程结束，CancelledError 属于正常取消路径，不当作异常处理。
-        for task in (self.monitor_task, self.cookie_task):
+        for task in (self.monitor_task, self.cookie_task, self.watch_task, self.discovery_task):
             if task:
                 try:
                     await task
@@ -143,6 +221,141 @@ class ResidentCommentMonitor:
                 except Exception:
                     logger.exception("后台监控任务退出异常")
         self._update(status="stopped")
+
+    def _ensure_watch_task(self) -> None:
+        """按既有单实例约定拉起 watch 常驻循环：已存活则复用，不重复创建。
+
+        守卫写法与 ``_cookie_loop`` / ``_monitor_loop`` 完全一致（``is None or done()``），
+        保证重复 ``start()`` 不会拉起第二条 watch 循环。
+
+        Returns:
+            无。
+        """
+        if self.watch_task is None or self.watch_task.done():
+            # 名称固定为 "bili-watch"，与另两条常驻 task 命名风格一致。
+            self.watch_task = asyncio.create_task(self._watch_loop(), name="bili-watch")
+
+    def _ensure_discovery_task(self) -> None:
+        """按既有单实例约定拉起 discovery 常驻循环：已存活则复用，不重复创建。
+
+        守卫写法与 ``_cookie_loop`` / ``_monitor_loop`` / ``_ensure_watch_task`` 完全一致
+        （``is None or done()``），保证重复 ``start()`` 不会拉起第二条 discovery 循环。
+
+        Returns:
+            无。
+        """
+        if self.discovery_task is None or self.discovery_task.done():
+            # 名称固定为 "bili-discovery"，与 run_discovery_loop docstring 的集成点示例一致。
+            self.discovery_task = asyncio.create_task(self._discovery_loop(), name="bili-discovery")
+
+    @property
+    def watch_service(self) -> Any:
+        """惰性构造 watch 服务；只在真要跑 watch 循环时才装配（默认配置下永不触发）。
+
+        Returns:
+            watch 编排层实例（由 ``watch_service_factory`` 产出）。
+        """
+        if self._watch_service is None:
+            self._watch_service = self.watch_service_factory()
+        return self._watch_service
+
+    async def _watch_loop(self) -> None:
+        """watch 常驻循环桥接：复用 watch 服务的既有 ``_loop``，共享本服务的 ``stop_event``。
+
+        依赖注入说明：``WatchService`` 的 ``collector_port`` / ``session_factory`` / ``now_fn``
+        三个依赖均由 :func:`build_watch_service` 走缺省装配，本桥接层不重复注入。
+
+        ``_loop`` 内部已做到：``stop_event`` 置位即退出、单轮 tick 异常不中断循环、
+        ``CancelledError`` 原样上抛（不吞取消），故 cancel 后任务能真正结束。
+
+        Returns:
+            无（循环直至停止或被取消）。
+        """
+        interval = max(1, int(self.config.get("monitor.watch_interval", DEFAULT_WATCH_INTERVAL_S)))
+        # watch_service.py 在本批红线冻结内（一行未改），其常驻循环入口即 ``_loop``，故直接复用。
+        await self.watch_service._loop(interval_s=interval, stop_event=self.stop_event)
+
+    @property
+    def discovery_service(self) -> Any:
+        """惰性构造发现服务；只在真要跑 discovery 发现循环时才装配（默认配置下永不触发）。
+
+        与 ``watch_service`` 属性同一路子：**导入期不构造客户端、不发任何网络请求**，
+        首次访问才调 ``discovery_service_factory``。
+
+        Returns:
+            发现服务实例（由 ``discovery_service_factory`` 产出）。
+        """
+        if self._discovery_service is None:
+            self._discovery_service = self.discovery_service_factory()
+        return self._discovery_service
+
+    async def _discovery_loop(self) -> None:
+        """discovery 常驻循环桥接：复用发现通道的既有 ``run_discovery_loop``，共享本服务的 ``stop_event``。
+
+        每轮 poll 成功后经 ``on_snapshot`` 回调把候选入 watch 池（装配见 ``_ingest_discovery_snapshot``）。
+        ``run_discovery_loop`` 内部已做到：``stop_event`` 置位即退出、单轮失败指数退避、
+        ``CancelledError`` 原样上抛（不吞取消），故 cancel 后任务能真正结束。
+
+        Returns:
+            无（循环直至停止或被取消）。
+        """
+        # 局部导入：避免 core.monitor_service 在导入期就拉起整个 discovery 包（含 sources / 快照）。
+        from modules.hotspot.discovery.service import run_discovery_loop
+
+        interval = max(1, int(self.config.get("monitor.discovery_interval", DEFAULT_DISCOVERY_INTERVAL_S)))
+        await run_discovery_loop(
+            self.discovery_service,
+            stop_event=self.stop_event,
+            interval_s=interval,
+            on_snapshot=self._ingest_discovery_snapshot,
+        )
+
+    async def _ingest_discovery_snapshot(self, service: Any) -> None:
+        """把最近一轮发现候选入 watch 池（只吃内存结果，绝不额外发 HTTP）。
+
+        装配口径：
+            - 候选来源 = ``service.iter_video_candidates()``（上一轮 poll 的内存合并结果），
+              本回调**不触发**任何入口请求；
+            - 入池走 ``watch_ingest.ingest_video_candidates_to_watch``，只吃 ``popular`` /
+              ``ranking_all``，``ranking_all_others`` / ``search_square`` 不入池；
+            - 桥接函数只 flush，故此处补一次 ``commit``；失败 ``rollback`` 后原样抛出，
+              交给 ``run_discovery_loop`` 现有的 try/except + 指数退避处理（不静默吞掉）。
+
+        开关划分：本回调只在 ``monitor.discovery_enable=True`` 时挂上，**入池不需要单独开关**
+        （入池不发请求、不花钱，故跟着 discovery 走）；真正花钱的采样仍由
+        ``monitor.watch_enable`` 单独把关。
+
+        Args:
+            service: 已构造的发现服务（由 ``run_discovery_loop`` 每轮回传）。
+
+        Returns:
+            无。
+        """
+        # 局部导入：把「discovery 候选 → watch 池」的桥接依赖收敛到运行时，
+        # 与本模块既有惰性装配风格一致（导入期不碰 watch_store / discovery 包）。
+        from modules.hotspot.discovery.watch_ingest import ingest_video_candidates_to_watch
+
+        candidates = service.iter_video_candidates()
+        session = get_session()
+        try:
+            written = ingest_video_candidates_to_watch(
+                session,
+                candidates,
+                now_epoch_s=int(time()),
+            )
+            session.commit()
+            logger.info(
+                "发现候选入 watch 池完成：候选 %s 条，入池 %s 条",
+                len(candidates or []),
+                written,
+            )
+        except Exception:
+            # 入池失败：回滚本轮写入并原样抛出，由 run_discovery_loop 的退避分支处理。
+            session.rollback()
+            logger.exception("发现候选入 watch 池失败，本轮跳过")
+            raise
+        finally:
+            session.close()
 
     def _quota_housekeeping(self) -> None:
         """调度循环每轮开头的配额维护，顺序固定：prune 配额桶 → 清 watch 到期行 → 打点。
@@ -159,9 +372,11 @@ class ResidentCommentMonitor:
             # 步骤 1：裁掉保留窗口之前的配额桶（保留窗口见 config/budget.yaml）。
             quota_store.prune(now)
             # 步骤 2：清 watch 到期行。
-            #   02 单视频跟踪表（active + ttl_end_epoch + released_epoch）尚未落地：
-            #   本仓库当前既无 watch 模型、也无 watch 调度查询，因此这一步暂无落点。
-            #   02 迁移脚本交付后在此接入 §3.2 的清理查询；顺序不得下移到调度之后。
+            #   02 单视频跟踪表已落地（批 2：models_hotspot_watch.HotspotWatch +
+            #   modules/hotspot/watch_store 的调度/清理两条查询与 release_expired）。
+            #   但按 02 方案 §9.9，评论常驻服务保持评论职责、不承载 watch 采样循环，
+            #   真正「先清后调」由后续 watch_service._loop 负责；此处因此仍不接 watch
+            #   清理，顺序约定（先清后调）不变。
             # 步骤 3：每轮打一行各类已用/上限。
             log_quota_usage(now)
         except Exception:

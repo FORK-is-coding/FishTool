@@ -237,7 +237,7 @@ def test_fetch_popular_page_params() -> None:
 
 
 def test_fetch_ranking_uses_bare_spec_url() -> None:
-    """ranking 复用同一 client 的 api.get，参数严格 §3.3（不带 day/pn）；记账 cookie/ranking。"""
+    """ranking 复用同一 client 的 api.get，参数严格 §3.3（不带 day/pn）；记账 no_cookie/ranking。"""
     spy = _BudgetSpy()
     api = _StubAPI(get_result={"list": [{"bvid": "BV1"}]})
     envelope = asyncio.run(sources.fetch_ranking(api, rid=0, day=7, budget_hook=spy))
@@ -249,7 +249,7 @@ def test_fetch_ranking_uses_bare_spec_url() -> None:
         {"rid": 0, "type": "all"},
         {"headers": {"Referer": sources.RANKING_REFERER}},
     )
-    assert spy.calls == [{"domain": "cookie", "category": "ranking"}]
+    assert spy.calls == [{"domain": "no_cookie", "category": "ranking"}]
 
 
 def test_fetch_ranking_maps_business_error() -> None:

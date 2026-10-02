@@ -23,10 +23,22 @@ from core.exceptions import (
     is_retryable_error
 )
 from core.logger import get_logger
-from core.request_budget import RequestBudgetExceeded, before_http_attempt
+from core.request_budget import (
+    RequestBudgetExceeded,
+    before_http_attempt,
+    report_business_risk_code,
+    report_http_412,
+    report_http_risk,
+    report_http_success,
+    report_status_429,
+)
 from .signer import WBISigner
 
 logger = get_logger(__name__)
+
+#: 凭证域取值域（与 core/quota_store 的 (domain, category) 口径一致）。
+CREDENTIAL_DOMAIN_COOKIE = "cookie"
+CREDENTIAL_DOMAIN_NO_COOKIE = "no_cookie"
 
 
 class BilibiliAPICore:
@@ -39,6 +51,8 @@ class BilibiliAPICore:
         cookie: Optional[str] = None,
         cookie_pool: Optional[Any] = None,
         rate_limiter: Optional[Any] = None,
+        domain: Optional[str] = None,
+        quota_category: Optional[str] = None,
     ) -> None:
         """初始化 API 客户端。
 
@@ -46,15 +60,30 @@ class BilibiliAPICore:
             cookie: 固定 Cookie 字符串；未传入时使用空字符串。
             cookie_pool: 可选 Cookie 池，请求前从中轮换登录态。
             rate_limiter: 可选限频器，所有请求复用同一限频策略。
+            domain: 凭证域，取值固定 ``cookie`` / ``no_cookie``（与 core/quota_store
+                口径一致）。缺省 ``None`` 时按「是否携带凭证」自动判定：带 Cookie /
+                CookiePool -> ``cookie``；免凭证 -> ``no_cookie``。主站链路
+                （01 / 详情 / 评论 / 扫码）为 ``cookie``，06 免 Cookie 聚合入口为
+                ``no_cookie``。
+            quota_category: 本客户端的缺省配额类别（watch / ranking / flex /
+                maintenance / discovery）。缺省 ``None`` 表示**由调用方在更外层显式
+                记账**（例如 06 通道在 sources.py 记账），客户端仍带域做熔断 / 冷却判定。
 
         Returns:
             无。
+
+        Raises:
+            ValueError: ``domain`` 传了 ``cookie`` / ``no_cookie`` 之外的值。
         """
         # 会话必须在构造阶段显式存在，异步上下文进入前也允许安全检查。
         self.session: Optional[aiohttp.ClientSession] = None
         self.cookie = cookie or ""
         self.cookie_pool = cookie_pool
         self.rate_limiter = rate_limiter
+        # 凭证域是「分域冷却」的判定依据，必须在构造阶段定死，避免请求期再猜。
+        self.domain = self._resolve_domain(domain, self.cookie, cookie_pool)
+        # 配额类别缺省不由客户端硬编码：主站各类别需调用方声明，06 由 sources.py 声明。
+        self.quota_category = quota_category
         self.headers: Dict[str, str] = {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -67,7 +96,8 @@ class BilibiliAPICore:
         if self.cookie:
             self.headers["Cookie"] = self.cookie
         # WBI 状态由专用签名器持有，避免核心客户端与签名器字段重复或错位。
-        self.wbi_signer = WBISigner()
+        # 签名器继承同一凭证域，其 nav 请求同样带域参与风控放行判定。
+        self.wbi_signer = WBISigner(domain=self.domain)
 
     async def __aenter__(self):
         """异步上下文管理器入口
@@ -106,8 +136,10 @@ class BilibiliAPICore:
             # B站动态/搜索等接口对无指纹的匿名请求风控严格（412），
             # 补上指纹可显著降低被拦概率；获取失败静默忽略不影响主流程
             try:
-                # 指纹请求同样是一次真实 HTTP 尝试，需在发送前计入任务预算。
-                before_http_attempt()
+                # 指纹请求同样是一次真实 HTTP 尝试：带上凭证域过风控闸门。
+                # 不归入 maintenance 类别——维护额度（72 = cookie 校验 48 + wbi 刷新 24）
+                # 若被每次会话的指纹占用，耗尽时会把 init_session 打死，所有请求都发不出去。
+                self._before_attempt()
                 async with self.session.get(
                     "https://api.bilibili.com/x/frontend/finger/spi",
                     timeout=10
@@ -162,6 +194,50 @@ class BilibiliAPICore:
         self.cookie = cookie
         self.headers['Cookie'] = cookie
 
+    @staticmethod
+    def _resolve_domain(domain: Optional[str], cookie: str, cookie_pool: Optional[Any]) -> str:
+        """解析本客户端的凭证域。
+
+        Args:
+            domain: 显式传入的凭证域；``None`` 表示按凭证有无自动判定。
+            cookie: 固定 Cookie；非空即视为携带凭证。
+            cookie_pool: Cookie 池；非空即视为携带凭证。
+
+        Returns:
+            str: ``cookie`` 或 ``no_cookie``。
+
+        Raises:
+            ValueError: ``domain`` 不在允许值域内。
+        """
+        if domain:
+            value = str(domain).strip().lower()
+            if value not in (CREDENTIAL_DOMAIN_COOKIE, CREDENTIAL_DOMAIN_NO_COOKIE):
+                raise ValueError(
+                    f"domain 只能是 {CREDENTIAL_DOMAIN_COOKIE} / {CREDENTIAL_DOMAIN_NO_COOKIE}，收到: {domain!r}"
+                )
+            return value
+        # 免凭证通道（06 三个聚合入口）不带 Cookie，判定为 no_cookie 域。
+        return CREDENTIAL_DOMAIN_COOKIE if (cookie or cookie_pool is not None) else CREDENTIAL_DOMAIN_NO_COOKIE
+
+    def _before_attempt(self, category: Optional[str] = None) -> None:
+        """真实 HTTP 发送前过一次「风控 + 配额」闸门。
+
+        客户端只负责把**自己的凭证域**带上去（分域冷却必须有域才能生效）；
+        配额类别优先取本次请求声明的类别，其次取客户端缺省类别。两者都为 ``None``
+        时不在客户端记账（由更外层调用方显式记账），但仍做 IP 熔断与分域冷却判定。
+
+        Args:
+            category: 本次请求的配额类别；``None`` 表示用客户端缺省类别。
+
+        Returns:
+            无。
+
+        Raises:
+            RequestBudgetExceeded: 熔断 / 冷却 / 配额命中时抛出；
+                该异常不可重试，由 ``request`` 原样向上抛出。
+        """
+        before_http_attempt(self.domain, category if category is not None else self.quota_category)
+
     async def request(self,
                      method: str,
                      url: str,
@@ -171,7 +247,8 @@ class BilibiliAPICore:
                      headers: Optional[Dict[str, str]] = None,
                      need_sign: bool = False,
                      retry_times: int = 3,
-                     budget_key: Optional[str] = None) -> Dict[str, Any]:
+                     budget_key: Optional[str] = None,
+                     quota_category: Optional[str] = None) -> Dict[str, Any]:
         """通用请求方法
         
         统一请求入口，处理 Cookie 获取、限频、签名、
@@ -188,6 +265,7 @@ class BilibiliAPICore:
             headers: 额外请求头
             need_sign: 是否需要WBI签名
             retry_times: 重试次数
+            quota_category: 本次请求的配额类别；缺省用客户端缺省类别（可能为 None）
             
         Returns:
             响应JSON数据（已剥离外层 data 字段）
@@ -240,8 +318,8 @@ class BilibiliAPICore:
         for attempt in range(retry_times):
             # 异常保护：局部失败不影响主流程
             try:
-                # 每次真实 HTTP 发送前记入当前任务预算（默认无上下文时不做任何事）。
-                before_http_attempt()
+                # 每次真实 HTTP 发送前过闸门：带凭证域 + 本次声明的配额类别。
+                self._before_attempt(quota_category)
                 # 上下文管理：确保资源自动释放
                 async with self.session.request(
                     method=method,
@@ -257,8 +335,14 @@ class BilibiliAPICore:
                         # 412 是 IP/UA 级风控，短时间重试无法恢复，直接抛出避免拖慢采集流程
                         # （与 429 限流不同，429 等待后可能恢复，412 不会）
                         logger.warning(f"请求被反爬拦截: HTTP 412 - {url}")
+                        # 分域冷却上报点（规格 §2.4）：只冷却本域，另一域照常放行。
+                        report_http_412(self.domain, category=self.quota_category)
                         # 抛出异常中断流程
                         raise BilibiliAPIError("请求被反爬拦截（IP/UA限制）")
+
+                    if resp.status == 403:
+                        # 403 与 412 同属 IP/UA 级风控：只上报，不改变既有异常路径。
+                        report_http_risk(self.domain, 403, category=self.quota_category)
                     
                     # 边界/有效性检查
                     if resp.status == 429:
@@ -271,6 +355,8 @@ class BilibiliAPICore:
                             # 将数据从一种形态映射为另一种
                             retry_after = int(resp.headers.get('Retry-After', 60))
                         logger.warning(f"收到 429 响应，等待 {retry_after}s 后重试")
+                        # 429 取该域共享的较晚恢复时刻（规格 §2.4）。
+                        report_status_429(self.domain, retry_after)
                         await asyncio.sleep(retry_after)
                         # 跳过本轮继续循环
                         continue  # 继续重试
@@ -304,6 +390,8 @@ class BilibiliAPICore:
                     # 均为 IP/UA 级风控，短时间重试无法恢复，直接抛出避免拖慢采集
                     if code == -352 or code == -412:
                         logger.warning(f"请求被风控: {message}")
+                        # 分域冷却上报点（规格 §2.4）：业务码风控与 HTTP 412 同一处置。
+                        report_business_risk_code(self.domain, code, category=self.quota_category)
                         # 抛出异常中断流程
                         raise BilibiliAPIError(f"请求被风控: {message}")
                     
@@ -343,7 +431,9 @@ class BilibiliAPICore:
                     # 成功后重置限频器的429计数
                     if self.rate_limiter is not None:
                         self.rate_limiter.report_success()
-                    
+                    # 冷却期满后的首次成功才清零「连续 412」计数（规格 §2.4）。
+                    report_http_success(self.domain)
+
                     return result.get('data', {})
                     
             except RequestBudgetExceeded:
@@ -435,8 +525,9 @@ class BilibiliAPICore:
         """
         try:
             await self.init_session()
-            # 扫码轮询是一次真实 HTTP 尝试，需在发送前计入任务预算。
-            before_http_attempt()
+            # 扫码轮询是一次真实 HTTP 尝试：带上凭证域过风控闸门。
+            # 不归入 maintenance 类别（登录期轮询密集，会挤占 cookie 校验 / wbi 刷新额度）。
+            self._before_attempt()
             async with self.session.get(
                 "https://passport.bilibili.com/x/passport-login/web/qrcode/poll",
                 params={"qrcode_key": qrcode_key},

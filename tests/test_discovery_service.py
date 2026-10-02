@@ -153,11 +153,11 @@ def test_poll_once_writes_and_freezes_snapshot(env) -> None:
 
 
 def test_budget_hook_uses_declared_domains(env) -> None:
-    """search/popular 走 no_cookie+discovery；ranking 走 cookie+ranking。"""
+    """search/popular 走 no_cookie+discovery；ranking 走 no_cookie+ranking（06 全体免 Cookie 域）。"""
     service, manager, api, spy, _ = env
     asyncio.run(service.poll_once(captured_epoch_s=CAPTURED))
     assert spy.calls.count(("no_cookie", "discovery")) == 3  # search 1 + popular 2 页
-    assert spy.calls.count(("cookie", "ranking")) == 1
+    assert spy.calls.count(("no_cookie", "ranking")) == 1
 
 
 def test_replay_same_snapshot_is_idempotent(env) -> None:

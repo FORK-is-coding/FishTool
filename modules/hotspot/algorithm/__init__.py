@@ -2,6 +2,30 @@
 from .adapter import detection_to_dto, snapshot_from_mapping
 from .base import Detection, LifecycleDetector, Snapshot
 from .heuristic_v1 import HeuristicV1
+from .lifecycle_v2 import (
+    CoverageState,
+    LifecycleV2,
+    LifecycleV2Config,
+    Point,
+    Stage,
+    TrendState,
+)
 from .registry import create_detector, list_algorithms, register
 
-__all__ = ["Detection", "LifecycleDetector", "Snapshot", "HeuristicV1", "create_detector", "list_algorithms", "register", "detection_to_dto", "snapshot_from_mapping"]
+__all__ = [
+    "Detection",
+    "LifecycleDetector",
+    "Snapshot",
+    "HeuristicV1",
+    "LifecycleV2",
+    "LifecycleV2Config",
+    "CoverageState",
+    "TrendState",
+    "Point",
+    "Stage",
+    "create_detector",
+    "list_algorithms",
+    "register",
+    "detection_to_dto",
+    "snapshot_from_mapping",
+]

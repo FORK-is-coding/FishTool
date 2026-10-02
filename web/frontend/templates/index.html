@@ -198,6 +198,34 @@
                     </div>
                 </section>
 
+                <!-- 单视频跟踪（watch）区块：列出跟踪池、三态过滤、手动加 watch / 停追。
+                     数据来自 /api/hotspot/watch；三态 state 由后端 classify_state 现算下发。 -->
+                <section class="section hotspot-watch-section">
+                    <div class="hotspot-section-heading">
+                        <div>
+                            <p class="dashboard-eyebrow">WATCH TARGETS</p>
+                            <h2>单视频跟踪</h2>
+                        </div>
+                        <button class="btn" type="button" onclick="loadHotspotWatch()">刷新</button>
+                    </div>
+                    <div class="form-group">
+                        <label for="hotspot-watch-state">状态筛选：</label>
+                        <select id="hotspot-watch-state" class="form-control" onchange="loadHotspotWatch()">
+                            <option value="" selected>全部</option>
+                            <option value="tracking">跟踪中</option>
+                            <option value="expired">已到期</option>
+                            <option value="released">已释放</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="hotspot-watch-bvid">新增跟踪：</label>
+                        <input id="hotspot-watch-bvid" class="form-control" type="text" placeholder="输入 BV 号，如 BV1xx411c7mD">
+                        <input id="hotspot-watch-interval" class="form-control" type="number" min="60" placeholder="采样间隔(秒，可选)">
+                        <button class="btn btn-primary" type="button" onclick="submitHotspotWatch()">加入跟踪</button>
+                    </div>
+                    <div id="hotspot-watch-list"><p class="text-muted">加载中...</p></div>
+                </section>
+
                 <!-- 账号关联抽屉：遮罩 + 抽屉本体，内容由 app.hotspot.js 动态渲染 -->
                 <div id="hotspot-drawer-mask" class="hotspot-drawer-mask" onclick="closeHotspotDrawer()"></div>
                 <aside id="hotspot-drawer" class="hotspot-drawer" aria-label="账号关联抽屉"></aside>
@@ -736,5 +764,100 @@
 <script src="/static/js/app.auth.js?v=split-20260824"></script>
 <script src="/static/js/app.lottery.js?v=split-20260824-dq03"></script>
 <script src="/static/js/app.ui.js?v=split-20260824"></script>
+
+    <!-- 单视频跟踪（watch）区块的配套 JS：本批唯一新增脚本，内联在 index.html 内，
+         不改动 static/ 下任何既有脚本，也不改动上方任何既有结构。
+         三态（tracking/expired/released）与 state 字段由后端 classify_state 现算，
+         前端只做展示与筛选，不自行判断三态。 -->
+    <script>
+    // ===== 热点发现 · 单视频跟踪（watch）区块 =====
+    const HOTSPOT_WATCH_STATE_LABELS = {
+        tracking: '跟踪中',
+        expired: '已到期',
+        released: '已释放',
+    };
+
+    // 读取当前筛选状态；空字符串表示不筛选（后端默认返回全部）。
+    function hotspotWatchSelectedState() {
+        const select = document.getElementById('hotspot-watch-state');
+        return select ? select.value : '';
+    }
+
+    // 加载跟踪列表：按可选 state 过滤，交给 renderHotspotWatchList 渲染。
+    async function loadHotspotWatch() {
+        const container = document.getElementById('hotspot-watch-list');
+        if (!container) return;
+        const state = hotspotWatchSelectedState();
+        const query = state ? `?state=${encodeURIComponent(state)}` : '';
+        try {
+            const result = await apiRequest(`/hotspot/watch${query}`);
+            const payload = (result && result.data) || {};
+            renderHotspotWatchList(payload.items || [], payload);
+        } catch (error) {
+            container.innerHTML = `<p style="color:red;">加载跟踪列表失败: ${escapeHtml(error.message)}</p>`;
+        }
+    }
+
+    // 渲染跟踪列表：每行显示三态标签、bvid、失败计数、下次应采 epoch 与停追按钮。
+    function renderHotspotWatchList(items, meta) {
+        const container = document.getElementById('hotspot-watch-list');
+        if (!container) return;
+        if (!items.length) {
+            container.innerHTML = '<p class="text-muted">暂无跟踪目标。</p>';
+            return;
+        }
+        const rows = items.map(item => {
+            const label = HOTSPOT_WATCH_STATE_LABELS[item.state] || item.state;
+            const action = item.state === 'released'
+                ? '<span class="text-muted">已释放</span>'
+                : `<button class="btn" type="button" onclick="releaseHotspotWatch('${escapeHtml(item.bvid)}')">停止跟踪</button>`;
+            return `<div class="hotspot-watch-item">
+                <span class="hotspot-stage-pill">${escapeHtml(label)}</span>
+                <strong>${escapeHtml(item.bvid)}</strong>
+                <span class="hotspot-lifecycle-meta">失败 ${Number(item.failure_count) || 0} 次 · 下次应采 ${Number(item.next_due_epoch_s) || 0}</span>
+                ${action}
+            </div>`;
+        }).join('');
+        const total = (meta.total === undefined || meta.total === null) ? items.length : Number(meta.total);
+        container.innerHTML = `<p class="hotspot-lifecycle-meta">共 ${total} 条</p>${rows}`;
+    }
+
+    // 手动加入跟踪：bvid 必填、采样间隔可选（留空则走后端默认 3600）。
+    async function submitHotspotWatch() {
+        const bvidInput = document.getElementById('hotspot-watch-bvid');
+        const intervalInput = document.getElementById('hotspot-watch-interval');
+        const bvid = bvidInput ? bvidInput.value.trim() : '';
+        if (!bvid) {
+            showAppAlert('请输入 BV 号');
+            return;
+        }
+        const body = { bvid };
+        const interval = intervalInput ? Number(intervalInput.value) : NaN;
+        if (Number.isFinite(interval) && interval > 0) body.sample_interval_s = interval;
+        try {
+            await apiRequest('/hotspot/watch', { method: 'POST', body: JSON.stringify(body) });
+            if (bvidInput) bvidInput.value = '';
+            if (intervalInput) intervalInput.value = '';
+            await loadHotspotWatch();
+        } catch (error) {
+            showAppAlert(`加入跟踪失败: ${error.message}`);
+        }
+    }
+
+    // 手动停追：后端写 stop_reason='manual_stop' 并置为已释放。
+    async function releaseHotspotWatch(bvid) {
+        try {
+            await apiRequest(`/hotspot/watch/${encodeURIComponent(bvid)}/release`, { method: 'POST', body: '{}' });
+            await loadHotspotWatch();
+        } catch (error) {
+            showAppAlert(`停止跟踪失败: ${error.message}`);
+        }
+    }
+
+    // 首次加载时拉一次列表（与热点页其他区块同一时机，DOMContentLoaded）。
+    window.addEventListener('DOMContentLoaded', () => {
+        loadHotspotWatch();
+    });
+    </script>
 </body>
 </html>

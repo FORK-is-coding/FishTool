@@ -23,6 +23,7 @@ B站运营工具箱 - 数据库模型
 - Topic: 选题库表
 - HotspotSignal: 视频类热点信号表
 - HotKeywordSignal: 热搜关键词信号表（06 采集广度 · search/square）
+- HotspotWatch: 单视频持续跟踪表（02 单视频时序采样，2026-10-02 新增）
 
 五、活动情报域
 - Activity: 活动情报表
@@ -65,6 +66,7 @@ from .models_hotspot_signal import HotspotSignal, HotKeywordSignal
 from .models_system import Task, OperationLog, LLMUsage, MonitorState
 from .models_benchmark import BenchmarkRun
 from .models_quota import HttpQuotaBucket
+from .models_hotspot_watch import HotspotWatch
 from .manager import DatabaseManager
 from .api import init_database, get_session, get_db, db_manager
 
@@ -75,5 +77,6 @@ __all__ = [
     'HotKeywordSignal',
     'Task', 'OperationLog', 'LLMUsage', 'MonitorState', 'BenchmarkRun',
     'HttpQuotaBucket',
+    'HotspotWatch',
     'DatabaseManager', 'init_database', 'get_session', 'get_db', 'db_manager',
 ]

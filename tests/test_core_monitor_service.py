@@ -4,6 +4,7 @@
 - ResidentCommentMonitor.__init__ / _state / snapshot / _update
 - ResidentCommentMonitor.start / enable / pause / stop / shutdown
 - ResidentCommentMonitor._cookie_loop / _monitor_loop / _collect_targets
+- ResidentCommentMonitor 的 watch 常驻 task（默认关闭 · 单实例守卫 · shutdown 真停 · 惰性装配）
 
 测试策略：
 - 状态持久化使用 tmp_path 下真实 SQLite（MonitorState 表），不 Mock session。
@@ -571,3 +572,176 @@ def test_cookie_loop_breaks_on_stop_event(db, monkeypatch):
     asyncio.run(asyncio.wait_for(monitor._cookie_loop(), timeout=2))
     assert pool.checks == 1
     assert monitor.stop_event.is_set()
+
+
+# ---------------------------------------------------------------------------
+# watch 常驻 task（第 6 批收尾）：默认关闭 / 单实例守卫 / shutdown 真停 / 惰性装配
+# ---------------------------------------------------------------------------
+# 约定：用阻塞式协程替身模拟"存活中的 watch 循环"（立即返回的替身会真的结束，
+# 无法观察到 task_running=True 与单实例守卫）；全程不触网、不烧配额。
+
+
+def test_start_does_not_create_watch_task_by_default(db, monkeypatch):
+    """默认配置（未配 monitor.watch_enable）时 start 不拉起 watch 常驻循环。"""
+
+    async def _scenario():
+        """执行 start 并等待 Cookie 替身。"""
+        monitor = ResidentCommentMonitor(lambda: None, config=_FakeConfig())
+
+        async def _noop():
+            """立即返回的占位协程。"""
+            return None
+
+        monkeypatch.setattr(monitor, "_cookie_loop", _noop)
+        await monitor.start()
+        if monitor.cookie_task:
+            await monitor.cookie_task
+        return monitor
+
+    monitor = asyncio.run(_scenario())
+    assert monitor.watch_task is None
+    assert monitor.snapshot()["watch_task_running"] is False
+
+
+def test_start_creates_watch_task_when_enabled(db, monkeypatch):
+    """monitor.watch_enable=True 时 start 拉起 watch task，且 snapshot 报 watch_task_running=True。"""
+
+    async def _scenario():
+        """执行 start，观测 watch task 存活后再关闭。"""
+        monitor = ResidentCommentMonitor(lambda: None, config=_FakeConfig({"monitor.watch_enable": True}))
+        entered = asyncio.Event()
+
+        async def _blocking_watch():
+            """阻塞等待取消，模拟存活中的 watch 常驻循环。"""
+            entered.set()
+            await asyncio.sleep(3600)
+
+        async def _noop():
+            """立即返回的占位协程。"""
+            return None
+
+        monkeypatch.setattr(monitor, "_watch_loop", _blocking_watch)
+        monkeypatch.setattr(monitor, "_cookie_loop", _noop)
+        await monitor.start()
+        await entered.wait()
+        running = monitor.snapshot()["watch_task_running"]
+        task = monitor.watch_task
+        await monitor.shutdown()
+        return running, task
+
+    running, task = asyncio.run(_scenario())
+    assert running is True
+    assert task is not None
+    assert task.get_name() == "bili-watch"
+    assert task.done() is True
+
+
+def test_start_reuses_alive_watch_task(db, monkeypatch):
+    """重复 start 两次只保留一条 watch task（单实例守卫）。"""
+
+    async def _scenario():
+        """连续两次 start，比较 watch task 是否同一对象。"""
+        monitor = ResidentCommentMonitor(lambda: None, config=_FakeConfig({"monitor.watch_enable": True}))
+        entered = asyncio.Event()
+
+        async def _blocking_watch():
+            """阻塞等待取消。"""
+            entered.set()
+            await asyncio.sleep(3600)
+
+        async def _noop():
+            """立即返回的占位协程。"""
+            return None
+
+        monkeypatch.setattr(monitor, "_watch_loop", _blocking_watch)
+        monkeypatch.setattr(monitor, "_cookie_loop", _noop)
+        await monitor.start()
+        await entered.wait()
+        first = monitor.watch_task
+        await monitor.start()  # 已有存活 watch task → 应复用
+        second = monitor.watch_task
+        await monitor.shutdown()
+        return first is second
+
+    assert asyncio.run(_scenario()) is True
+
+
+def test_shutdown_cancels_watch_task(db, monkeypatch):
+    """shutdown 将 watch task 纳入统一 cancel + await：置 stop_event 且任务真结束。"""
+
+    async def _scenario():
+        """拉起阻塞 watch task 后 shutdown。"""
+        monitor = ResidentCommentMonitor(lambda: None, config=_FakeConfig({"monitor.watch_enable": True}))
+        entered = asyncio.Event()
+
+        async def _blocking_watch():
+            """阻塞等待取消。"""
+            entered.set()
+            await asyncio.sleep(3600)
+
+        monkeypatch.setattr(monitor, "_watch_loop", _blocking_watch)
+        monitor._ensure_watch_task()  # 不经 start，隔离 watch 启停本身
+        await entered.wait()
+        await monitor.shutdown()
+        return monitor.stop_event.is_set(), monitor.watch_task
+
+    is_set, task = asyncio.run(_scenario())
+    assert is_set is True
+    assert task.done() is True
+    assert task.cancelled() is True  # 以取消收尾：CancelledError 未被吞
+
+
+def test_shutdown_leaves_no_dangling_watch_task(db, monkeypatch):
+    """shutdown 后不留悬挂协程（无 pending task）。"""
+
+    async def _scenario():
+        """shutdown 后统计除当前协程外仍存活的 task。"""
+        monitor = ResidentCommentMonitor(lambda: None, config=_FakeConfig({"monitor.watch_enable": True}))
+        entered = asyncio.Event()
+
+        async def _blocking_watch():
+            """阻塞等待取消。"""
+            entered.set()
+            await asyncio.sleep(3600)
+
+        monkeypatch.setattr(monitor, "_watch_loop", _blocking_watch)
+        monitor._ensure_watch_task()
+        await entered.wait()
+        await monitor.shutdown()
+        current = asyncio.current_task()
+        return [t for t in asyncio.all_tasks() if t is not current and not t.done()]
+
+    assert asyncio.run(_scenario()) == []
+
+
+def test_default_config_never_builds_watch_service(db, monkeypatch):
+    """默认配置下 start()/shutdown() 都不装配 watch 服务：无任何路径拉起 watch 循环。"""
+    calls = []
+
+    def _factory():
+        """若被调用即记录并失败（惰性装配的反向断言）。"""
+        calls.append(1)
+        raise AssertionError("默认配置下不应构造 watch 服务")
+
+    async def _scenario():
+        """走完 start + shutdown 全流程。"""
+        monitor = ResidentCommentMonitor(
+            lambda: None, config=_FakeConfig(), watch_service_factory=_factory
+        )
+
+        async def _noop():
+            """立即返回的占位协程。"""
+            return None
+
+        monkeypatch.setattr(monitor, "_cookie_loop", _noop)
+        monkeypatch.setattr(monitor, "_monitor_loop", _noop)
+        await monitor.start()
+        if monitor.cookie_task:
+            await monitor.cookie_task
+        await monitor.shutdown()
+        return monitor
+
+    monitor = asyncio.run(_scenario())
+    assert calls == []  # 工厂从未被调用 → 未构造 watch 服务
+    assert monitor.watch_task is None
+    assert monitor.snapshot()["watch_task_running"] is False

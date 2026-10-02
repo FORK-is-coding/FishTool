@@ -24,6 +24,13 @@ from core.request_budget import RequestBudgetExceeded, before_http_attempt
 
 logger = get_logger(__name__)
 
+#: 凭证域取值域（与 core/quota_store 口径一致）。
+CREDENTIAL_DOMAIN_COOKIE = 'cookie'
+CREDENTIAL_DOMAIN_NO_COOKIE = 'no_cookie'
+
+#: nav（WBI 密钥）请求归入「账号维护」类别（规格 C9：cookie 校验 48 + wbi 刷新 24 = 72）。
+CATEGORY_MAINTENANCE = 'maintenance'
+
 
 class WBISigner:
     """WBI签名器 - 实现B站WBI签名算法
@@ -42,12 +49,16 @@ class WBISigner:
         36, 20, 34, 44, 52
     ]
     
-    def __init__(self):
+    def __init__(self, domain: str = CREDENTIAL_DOMAIN_COOKIE):
         """初始化 WBI 签名器，密钥初始为空，需先刷新
         # 设置初始值/默认状态，避免后续空引用
 
         通过 refresh_keys() 从 nav 接口获取密钥后再签名。
         # 读取数据并赋值给当前作用域变量
+
+        Args:
+            domain: 凭证域（cookie / no_cookie），由所属客户端注入；
+                nav 请求是一次真实 HTTP 尝试，需带域参与分域冷却判定。
         """
         # 两个基础密钥，从 nav 接口 wbi_img 字段提取
         # 从数据中取出目标字段，供后续逻辑使用
@@ -60,6 +71,8 @@ class WBISigner:
         self.last_update: Optional[datetime] = None
         # 密钥刷新间隔：1小时
         self.update_interval = timedelta(hours=1)  # WBI密钥刷新间隔
+        # 凭证域：由所属客户端注入，nav 请求按它参与分域冷却 / 配额判定。
+        self.domain = domain
     
     def get_mixin_key(self, orig: str) -> str:
         """对 imgKey 和 subKey 进行字符顺序打乱编码
@@ -147,7 +160,8 @@ class WBISigner:
             nav_url = 'https://api.bilibili.com/x/web-interface/nav'
             # 直接取 WBI 密钥是一次真实 HTTP 尝试，同样接预算钩子；
             # 经 client 走的已覆盖请求不会重复到这里。
-            before_http_attempt()
+            # 带凭证域 + 账号维护类别（C9：wbi 刷新 24/天）。
+            before_http_attempt(self.domain, CATEGORY_MAINTENANCE)
             # 上下文管理：确保资源自动释放
             async with session.get(nav_url) as resp:
                 # 边界/有效性检查

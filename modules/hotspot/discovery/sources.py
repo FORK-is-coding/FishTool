@@ -23,10 +23,15 @@
 
 配额（规格 §2.2 / §2.6）
 ------------------------
-- ``search/square`` 与 ``popular`` 走 ``domain=no_cookie``、``category=discovery``；
-- ``ranking/v2?rid=0`` 走 ``category=ranking``；
-- 域归属**运行期从 ``config/budget.yaml`` 读取**（``resolve_domain``），代码里不写死配额数字；
-- 每次真实 HTTP 尝试前调用 ``before_http_attempt`` 记账（可注入 ``budget_hook`` 便于离线测试）。
+06 是**免 Cookie 聚合通道**，三个入口的 ``(凭证域, 配额类别)`` 在本模块**显式声明**
+（不再依赖 ``config/budget.yaml`` 的域归属兜底 ``resolve_domain``）：
+
+- ``search/square``   -> ``(no_cookie, discovery)``
+- ``popular``         -> ``(no_cookie, discovery)``
+- ``ranking/v2?rid=0`` -> ``(no_cookie, ranking)``
+
+配额上限本身仍只从 ``config/budget.yaml`` 读取（代码里不写死配额数字）；
+每次真实 HTTP 尝试前调用 ``before_http_attempt`` 记账（可注入 ``budget_hook`` 便于离线测试）。
 """
 from __future__ import annotations
 
@@ -67,6 +72,13 @@ RANKING_REFERER = "https://www.bilibili.com/v/popular/rank/all"
 CATEGORY_DISCOVERY = "discovery"
 CATEGORY_RANKING = "ranking"
 
+#: 06 三个入口的 ``(凭证域, 配额类别)`` —— **显式声明**，不依赖 budget.yaml 的域归属兜底。
+#: 06 是免 Cookie 聚合通道，三个入口全部走 ``no_cookie`` 域；
+#: ``search/square`` 与 ``popular`` 计 ``discovery``（480 / 24h），
+#: ``ranking/v2?rid=0`` 计 ``ranking``。
+DISCOVERY_QUOTA = ("no_cookie", CATEGORY_DISCOVERY)
+RANKING_ALL_QUOTA = ("no_cookie", CATEGORY_RANKING)
+
 #: 类别 -> 缺省凭证域兜底（运行期优先读 budget.yaml 的 domain，不硬编码配额数字）。
 _DEFAULT_DOMAIN_BY_CATEGORY = {
     CATEGORY_DISCOVERY: "no_cookie",
@@ -83,7 +95,11 @@ _API_TRAILING_CODE_RE = re.compile(r"(-?\d+)\s*$")
 
 
 def resolve_domain(category: str) -> str:
-    """从 ``config/budget.yaml`` 读取类别所属凭证域。
+    """从 ``config/budget.yaml`` 读取类别所属凭证域（**06 通道已不再使用**）。
+
+    2026-10-02 批次起，06 三个入口的域在 :data:`DISCOVERY_QUOTA` /
+    :data:`RANKING_ALL_QUOTA` 里显式声明（规格要求「不得靠默认值蒙」）；
+    本函数保留是为兼容既有外部导入点，内部记账不再经过它。
 
     Args:
         category: 配额类别（``discovery`` / ``ranking``）。
@@ -132,6 +148,7 @@ async def _fetch_envelope(
     api: Any,
     url: str,
     params: Dict[str, Any],
+    domain: str,
     category: str,
     budget_hook: BudgetHook,
 ) -> Dict[str, Any]:
@@ -143,6 +160,7 @@ async def _fetch_envelope(
         api: B 站 API 客户端（含 ``get`` 方法）。
         url: 目标 URL。
         params: 查询参数。
+        domain: 凭证域（06 通道固定 ``no_cookie``）。
         category: 配额类别。
         budget_hook: 发送前记账钩子。
 
@@ -152,7 +170,7 @@ async def _fetch_envelope(
     Raises:
         RequestBudgetExceeded: 配额耗尽 / 超 deadline 时**原样抛出**（不是业务失败）。
     """
-    budget_hook(domain=resolve_domain(category), category=category)
+    budget_hook(domain=domain, category=category)
     try:
         data = await api.get(url, params=params)
         return {"code": 0, "message": "", "data": data}
@@ -182,7 +200,8 @@ async def fetch_hot_keywords(
         RequestBudgetExceeded: 配额耗尽时原样抛出。
     """
     return await _fetch_envelope(
-        api, SEARCH_SQUARE_URL, {"limit": int(limit)}, CATEGORY_DISCOVERY, budget_hook
+        api, SEARCH_SQUARE_URL, {"limit": int(limit)},
+        DISCOVERY_QUOTA[0], DISCOVERY_QUOTA[1], budget_hook,
     )
 
 
@@ -210,7 +229,8 @@ async def fetch_popular_page(
         RequestBudgetExceeded: 配额耗尽时原样抛出。
     """
     return await _fetch_envelope(
-        api, POPULAR_URL, {"ps": int(ps), "pn": max(1, int(page))}, CATEGORY_DISCOVERY, budget_hook
+        api, POPULAR_URL, {"ps": int(ps), "pn": max(1, int(page))},
+        DISCOVERY_QUOTA[0], DISCOVERY_QUOTA[1], budget_hook,
     )
 
 
@@ -259,7 +279,7 @@ async def fetch_ranking(
     Raises:
         RequestBudgetExceeded: 配额耗尽时原样抛出。
     """
-    budget_hook(domain=resolve_domain(CATEGORY_RANKING), category=CATEGORY_RANKING)
+    budget_hook(domain=RANKING_ALL_QUOTA[0], category=RANKING_ALL_QUOTA[1])
     try:
         data = await api.get(
             RANKING_URL,

@@ -47,5 +47,6 @@ from .routes_topics_generate import generate_topics
 from .routes_topic_library import get_topic_library, update_topic_status
 from .routes_status import check_llm_status
 from .routes_lifecycle import get_lifecycle, get_collect_progress
+from .routes_watch import list_watch, get_watch, create_watch, release_watch
 
 __all__ = ['router']

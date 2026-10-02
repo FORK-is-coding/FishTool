@@ -11,6 +11,11 @@
 - 另有一层**进程级**滚动配额（规格 §2.2 / §2.6）：计数落 SQLite（``http_quota_buckets``），
   进程重启不清零；只有调用方显式传入 ``domain`` / ``category`` 时才参与判定，
   **不传时行为与改造前完全一致**；运行时判定**只按分类硬上限**，总闸不参与运行时拦截；
+- 再有**风控兜底层**（规格 §2.4，落 SQLite ``domain_cooldown`` / ``http_risk_events`` /
+  ``ip_circuit_state``）：``before_http_attempt`` 的顺序是「任务内预算 → IP 级熔断 →
+  分域冷却 → 分类配额」；只传 ``domain`` 时只做熔断 / 冷却判定（免凭证通道的配额
+  由调用方在 sources 层显式记账，避免同一次请求被计两次）；IP 级熔断**只能人工清除**，
+  不做「到期自动恢复」；
 - 总闸（``global_limit``）是**配置校验**：加载 ``config/budget.yaml`` 时断言
   ``sum(各分类上限) <= 总闸``，越界即抛 ``QuotaConfigError``；**它不是运行时限制器**
   （五类封顶后合计够不到总闸，运行时判总闸是死分支，已删除）。
@@ -34,7 +39,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from time import monotonic, time
-from typing import Dict, Mapping, Optional, Tuple
+from typing import Dict, Mapping, Optional, Tuple, Union
 
 import yaml
 
@@ -345,7 +350,9 @@ def log_quota_usage(now: Optional[int] = None) -> Optional[str]:
 
 
 def before_http_attempt(domain: Optional[str] = None, category: Optional[str] = None):
-    """HTTP 发送前钩子：先任务内预算，再进程级滚动配额。
+    """HTTP 发送前钩子：任务内预算 → IP 级熔断 → 分域冷却 → 进程级滚动配额。
+
+    判定顺序（规格 §2.4）：**先查冷却、再查配额**；熔断/冷却命中即拒发。
 
     Args:
         domain: 凭证域（cookie / no_cookie）；缺省 ``None``。
@@ -356,16 +363,390 @@ def before_http_attempt(domain: Optional[str] = None, category: Optional[str] = 
 
     Raises:
         RequestBudgetExceeded: 任务内预算耗尽时由 ``AttemptBudget.before_send`` 抛出。
-        RequestQuotaExceeded: 进程级配额到顶或配额计数不可用时抛出。
+        RequestQuotaExceeded: 熔断（``ip:circuit_open``）/ 冷却（``domain:cooling``）/
+            状态不可用 / 进程级配额到顶时抛出。
 
     硬约束：
         **不传 domain / category 时（既有调用方）行为与改造前完全一致**——
-        只做任务内预算计数，不做配额拦截、不写配额表。
+        只做任务内预算计数，不做熔断 / 冷却 / 配额拦截、不写任何表。
+        只传 ``domain`` 不传 ``category`` 时：做熔断与分域冷却判定，**不记账配额**
+        （免凭证通道由调用方在 sources 层显式记账，避免同一次请求被计两次）。
     """
     budget = current_attempt_budget.get()
     if budget is not None:
         budget.before_send()
-    # 没有配额上下文（未声明域 / 类别）时不拦截：既有调用行为原样保留。
-    if domain is None or category is None:
+    # 完全没有域上下文（既有调用方）：整条链路一根不动，行为与改造前一致。
+    if domain is None:
+        return
+    _enforce_risk_gate(domain)
+    if category is None:
         return
     _enforce_quota(domain, category)
+
+
+# --------------------------------------------------------------------------
+# 风控兜底：IP 级熔断 + 分域冷却（规格 §2.4）
+# --------------------------------------------------------------------------
+
+#: 两域标识（与 ``config/budget.yaml`` 的 ``domains`` 段一致）。
+DOMAINS: Tuple[str, ...] = ('cookie', 'no_cookie')
+
+#: 参与风控统计的码：HTTP 412 / 403 与业务码 -412（请求被拦截）/ -352（风控校验失败）。
+RISK_CODES: Tuple[int, ...] = (412, 403, -412, -352)
+
+#: IP 级熔断的滑动窗长度（秒）与「每域最少事件数」。
+#: 这两个阈值规格 §2.4 有口径但账本未落字段，且本轮改动范围不含 ``config/budget.yaml``
+#: （既有测试断言该文件 ``domains`` / ``ip_circuit_breaker`` 的键集合固定），
+#: 因此以模块常量声明——它们不是「配额数字」，不参与总量统计。
+IP_BREAKER_WINDOW_S = 600
+IP_BREAKER_MIN_EVENTS_PER_DOMAIN = 3
+
+#: 「连续 N 次 412 起冷却翻倍」的阈值（规格 §2.4：15→30→60→120 分钟）。
+CONSECUTIVE_DOUBLE_THRESHOLD = 3
+
+#: 风控事件流水的保留时长（秒）：滑窗 10 分钟，留 1 小时足够回看。
+RISK_EVENT_RETENTION_S = 3600
+
+#: 账本不可用时的兜底冷却参数（宁严不松：绝不放行不等于放弃冷却）。
+FALLBACK_COOLDOWN_BASE_S = 900
+FALLBACK_COOLDOWN_MAX_S = 7200
+FALLBACK_IP_CIRCUIT_S = 3600
+
+
+@dataclass(frozen=True)
+class CooldownLimits:
+    """``config/budget.yaml`` 的冷却参数只读快照（冷却数字的唯一来源）。
+
+    Attributes:
+        domains: 域 -> 该域冷却参数（``cooldown_base_s`` / ``cooldown_max_s`` /
+            ``min_interval_s`` / ``max_concurrency``）。
+        ip_circuit_s: IP 级熔断的基准冷却秒数（规格：1 小时起）。
+    """
+
+    domains: Mapping[str, Mapping[str, int]]
+    ip_circuit_s: int
+
+    def base_of(self, domain: str) -> int:
+        """返回某域的单次 412 基准冷却秒数（缺字段时用兜底值）。
+
+        Args:
+            domain: 凭证域。
+
+        Returns:
+            int: 基准冷却秒数。
+        """
+        entry = self.domains.get(domain) or {}
+        return int(entry.get('cooldown_base_s', FALLBACK_COOLDOWN_BASE_S))
+
+    def max_of(self, domain: str) -> int:
+        """返回某域的冷却封顶秒数（缺字段时用兜底值）。
+
+        Args:
+            domain: 凭证域。
+
+        Returns:
+            int: 冷却封顶秒数。
+        """
+        entry = self.domains.get(domain) or {}
+        return int(entry.get('cooldown_max_s', FALLBACK_COOLDOWN_MAX_S))
+
+
+@lru_cache(maxsize=1)
+def load_cooldown_limits() -> Optional[CooldownLimits]:
+    """读取 ``config/budget.yaml`` 的 ``domains`` / ``ip_circuit_breaker`` 段（进程内缓存）。
+
+    与 :func:`load_quota_limits` 同一取舍：账本缺失 / 字段非法时返回 ``None``，
+    调用方退到兜底常量（保守方向），不在这里抛异常打断业务。
+
+    Returns:
+        CooldownLimits，或 None（冷却账本不可用）。
+    """
+    path = _budget_config_path()
+    try:
+        with path.open('r', encoding='utf-8') as handle:
+            raw = yaml.safe_load(handle) or {}
+        domains = raw.get('domains') or {}
+        ip_circuit = raw.get('ip_circuit_breaker') or {}
+        return CooldownLimits(
+            domains={str(name): dict(entry or {}) for name, entry in domains.items()},
+            ip_circuit_s=int(ip_circuit.get('cooldown_s', FALLBACK_IP_CIRCUIT_S)),
+        )
+    except Exception as exc:  # noqa: BLE001 - 冷却账本问题不打断业务，退兜底常量
+        logger.error('读取冷却账本失败（%s），使用兜底冷却参数: %r', path, exc)
+        return None
+
+
+def _now_epoch(now: Optional[Union[int, float]] = None) -> int:
+    """把「可选 epoch 秒」归一成 int。
+
+    Args:
+        now: 传入的 epoch 秒；``None`` 表示取当前时刻。
+
+    Returns:
+        int: epoch 秒。
+    """
+    return int(now if now is not None else time())
+
+
+def _cooldown_bounds(domain: str) -> Tuple[int, int]:
+    """返回某域的 ``(基准冷却秒, 封顶冷却秒)``。
+
+    Args:
+        domain: 凭证域。
+
+    Returns:
+        Tuple[int, int]: 冷却界限；账本不可用时退兜底常量。
+    """
+    limits = load_cooldown_limits()
+    if limits is None:
+        return FALLBACK_COOLDOWN_BASE_S, FALLBACK_COOLDOWN_MAX_S
+    return limits.base_of(domain), limits.max_of(domain)
+
+
+def _enforce_risk_gate(domain: str) -> None:
+    """判定 IP 级熔断与分域冷却；命中即拒发（规格 §2.4）。
+
+    Args:
+        domain: 凭证域。
+
+    Returns:
+        无（通过时本次请求可继续走配额判定）。
+
+    Raises:
+        RequestQuotaExceeded: 熔断开启（``ip:circuit_open``）、该域冷却中
+            （``domain:cooling``），或状态读取不可用（保守拒发）。
+    """
+    from core import quota_store
+
+    try:
+        circuit = quota_store.get_ip_circuit()
+    except Exception as exc:  # noqa: BLE001 - 读失败按保守方向拒发，绝不放行
+        logger.error('IP 级熔断状态读取不可用，按保守方向拒发: %r', exc)
+        raise RequestQuotaExceeded('ip_circuit_unavailable') from exc
+    if circuit is not None:
+        # 熔断只能人工清除（见 clear_ip_circuit），不做「到期自动恢复」。
+        raise RequestQuotaExceeded('ip:circuit_open')
+
+    try:
+        cooldown = quota_store.get_domain_cooldown(domain)
+    except Exception as exc:  # noqa: BLE001 - 读失败按保守方向拒发
+        logger.error('分域冷却状态读取不可用，按保守方向拒发 domain=%s: %r', domain, exc)
+        raise RequestQuotaExceeded('domain_cooldown_unavailable') from exc
+    if cooldown is not None and int(cooldown[0]) > _now_epoch():
+        raise RequestQuotaExceeded('domain:cooling')
+
+
+def _maybe_open_ip_circuit(moment: int) -> bool:
+    """按滑动窗判定是否置开 IP 级熔断（两域各自 >= 3 次风控）。
+
+    Args:
+        moment: 当前 epoch 秒。
+
+    Returns:
+        bool: 本次是否触发了熔断。
+    """
+    from core import quota_store
+
+    limits = load_cooldown_limits()
+    circuit_s = limits.ip_circuit_s if limits is not None else FALLBACK_IP_CIRCUIT_S
+    since = moment - IP_BREAKER_WINDOW_S
+    hits = {
+        domain: quota_store.count_risk_events(domain, since_epoch=since, codes=RISK_CODES)
+        for domain in DOMAINS
+    }
+    if all(count >= IP_BREAKER_MIN_EVENTS_PER_DOMAIN for count in hits.values()):
+        quota_store.open_ip_circuit(
+            cooldown_until_epoch=moment + circuit_s,
+            reason=(
+                f'两域在 {IP_BREAKER_WINDOW_S}s 窗口内各自 >= '
+                f'{IP_BREAKER_MIN_EVENTS_PER_DOMAIN} 次风控: {hits}'
+            ),
+            now=moment,
+        )
+        logger.error('IP 级熔断触发，全局停采（需人工清除）: %s', hits)
+        return True
+    return False
+
+
+def _report_risk(domain: str, code: int, *, now: Optional[Union[int, float]] = None) -> None:
+    """记录一次风控并推进该域冷却（内部统一实现）。
+
+    Args:
+        domain: 凭证域。
+        code: 风控码（正数 HTTP 状态码 / 负数业务码）。
+        now: 当前 epoch 秒；缺省取当前时刻。
+
+    Returns:
+        无。**上报失败只记日志、不抛异常**——调用点正在抛原始风控异常，
+        不能被上报异常覆盖；写失败会让随后的冷却读取同样失败，从而按保守方向拒发。
+    """
+    from core import quota_store
+
+    moment = _now_epoch(now)
+    try:
+        base, cap = _cooldown_bounds(domain)
+        current = quota_store.get_domain_cooldown(domain)
+        consecutive = (int(current[1]) if current is not None else 0) + 1
+        # 连续 3 次起翻倍：15 -> 30 -> 60 -> 120（封顶 2 小时）。
+        if consecutive >= CONSECUTIVE_DOUBLE_THRESHOLD:
+            duration = min(base * (2 ** (consecutive - CONSECUTIVE_DOUBLE_THRESHOLD + 1)), cap)
+        else:
+            duration = base
+        until = moment + int(duration)
+        if current is not None:
+            # 不缩短既有的恢复时刻（429 可能已把该域推到更晚）。
+            until = max(until, int(current[0]))
+        quota_store.set_domain_cooldown(
+            domain, cooldown_until_epoch=until, consecutive_412=consecutive, now=moment
+        )
+        quota_store.record_risk_event(domain, int(code), moment)
+        quota_store.prune_risk_events(before_epoch=moment - RISK_EVENT_RETENTION_S)
+        _maybe_open_ip_circuit(moment)
+    except Exception as exc:  # noqa: BLE001 - 上报失败不得覆盖原始风控异常
+        logger.error('风控上报失败（不影响原始异常）domain=%s code=%s: %r', domain, code, exc)
+
+
+def report_http_risk(
+    domain: str,
+    status_code: int,
+    *,
+    category: Optional[str] = None,
+    now: Optional[Union[int, float]] = None,
+) -> None:
+    """上报一次 HTTP 层风控状态码（412 反爬拦截 / 403 拒绝）。
+
+    Args:
+        domain: 凭证域（由发起请求的客户端携带）。
+        status_code: HTTP 状态码（412 / 403）。
+        category: 配额类别（仅作日志可观测，不参与判定）。
+        now: 当前 epoch 秒；缺省取当前时刻。
+
+    Returns:
+        无。
+    """
+    logger.warning('上报 HTTP 风控 %s domain=%s category=%s', status_code, domain, category)
+    _report_risk(domain, int(status_code), now=now)
+
+
+def report_http_412(domain: str, *, category: Optional[str] = None, now: Optional[Union[int, float]] = None) -> None:
+    """上报一次 HTTP 412 反爬拦截（client 的 HTTP 412 分支调用）。
+
+    Args:
+        domain: 凭证域（由发起请求的客户端携带）。
+        category: 配额类别（仅作日志可观测，不参与判定）。
+        now: 当前 epoch 秒；缺省取当前时刻。
+
+    Returns:
+        无。
+    """
+    report_http_risk(domain, 412, category=category, now=now)
+
+
+def report_business_risk_code(
+    domain: str,
+    code: int,
+    *,
+    category: Optional[str] = None,
+    now: Optional[Union[int, float]] = None,
+) -> None:
+    """上报一次业务风控码（-352 风控校验失败 / -412 请求被拦截）。
+
+    Args:
+        domain: 凭证域。
+        code: 业务码（-352 / -412，也容忍其它负码）。
+        category: 配额类别（仅作日志可观测）。
+        now: 当前 epoch 秒；缺省取当前时刻。
+
+    Returns:
+        无。
+    """
+    logger.warning('上报业务风控码 %s domain=%s category=%s', code, domain, category)
+    _report_risk(domain, int(code), now=now)
+
+
+def report_status_429(domain: str, retry_after_s: Union[int, float], *, now: Optional[Union[int, float]] = None) -> None:
+    """上报一次 429：按恢复时刻取该域共享的较晚者（规格 §2.4）。
+
+    429 **不动** ``consecutive_412``（它不是 412，不参与翻倍）。
+
+    Args:
+        domain: 凭证域。
+        retry_after_s: 本次建议的等待秒数（响应头 ``Retry-After`` 或限频器给出）。
+        now: 当前 epoch 秒；缺省取当前时刻。
+
+    Returns:
+        无；写失败只记日志。
+    """
+    from core import quota_store
+
+    moment = _now_epoch(now)
+    try:
+        quota_store.extend_domain_cooldown(
+            domain,
+            cooldown_until_epoch=moment + max(0, int(retry_after_s)),
+            now=moment,
+        )
+    except Exception as exc:  # noqa: BLE001 - 上报失败不得覆盖原始限流异常
+        logger.error('429 上报失败 domain=%s retry_after=%s: %r', domain, retry_after_s, exc)
+
+
+def report_http_success(domain: str, *, now: Optional[Union[int, float]] = None) -> bool:
+    """上报一次成功请求；**仅当冷却期满后的首次成功**才清零连续 412 计数。
+
+    规格 §2.4 硬约束：不得冷却一结束就重置，否则「连续三次翻倍」永不触发。
+
+    Args:
+        domain: 凭证域。
+        now: 当前 epoch 秒；缺省取当前时刻。
+
+    Returns:
+        bool: 本次是否发生了清零。
+    """
+    from core import quota_store
+
+    moment = _now_epoch(now)
+    try:
+        current = quota_store.get_domain_cooldown(domain)
+        if current is None:
+            return False
+        until, consecutive = int(current[0]), int(current[1])
+        if consecutive > 0 and moment >= until:
+            quota_store.reset_domain_consecutive(domain, now=moment)
+            logger.info('冷却期满后首次成功，清零连续 412 计数 domain=%s', domain)
+            return True
+        return False
+    except Exception as exc:  # noqa: BLE001 - 清零失败不影响本次请求
+        logger.error('连续 412 计数清零失败 domain=%s: %r', domain, exc)
+        return False
+
+
+def ip_circuit_open() -> bool:
+    """查询 IP 级熔断是否处于开启状态（可观测 / 运维用）。
+
+    Returns:
+        bool: 熔断行存在即视为开启；读取失败按保守方向当作「开启」。
+    """
+    from core import quota_store
+
+    try:
+        return quota_store.get_ip_circuit() is not None
+    except Exception as exc:  # noqa: BLE001
+        logger.error('IP 级熔断状态查询失败，按保守方向视为开启: %r', exc)
+        return True
+
+
+def clear_ip_circuit() -> bool:
+    """**人工确认后**清除 IP 级熔断（唯一解除途径，不自动恢复）。
+
+    Returns:
+        bool: 是否真的清掉了一行熔断状态。
+
+    Raises:
+        Exception: 数据库不可用时原样抛出（清除失败必须让人看到）。
+    """
+    from core import quota_store
+
+    cleared = quota_store.clear_ip_circuit()
+    if cleared:
+        logger.warning('人工清除 IP 级熔断，全局停采解除')
+    return cleared

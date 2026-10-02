@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import random
@@ -558,6 +559,7 @@ async def run_discovery_loop(
     jitter_ratio: float = 0.1,
     backoff_base_s: int = 60,
     backoff_max_s: int = 1800,
+    on_snapshot: Optional[Callable[[DiscoveryService], Any]] = None,
 ) -> None:
     """发现通道低频调度循环（接调度入口）。
 
@@ -573,7 +575,10 @@ async def run_discovery_loop(
         - ``stop_event`` 置位即退出；``CancelledError`` 原样上抛（不吞取消）；
         - 单轮失败按指数退避重试，封顶 ``backoff_max_s``；
         - 正常运行间隔叠加 ``jitter_ratio`` 抖动，降低被风控识别的概率；
-        - 三入口**共享一轮 poll**（``poll_once`` 内部已用共享缓存），不会每轮重复发。
+        - 三入口**共享一轮 poll**（``poll_once`` 内部已用共享缓存），不会每轮重复发；
+        - ``on_snapshot`` 每轮 poll 成功后调用一次（可等待返回值则 ``await``，sync 回调直接调用）；
+          回调自身抛异常走本循环既有的 ``except Exception`` + 指数退避策略，不静默吞掉、
+          也不打死常驻循环；**不传时行为与既有完全一致**。
 
     Args:
         service: 已构造的发现服务。
@@ -582,6 +587,8 @@ async def run_discovery_loop(
         jitter_ratio: 间隔抖动比例。
         backoff_base_s: 失败退避基数（秒）。
         backoff_max_s: 失败退避上限（秒）。
+        on_snapshot: 每轮 poll 成功后的回调，入参为本服务实例（便于回调侧读
+            ``iter_video_candidates()`` 等内存结果）；``None``（默认）时不回调。
 
     Returns:
         无（循环直至停止或取消）。
@@ -599,6 +606,10 @@ async def run_discovery_loop(
                 snapshot.get("keyword_count"),
                 snapshot.get("video_count"),
             )
+            if on_snapshot is not None:
+                # 回调放在 poll 成功之后、退避结算之前：回调异常会落到本循环既有的
+                # except Exception 分支按指数退避处理（logger.warning 留痕，不静默吞掉）。
+                await _dispatch_on_snapshot(on_snapshot, service)
             delay = max(1, int(interval_s)) * (1 + random.uniform(0, max(0.0, jitter_ratio)))
         except asyncio.CancelledError:
             raise
@@ -610,3 +621,30 @@ async def run_discovery_loop(
             await asyncio.wait_for(stop_event.wait(), timeout=delay)
         except asyncio.TimeoutError:
             continue
+
+
+async def _dispatch_on_snapshot(
+    on_snapshot: Callable[[DiscoveryService], Any],
+    service: DiscoveryService,
+) -> None:
+    """调用一轮发现快照回调：sync 回调直接调，async 回调（返回可等待对象）则 await。
+
+    为什么两种都接：``run_discovery_loop`` 是通用调度入口，集成方可能给同步函数
+    （如纯内存入池装配），也可能是需要 await 的协程函数（如要开/关会话的入池流程）；
+    统一用 ``inspect.isawaitable`` 判定，不强迫调用方包一层 ``create_task``，
+    也避免 sync 回调被误 await。
+
+    异常策略：**本函数不吞异常**。回调抛出的异常原样上抛给 ``run_discovery_loop``，
+    由该循环既有的 ``except Exception`` 分支按指数退避处理并 ``logger.warning`` 留痕，
+    保证回调失败不会打死常驻循环、也不会被静默忽略。
+
+    Args:
+        on_snapshot: 回调可调用对象；入参为本轮发现服务实例。
+        service: 本轮完成 poll 的发现服务实例。
+
+    Returns:
+        无。
+    """
+    result = on_snapshot(service)
+    if inspect.isawaitable(result):
+        await result
