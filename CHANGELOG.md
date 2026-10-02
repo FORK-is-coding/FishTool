@@ -8,6 +8,87 @@
 > **v0.2.2 之前未逐条记录。** 更早版本只保留 tag：
 > v0.1.0 / v0.2.0 / v0.2.1
 
+## [0.2.4] - 2026-10-02
+
+**主题：02 单视频时序跟踪上线；06 发现通道接通常驻调度与 watch 候选入池。**
+
+这一版把「发现 → 跟踪」串成闭环：06 的聚合入口广度发现接入常驻调度，其中
+`popular` / `ranking_all` 的条目自动成为 watch 候选；02 侧补齐单视频时序采样的
+算法、落库、编排、Web 端点与常驻循环。两条新增常驻任务**默认关闭**，
+不显式配置则不会采样、不会占用配额，行为与上一版完全一致。
+
+### 新增
+
+**02 · 单视频时序跟踪**
+
+- **`modules/hotspot/watch_service.py`** —— 编排层。一轮 tick 顺序为
+  先清 → 捞 → 领 → 采 → 评 → 写 → 排；同一轮单目标只有一条事务，任一步失败即
+  rollback 并计入失败隔离
+- **`modules/hotspot/watch_store.py`** —— watch 表读写；`upsert_watch` 幂等，
+  已存在的目标不被重置
+- **`core/database/models_hotspot_watch.py`** —— `hotspot_watch` 表
+- **`modules/hotspot/algorithm/lifecycle_v2.py`** —— 单视频时序判定算法
+- **`web/routers/hotspot/routes_watch.py`** —— `GET /watch`、`GET /watch/{bvid}`、
+  `POST /watch`、`POST /watch/{bvid}/release`
+- **前端 `index.html`** —— watch 管理区块（列表 / 三态筛选 / 新增 / 释放）
+
+**06 · 接线**
+
+- **`modules/hotspot/discovery/watch_ingest.py`** —— 候选入 watch 池的桥接层，
+  只吃 `popular` / `ranking_all` 两个来源；读的是内存结果，**不发 HTTP**
+
+### 变更
+
+- **`modules/hotspot/algorithm/base.py`** —— `Detection` 新增 `metadata` 通道，
+  与约定「仅数值或 None」的 `metrics` 分离，二者键集互斥
+- **`modules/hotspot/algorithm/lifecycle_v2.py`** —— `coverage_state` 移出 `metrics`，
+  与 `confidence_kind` 一并走 `metadata`；自此 `metrics` 为**纯数值通道**
+- **`modules/hotspot/discovery/service.py`** —— `run_discovery_loop` 新增 `on_snapshot`
+  回调（sync / async 均支持；不传则行为与改动前逐字一致）；`list_keyword_candidates()`
+  未动
+- **`core/monitor_service.py`** —— 常驻任务扩至 4 条
+
+### 常驻任务与开关
+
+| 任务 | task 名 | 开关 | 默认 |
+| --- | --- | --- | --- |
+| 评论增量采集 | `bili-comment-monitor` | `monitor.enable` | 关 |
+| Cookie 巡检 | `bili-cookie-check` | 无（总是起） | — |
+| watch 时序采样 | `bili-watch` | `monitor.watch_enable` | **关** |
+| 发现轮询 | `bili-discovery` | `monitor.discovery_enable` | **关** |
+
+入池不快照 discovery 单独开关：它不发请求、不花钱，跟着 `discovery_enable` 走；
+真正花钱的采样由 `monitor.watch_enable` 单独把关，两个开关职责不重叠。
+
+### 指标口径
+
+- `confidence_kind` 与 `coverage_state` 属非数值项，走 `Detection.metadata`，
+  不得写进 `metrics`（`metrics` 全键皆为数值或 `None`，前端可直接绘图）
+- watch 三态 `active` / `expired` / `manual_stop`：手动停追只由 release 端点写
+  `manual_stop`，与自动到期分离
+- fencing 用 `state_revision` 当代际：写回代际不匹配即丢弃，不写任何列
+
+### 验证
+
+- 全量测试 **1871 passed / 1 skipped / 0 failed**
+- `on_snapshot` 不传时行为与改动前逐字一致（有对照用例）
+- 候选入池零 HTTP（有测试钉死）
+- 默认配置下无任何路径拉起 watch / discovery 循环（各有反向用例兜底）
+
+### 尚未验证
+
+- **06 → 04 的消费接口仍未接线** —— `DiscoveryService.list_keyword_candidates()`
+  已备好但零调用点，接 04 需改动 04 代码。
+  即 v0.2.3 记的「06 与 04 的消费接口尚未接线」在本版收掉一半：**06 → 02 已接**
+- 真实 B 站接口 —— 本版测试全程 stub
+- watch 循环实盘节奏 —— 未跑满 24h 观察 `watch` 类配额 1000 的实际占用
+
+### 发布说明
+
+- 两条新增常驻任务均默认关闭；不配置则行为与本版之前完全一致
+- 新增 `hotspot_watch` 表，`manager.py` 幂等建表，旧库可原地升级；历史数据不回改
+- 回滚只需关掉 `monitor.watch_enable` / `monitor.discovery_enable`，或切回旧界面
+
 ## [0.2.3] - 2026-10-02
 
 **主题：配额账本落地（唯一账本 + 总闸挪位）与 06 采集广度发现通道；另含 01 排名方案 A。**
@@ -178,3 +259,4 @@
 
 [0.2.2]: https://github.com/FORK-is-coding/FishTool/compare/v0.2.1...v0.2.2
 [0.2.3]: https://github.com/FORK-is-coding/FishTool/compare/v0.2.2...v0.2.3
+[0.2.4]: https://github.com/FORK-is-coding/FishTool/compare/v0.2.3...v0.2.4
