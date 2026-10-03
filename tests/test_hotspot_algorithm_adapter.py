@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 import pytest
@@ -138,6 +139,7 @@ def test_detection_to_dto_exports_all_keys() -> None:
         "stage": "上升期",
         "confidence": 0.42,
         "metrics": {"percentile": 88.0},
+        "metadata": {},
         "explain": "解释文本",
         "algorithm_version": "heuristic_v1",
     }
@@ -150,5 +152,27 @@ def test_detection_to_dto_keeps_defaults() -> None:
     assert dto["title"] == ""
     assert dto["tid"] == 0
     assert dto["metrics"] == {}
+    assert dto["metadata"] == {}
     assert dto["explain"] == ""
     assert dto["algorithm_version"] == ""
+
+
+def test_detection_to_dto_passes_through_metadata() -> None:
+    """metadata 通道应原样透传（confidence_kind / coverage_state），且与 metrics 键集互斥。"""
+    detection = Detection(
+        bvid="BV3",
+        stage="上升期",
+        confidence=0.0,
+        metrics={"coverage_ratio": 0.92},
+        metadata={"confidence_kind": "not_estimated", "coverage_state": "provisional"},
+        algorithm_version="lifecycle_v2",
+    )
+
+    dto = detection_to_dto(detection)
+
+    assert dto["metadata"] == {"confidence_kind": "not_estimated", "coverage_state": "provisional"}
+    # 键集互斥：非数值项不得混入 metrics，数值项不得混入 metadata。
+    assert "coverage_state" not in dto["metrics"]
+    assert "coverage_ratio" not in dto["metadata"]
+    # DTO 需经 HTTP 下发给展示层，必须可 JSON 序列化。
+    json.dumps(dto)

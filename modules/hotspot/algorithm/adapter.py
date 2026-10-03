@@ -18,5 +18,10 @@ def snapshot_from_mapping(data: dict[str, Any]) -> Snapshot:
 
 
 def detection_to_dto(detection: Detection) -> dict[str, Any]:
-    """将统一 Detection 转为稳定的 JSON 展示 DTO。"""
-    return {"bvid": detection.bvid, "title": detection.title, "tid": detection.tid, "owner_mid": detection.owner_mid, "owner_name": detection.owner_name, "stage": detection.stage, "confidence": detection.confidence, "metrics": detection.metrics, "explain": detection.explain, "algorithm_version": detection.algorithm_version}
+    """将统一 Detection 转为稳定的 JSON 展示 DTO。
+
+    metadata 为与仅数值 ``metrics`` 互斥的非数值项通道（confidence_kind / coverage_state）；
+    v1 Detection 无该通道时其默认为 ``{}``，此处统一浅拷贝为 dict（恒非 None），保证 JSON
+    可序列化，消费端无需额外 null 分支。
+    """
+    return {"bvid": detection.bvid, "title": detection.title, "tid": detection.tid, "owner_mid": detection.owner_mid, "owner_name": detection.owner_name, "stage": detection.stage, "confidence": detection.confidence, "metrics": detection.metrics, "metadata": dict(detection.metadata or {}), "explain": detection.explain, "algorithm_version": detection.algorithm_version}
