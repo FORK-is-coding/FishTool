@@ -206,11 +206,64 @@ function hotspotMetricBadges(owner) {
     return parts.length ? `<span class="hotspot-metric-badges">${parts.join('')}</span>` : '';
 }
 
+// 有效观测单位：v2 用 observed_windows（观测窗数），v1 用 observed_days/days（采集日数）。
+// 两套键集互不重叠，统一收敛成「有多少个有效观测单位」，< 2 时任何趋势结论都不可靠。
+function hotspotObservationUnits(item) {
+    const metrics = item.metrics || {};
+    const units = metrics.observed_windows ?? metrics.observed_days ?? metrics.days ?? 0;
+    const value = Number(units);
+    return isFinite(value) ? value : 0;
+}
+
+// 置信度展示：本批 confidence 不真算 —— v2 恒为 0.0 / confidence_kind='not_estimated'，
+// 直接显示「未估算」而非误导性的 0%。confidence_kind 经 DTO.metadata 透传（adapter 已补齐）；
+// 旧数据缺该通道时按 algorithm_version 等价兜底（v2 的 kind 恒为 not_estimated）。
+function hotspotConfidenceText(item) {
+    const kind = (item.metadata || {}).confidence_kind;
+    const isV2 = item.algorithm_version === 'lifecycle_v2';
+    if (kind === 'not_estimated' || (kind === undefined && isV2)) return '未估算';
+    return `${Math.round((Number(item.confidence) || 0) * 100)}%`;
+}
+
+// coverage 覆盖级别文案：取值来源唯一是 Detection.metadata.coverage_state（lifecycle_v2 枚举），
+// 与算法层 CoverageState._COVERAGE_LABELS 对齐。v1 无该通道或遇未知值时返回空串，
+// 由调用方决定不加标签，避免把「缺失」误显示成某一档。
+const HOTSPOT_COVERAGE_LABELS = {
+    full_support: '完整支撑',
+    provisional: '暂定观察',
+    insufficient: '覆盖不足',
+};
+
+function hotspotCoverageStateText(item) {
+    return HOTSPOT_COVERAGE_LABELS[(item.metadata || {}).coverage_state] || '';
+}
+
+// 卡片指标视图模型：v1 与 v2 的 metrics 键集完全不同，按 algorithm_version 分流取键，
+// 避免 v2 卡片在 v1 的键上大面积退化成 0 /「数据不足」。
+function hotspotCardViewModel(item) {
+    const metrics = item.metrics || {};
+    if (item.algorithm_version === 'lifecycle_v2') {
+        return {
+            rateLabel: '相对变化',
+            rateText: formatPercent(metrics.relative_change),
+            coverageText: formatPercent(metrics.coverage_ratio),
+            observedText: `${Number(metrics.observed_windows) || 0} 个观测窗`,
+            samplesText: `${Number(metrics.sample_count) || 0} 次快照`,
+        };
+    }
+    return {
+        rateLabel: '增速',
+        rateText: formatPercent(metrics.growth),
+        upText: `${Number(metrics.up_count) || 0}`,
+        observedText: `${Number(metrics.observed_days ?? metrics.days) || 0} 个采集日`,
+        spanText: `${Number(metrics.window_span_days || 0).toFixed(2)} 天`,
+    };
+}
+
 // 卡片趋势徽标：与抽屉增长判定联动。上升期/出现期嵌▲，衰退期嵌▼；数据不足不误导。
 function hotspotTrendBadges(item) {
     const stage = item.stage || '';
-    const observedDays = Number(item.metrics?.observed_days ?? item.metrics?.days ?? 0);
-    if (observedDays < 2) return '';
+    if (hotspotObservationUnits(item) < 2) return '';
     if (stage === '衰退期') {
         return '<span class="hotspot-trend-badge hotspot-trend-down" title="下滑">▼</span>';
     }
@@ -220,6 +273,53 @@ function hotspotTrendBadges(item) {
     return '';
 }
 
+// ============ 生命周期算法开关（会话级记忆，不引入后端配置项） ============
+
+// 可选算法口径：lifecycle_v2 为本批新默认，heuristic_v1 保留作对照回放。
+const HOTSPOT_ALGORITHM_DEFAULT = 'lifecycle_v2';
+const HOTSPOT_ALGORITHM_OPTIONS = ['lifecycle_v2', 'heuristic_v1'];
+const HOTSPOT_ALGORITHM_KEY = 'fishtool.hotspot.algorithm';
+// sessionStorage 在隐私模式 / 被禁用时会抛错，故保留内存兜底，保证开关始终可用。
+let hotspotAlgorithmMemory = null;
+
+// 读取当前算法口径：内存兜底 -> 会话存储 -> 默认，非法值一律回落默认。
+function hotspotReadAlgorithm() {
+    if (HOTSPOT_ALGORITHM_OPTIONS.includes(hotspotAlgorithmMemory)) return hotspotAlgorithmMemory;
+    let stored = null;
+    try {
+        stored = window.sessionStorage ? window.sessionStorage.getItem(HOTSPOT_ALGORITHM_KEY) : null;
+    } catch (error) {
+        stored = null;  // 存储不可用：静默降级，仅内存生效
+    }
+    return HOTSPOT_ALGORITHM_OPTIONS.includes(stored) ? stored : HOTSPOT_ALGORITHM_DEFAULT;
+}
+
+// 写入算法口径：会话级持久化；存储不可用时仍写内存兜底。
+function hotspotWriteAlgorithm(value) {
+    if (!HOTSPOT_ALGORITHM_OPTIONS.includes(value)) return;
+    hotspotAlgorithmMemory = value;
+    try {
+        if (window.sessionStorage) window.sessionStorage.setItem(HOTSPOT_ALGORITHM_KEY, value);
+    } catch (error) {
+        // 忽略：持久化失败不影响本次切换
+    }
+}
+
+// 初始化算法下拉并绑定「切换即重新拉取」。
+function initHotspotAlgorithmSelect() {
+    const select = document.getElementById('hotspot-algorithm-select');
+    if (!select) return;
+    select.value = hotspotReadAlgorithm();
+    select.addEventListener('change', () => {
+        hotspotWriteAlgorithm(select.value);
+        loadHotspotLifecycle();
+    });
+}
+
+// 页面就绪后绑定（与 app.ui.js 的 DOMContentLoaded 各自独立，顺序无关：
+// 请求口径读的是 hotspotReadAlgorithm()，不依赖 DOM 当前值）。
+window.addEventListener('DOMContentLoaded', initHotspotAlgorithmSelect);
+
 // 生命周期卡片只消费统一 Detection DTO，并轮询采集进度。
 // 卡片支持：点击标题区展开时间轴、UP 数/增速展示、账号抽屉入口。
 async function loadHotspotLifecycle() {
@@ -227,10 +327,20 @@ async function loadHotspotLifecycle() {
     if (!grid) return;
     try {
         const tid = Number(document.getElementById('hotspot-tid-select')?.value || 1008);
-        const result = await apiRequest(`/hotspot/lifecycle?tid=${tid}`);
+        const algorithm = hotspotReadAlgorithm();
+        const result = await apiRequest(`/hotspot/lifecycle?tid=${tid}&algorithm=${encodeURIComponent(algorithm)}`);
         const items = (result.data || {}).items || [];
         document.getElementById('hotspot-algorithm-version').textContent = `算法 ${result.data.algorithm_version}`;
-        grid.innerHTML = items.length ? items.slice(0, 20).map(item => `
+        grid.innerHTML = items.length ? items.slice(0, 20).map(item => {
+            const vm = hotspotCardViewModel(item);
+            // 覆盖级别文案来自 metadata.coverage_state；缺失时留空，不显示空括号。
+            const coverageLabel = hotspotCoverageStateText(item);
+            // 指标行按算法分流：v1 的 growth/up_count/采集日 与 v2 的 relative_change/
+            // coverage_ratio/观测窗 键集不同，混用会大面积退化成 0 与「数据不足」。
+            const metricsLine = item.algorithm_version === 'lifecycle_v2'
+                ? `<p class="hotspot-lifecycle-meta">窗口覆盖 ${vm.coverageText}${coverageLabel ? '（' + coverageLabel + '）' : ''} · ${vm.observedText} · ${vm.samplesText}</p>`
+                : `<p class="hotspot-lifecycle-meta">参与UP数 <span class="hotspot-up-count">${vm.upText}</span> · ${vm.observedText} · 实际跨度 ${vm.spanText}</p>`;
+            return `
             <article class="hotspot-lifecycle-card">
                 <div class="hotspot-card-title-row" onclick="loadHotspotTimeline('${escapeHtml(item.bvid)}', this)">
                     <h3>${escapeHtml(item.title || item.bvid)}</h3>
@@ -238,13 +348,14 @@ async function loadHotspotLifecycle() {
                     ${hotspotMetricBadges(item.owner_metrics)}
                 </div>
                 <p class="hotspot-lifecycle-meta">${escapeHtml(item.explain)}</p>
-                <p class="hotspot-lifecycle-meta">置信度 <span class="hotspot-confidence">${Math.round((item.confidence || 0) * 100)}%</span> · 增速 ${formatPercent(item.metrics?.growth)}</p>
-                <p class="hotspot-lifecycle-meta">参与UP数 <span class="hotspot-up-count">${item.metrics?.up_count ?? 0}</span> · ${item.metrics?.observed_days ?? item.metrics?.days ?? 0} 个采集日 · 实际跨度 ${Number(item.metrics?.window_span_days || 0).toFixed(2)} 天</p>
+                <p class="hotspot-lifecycle-meta">置信度 <span class="hotspot-confidence">${hotspotConfidenceText(item)}</span> · ${vm.rateLabel} ${vm.rateText}</p>
+                ${metricsLine}
                 <div class="hotspot-timeline-box" data-bvid="${escapeHtml(item.bvid)}"></div>
                 <div class="hotspot-card-actions">
                     ${item.owner_mid ? `<button class="btn btn-secondary btn-sm" type="button" onclick="openHotspotAccount(${Number(item.owner_mid)}, '${escapeHtml(item.bvid)}')">查看上涨账号</button>` : ''}
                 </div>
-            </article>`).join('') : '<p class="text-muted">数据积累中，连续采集几天后解锁阶段判断。</p>';
+            </article>`;
+        }).join('') : '<p class="text-muted">数据积累中，连续采集几天后解锁阶段判断。</p>';
     } catch (error) {
         grid.innerHTML = `<p class="text-muted">生命周期数据暂不可用：${escapeHtml(error.message)}</p>`;
     }

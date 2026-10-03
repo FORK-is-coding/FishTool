@@ -140,6 +140,8 @@ def test_list_returns_computed_state_for_each_row(client, db):
         "BV1EXPIRE001": "expired",
         "BV1RELEAS001": "released",
     }
+    # 论断1-B：列表响应补来源字段（watch 链路恒 LifecycleV2）。
+    assert data["algorithm_version"] == "lifecycle_v2"
 
 
 def test_list_filters_tracking_only(client, db):
@@ -237,6 +239,8 @@ def test_get_watch_detail_includes_all_columns(client, db):
     assert data["state_json"] == {"segment": "s1"}
     assert data["state_revision"] == 3
     assert data["sample_interval_s"] == 600
+    # 论断1-B：单目标详情响应补来源字段。
+    assert data["algorithm_version"] == "lifecycle_v2"
 
 
 def test_get_watch_detail_missing_returns_404(client):
@@ -263,6 +267,7 @@ def test_create_watch_success_with_defaults(client, db):
     assert data["sample_interval_s"] == DEFAULT_SAMPLE_INTERVAL_S
     assert data["ttl_end_epoch_s"] == E + DEFAULT_TTL_S
     assert data["next_due_epoch_s"] == E + DEFAULT_SAMPLE_INTERVAL_S
+    assert data["algorithm_version"] == "lifecycle_v2"
     assert _row_count(db, "BV1CREATE001") == 1
 
 
@@ -348,6 +353,7 @@ def test_release_tracking_writes_manual_stop_and_released(client, db):
     assert data["active"] is False
     assert data["released_epoch_s"] == E
     assert data["state_revision"] == 1  # 释放使代际前进，fence 迟到写入
+    assert data["algorithm_version"] == "lifecycle_v2"
 
     session = db.get_session()
     try:
@@ -421,3 +427,15 @@ def test_routes_watch_has_no_network_dependency():
     source = inspect.getsource(routes_watch)
     for token in ("BilibiliAPI", "get_api", "httpx", "requests."):
         assert token not in source
+
+
+# ---------------------------------------------------------------------------
+# 论断1-B：/watch 响应补算法来源字段（写死取自 watch 链路，不走注册表）
+# ---------------------------------------------------------------------------
+
+
+def test_watch_algorithm_version_matches_lifecycle_v2():
+    """写死版本号必须与 ``LifecycleV2.version`` 等值：防「写死」漂移。"""
+    from modules.hotspot.algorithm.lifecycle_v2 import LifecycleV2
+
+    assert routes_watch._WATCH_ALGORITHM_VERSION == LifecycleV2().version

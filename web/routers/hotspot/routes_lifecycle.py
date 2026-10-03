@@ -121,6 +121,10 @@ def _load_snapshots(tid: int | None = None, bvid: str | None = None) -> list[Sna
         if bvid:
             query = query.filter(Video.bvid == bvid)
         # 展示层兜底：只返回 7 天窗口内的视频，防止存量/误入的过期数据上卡片。
+        # 注：这里的 7 天是「数据可见范围」（与采集层 TagCloudGenerator.PAINT_WINDOW_DAYS=7
+        # 一致，见 modules/hotspot/collector.py、tag_cloud.py），不是算法回看长度。
+        # lifecycle_v2 的 history_days=30 是百分位基线回看，历史不足时由
+        # coverage_state / observed_windows 如实表达，不在此处放大可见窗口。
         from datetime import timedelta as _td
         cutoff = datetime.now() - _td(days=7)
         query = query.filter(
@@ -164,7 +168,8 @@ def _load_snapshots(tid: int | None = None, bvid: str | None = None) -> list[Sna
 async def get_lifecycle(
     tid: int | None = Query(default=None),
     bvid: str | None = Query(default=None),
-    algorithm: str = Query(default="heuristic_v1"),
+    # 默认口径切 lifecycle_v2（固定日窗 + 连续证据状态机）；显式传 heuristic_v1 可对照回放。
+    algorithm: str = Query(default="lifecycle_v2"),
 ):
     """返回生命周期 Detection DTO，展示层不感知算法实现。"""
     try:
@@ -174,7 +179,12 @@ async def get_lifecycle(
         valid_snapshots = [snapshot for snapshot in snapshots if type(snapshot.view) is int]
         rejected_count = len(snapshots) - len(valid_snapshots)
         service = HotspotService(algorithm_name=algorithm)
-        items = service.analyze(valid_snapshots)
+        # 按算法分流输入：v2 依赖 view=None + captured_epoch_s 作为断段 marker
+        # （lifecycle_v2.valid_segments），若先按 int-view 过滤会把断段信息抹掉，
+        # 与 watch 链路（watch_service.load_bvid_snapshots 传全量行）行为不一致。
+        # v1 仍只吃「整数有效快照」，维持既有输入假设，二者互不影响。
+        analyze_rows = snapshots if service.detector.version == "lifecycle_v2" else valid_snapshots
+        items = service.analyze(analyze_rows)
         # 批量补 owner 轻量指标（粉丝/舰长/充电），供卡片页展示每千粉转化率。
         # 只在确有 UP 时请求；失败降级不影响列表主体渲染。
         try:

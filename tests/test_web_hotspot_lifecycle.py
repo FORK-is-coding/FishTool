@@ -18,7 +18,7 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import FastAPI
@@ -27,6 +27,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import null
 
 from core.database import DatabaseManager, Video, VideoStats
+from modules.hotspot.algorithm import registry as _algorithm_registry
+from modules.hotspot.algorithm.lifecycle_v2 import LifecycleV2
 from web.routers.hotspot import routes_lifecycle
 
 
@@ -156,6 +158,14 @@ def test_lifecycle_empty_database_returns_empty_items(client):
     assert data["items"] == []
     assert data["sample_count"] == 0
     assert data["algorithm_version"]
+
+
+def test_lifecycle_default_algorithm_is_lifecycle_v2(client):
+    """不传 algorithm 时应走新默认 lifecycle_v2（接口 Query 默认基调已切换）。"""
+    response = client.get("/api/hotspot/lifecycle")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["algorithm_version"] == "lifecycle_v2"
 
 
 def test_lifecycle_counts_samples_from_database(client, db, monkeypatch):
@@ -444,3 +454,89 @@ def test_timeline_quality_aware_marks_missing_not_zero(client, db, monkeypatch):
     assert [p["captured_epoch_s"] for p in points] == [1000, 2000, 3000]
     assert points[1]["raw"]["view"] is None
     assert points[1]["status"]["view"] == "missing"
+
+
+# ---------------------------------------------------------------------------
+# 追加：v2 断段 marker 不得在读端被 int-view 过滤洗掉（按算法分流）
+# ---------------------------------------------------------------------------
+
+
+def _register_lifecycle_v2(monkeypatch) -> None:
+    """在测试内注册 lifecycle_v2 工厂；用例结束由 monkeypatch 自动还原。
+
+    兜底保证本用例在「v2 默认切换」前后都能独立跑通：切换前 registry 只有
+    heuristic_v1，此处临时注入；切换后 registry 自带该注册，重复覆盖也安全。
+    """
+    monkeypatch.setattr(
+        _algorithm_registry,
+        "_REGISTRY",
+        {**_algorithm_registry._REGISTRY, "lifecycle_v2": LifecycleV2},
+    )
+
+
+def _seed_marker_rows(db, bvid: str = "BV1MRK00001", mid: int = 12345) -> None:
+    """写入「ok(100) / missing(NULL) / ok(300)」三条快照，epoch 用固定 UTC 网格。
+
+    时间取 2026-09-01T00:00:00Z 前后各一小时：首点落在前一日 23:00，保证 v2 日窗
+    网格右边界落在观测区间内，使「两个 ok 点相连」时真正能产出速率（对照组）。
+    坏点用 SQL ``null()`` 强制写入 NULL，绕过 ``Column(default=0)``。
+    """
+    base = int(datetime(2026, 9, 1, tzinfo=timezone.utc).timestamp())
+    session = db.get_session()
+    try:
+        video = Video(bvid=bvid, title="marker 视频", tid=4, mid=mid, author="UP主")
+        session.add(video)
+        session.commit()
+        now = datetime.now()
+        session.add(VideoStats(
+            video_id=video.id, view=100, view_status="ok", stat_status="ok",
+            metric_status={"view": "ok", "like": "ok"},
+            captured_epoch_s=base - 3600, collection_tid=4, raw_tid=30,
+            snapshot_time=now - timedelta(hours=2),
+        ))
+        session.add(VideoStats(
+            video_id=video.id, view=null(), view_status="missing", stat_status="missing",
+            metric_status={"view": "missing"},
+            captured_epoch_s=base + 3600, collection_tid=4, raw_tid=30,
+            snapshot_time=now - timedelta(hours=1),
+        ))
+        session.add(VideoStats(
+            video_id=video.id, view=300, view_status="ok", stat_status="ok",
+            metric_status={"view": "ok"},
+            captured_epoch_s=base + 7200, collection_tid=4, raw_tid=30,
+            snapshot_time=now,
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_lifecycle_v2_keeps_quality_marker_as_segment_break(client, db, monkeypatch):
+    """切 v2 时质量 marker 必须保留到算法输入层（断段），不被 int-view 过滤抹掉。
+
+    同一份「ok(100) / missing(NULL) / ok(300)」快照下：
+    - 对照组：沿用「只留 int view」的旧输入假设，v2 把两个 ok 点连成一段 -> 能出速率；
+    - 实测组：/lifecycle?algorithm=lifecycle_v2 把含 marker 的全量行交给 v2，
+      marker 断段、只剩尾段单点 -> observed_windows == 0、stage == 数据不足。
+    """
+    monkeypatch.setattr(routes_lifecycle, "get_session", db.get_session)
+    _seed_marker_rows(db)
+
+    async def fake_metrics(api, mids):
+        """UP 主轻量指标替身，避免测试触网。"""
+        return {}
+
+    monkeypatch.setattr(routes_lifecycle, "get_up_light_metrics", fake_metrics)
+    _register_lifecycle_v2(monkeypatch)
+
+    # 对照组：旧的 int-view 过滤会把 marker 洗掉，两个 ok 点落在同一段、能出速率。
+    snapshots = routes_lifecycle._load_snapshots(tid=4)
+    control = LifecycleV2().detect([s for s in snapshots if type(s.view) is int])
+    assert control and control[0].metrics["observed_windows"] > 0
+
+    # 实测：路由把含 marker 的全量行交给 v2，断段 marker 被保留。
+    response = client.get("/api/hotspot/lifecycle", params={"tid": 4, "algorithm": "lifecycle_v2"})
+    assert response.status_code == 200
+    item = response.json()["data"]["items"][0]
+    assert item["metrics"]["observed_windows"] == 0
+    assert item["stage"] == "数据不足"

@@ -650,7 +650,7 @@ function renderOpportunityList(run) {
             <div class="event-opportunity-card">
                 <h4>${eid} ${eventActionBadge(candidate.action)}</h4>
                 <p>适配原因：${escapeHtml(candidate.reason_code || '')}｜账号匹配：${escapeHtml(candidate.account_match || '')}</p>
-                <p class="event-meta">日信号：${escapeHtml(daily.topic_phase || '未定')}（依据 ${escapeHtml(daily.stage_reason || '未提供')}）｜快信号：${escapeHtml(early.signal || '无')}（状态 ${escapeHtml(early.status || '未提供')}）</p>
+                <p class="event-meta">日信号：${escapeHtml(daily.topic_phase || '未定')}（依据 ${escapeHtml(daily.stage_reason || '未提供')}）｜快信号：${escapeHtml(early.signal || '无')}（状态 ${escapeHtml(early.status || '未提供')}）｜算法 ${escapeHtml(run.algorithm_version || '未标注')}</p>
                 <p class="event-meta">供给角度密度：${escapeHtml(String(angleDensity))}</p>
                 <p class="event-meta">制作 ETA：${escapeHtml(etaText)}｜截止依据：${escapeHtml(deadlineBasis)}</p>
                 <p class="event-meta">排序键 rank_key：${escapeHtml(JSON.stringify(candidate.rank_key || []))}</p>

@@ -39,6 +39,13 @@ from .schemas import WatchCreateRequest
 
 logger = get_logger(__name__)
 
+#: ``/watch`` 链路**恒用** ``algorithm/lifecycle_v2.LifecycleV2``：编排层缺省构造器
+#: ``watch_service._build_detector`` 与 ``watch_service.DEFAULT_DETECTOR`` 都硬绑该类。
+#: 故本层版本号**写死取自该链路**，**不经算法注册表**——注册表默认是 ``heuristic_v1``，
+#: 且其注册名与 watch 实际算法解耦，走注册表会引入「报错版本 / KeyError」风险。
+#: 单测钉死本常量与 ``LifecycleV2().version`` 等值，防漂移。
+_WATCH_ALGORITHM_VERSION = "lifecycle_v2"
+
 #: state 过滤合法取值：唯一来源是 watch_store 的 ``WatchState`` 枚举，不在此另造态名。
 _WATCH_STATE_VALUES = frozenset(state.value for state in WatchState)
 
@@ -92,6 +99,24 @@ def _serialize_watch(row: HotspotWatch, now_epoch_s: int) -> dict[str, Any]:
     }
 
 
+def _serialize_watch_dto(row: HotspotWatch, now_epoch_s: int) -> dict[str, Any]:
+    """序列化一行 watch 并附上**链路算法版本号**，供 /watch 系列端点统一下发。
+
+    版本号**写死取自 watch 链路**（恒 ``LifecycleV2``）；不改动 :func:`_serialize_watch`
+    本身（其契约是「字段名与表列一一对应」）。纯加字段，不改既有字段名与语义。
+
+    Args:
+        row: ``hotspot_watch`` ORM 行。
+        now_epoch_s: 判定时刻（UTC 秒）。
+
+    Returns:
+        dict: :func:`_serialize_watch` 的结果外加 ``algorithm_version``。
+    """
+    dto = _serialize_watch(row, now_epoch_s)
+    dto["algorithm_version"] = _WATCH_ALGORITHM_VERSION
+    return dto
+
+
 @router.get("/watch")
 async def list_watch(
     state: str | None = Query(default=None),
@@ -134,6 +159,8 @@ async def list_watch(
                 "total": len(matched),
                 "limit": limit,
                 "offset": offset,
+                # 来源字段：与本页每个目标所用算法同源（watch 链路恒 LifecycleV2）。
+                "algorithm_version": _WATCH_ALGORITHM_VERSION,
             },
         }
     except HTTPException:
@@ -165,7 +192,7 @@ async def get_watch(bvid: str):
         row = session.query(HotspotWatch).filter(HotspotWatch.bvid == bvid).first()
         if row is None:
             raise HTTPException(status_code=404, detail=f"跟踪目标不存在: {bvid}")
-        return {"success": True, "data": _serialize_watch(row, now_epoch_s)}
+        return {"success": True, "data": _serialize_watch_dto(row, now_epoch_s)}
     except HTTPException:
         raise
     except Exception as exc:
@@ -202,7 +229,7 @@ async def create_watch(payload: WatchCreateRequest):
         row = upsert_watch(session, **kwargs)
         session.commit()
         session.refresh(row)
-        return {"success": True, "data": _serialize_watch(row, now_epoch_s)}
+        return {"success": True, "data": _serialize_watch_dto(row, now_epoch_s)}
     except ValueError as exc:
         session.rollback()
         logger.warning("加入跟踪参数非法 bvid=%s: %s", payload.bvid, exc)
@@ -254,7 +281,7 @@ async def release_watch(bvid: str):
         )
         session.commit()
         row = session.query(HotspotWatch).filter(HotspotWatch.bvid == bvid).one()
-        return {"success": True, "data": _serialize_watch(row, now_epoch_s)}
+        return {"success": True, "data": _serialize_watch_dto(row, now_epoch_s)}
     except HTTPException:
         raise
     except Exception as exc:

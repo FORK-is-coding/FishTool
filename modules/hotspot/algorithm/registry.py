@@ -5,8 +5,15 @@ from collections.abc import Callable
 
 from .base import LifecycleDetector
 from .heuristic_v1 import HeuristicV1
+from .lifecycle_v2 import LifecycleV2
 
-_REGISTRY: dict[str, Callable[..., LifecycleDetector]] = {"heuristic_v1": HeuristicV1}
+#: 已注册算法：``heuristic_v1``（对照回放）与 ``lifecycle_v2``（接口 / 门面默认）。
+#: 注意 ``create_detector`` 的**函数默认值仍为 heuristic_v1**：本字典只负责「名字 -> 工厂」
+#: 登记，不承担默认口径；默认口径由路由 Query 与 :class:`HotspotService` 显式给出。
+_REGISTRY: dict[str, Callable[..., LifecycleDetector]] = {
+    "heuristic_v1": HeuristicV1,
+    "lifecycle_v2": LifecycleV2,
+}
 
 
 def register(name: str, factory: Callable[..., LifecycleDetector]) -> None:

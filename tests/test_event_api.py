@@ -1038,3 +1038,39 @@ def test_event_ui_single_video_jump_reuses_02_card():
     assert "loadHotspotTimeline" in hotspot_js  # 复用既有 02 卡片打开逻辑
     assert "event-video-detail-page" not in html  # 未新建详情页
 
+
+# ===========================================================================
+# 论断1-B：事件工作台（评估 / 机会）补算法来源字段 algorithm_version
+# ===========================================================================
+
+
+def test_event_algorithm_version_matches_lifecycle_v2():
+    """写死版本号必须与 ``LifecycleV2.version`` 等值：防「写死」漂移。"""
+    from modules.hotspot.algorithm.lifecycle_v2 import LifecycleV2
+
+    assert routes_events._EVENT_ALGORITHM_VERSION == LifecycleV2().version
+
+
+def test_workbench_assessment_exposes_algorithm_version(env):
+    """评估列表 / 详情响应补 ``algorithm_version``（纯加字段，不改既有字段）。"""
+    client = env["client"]
+    eid = _create_event(client)
+    assert client.post(f"/api/hotspot/events/{eid}/assess/tasks", json={"as_of_s": T}).status_code == 200
+
+    assessments = client.get(f"/api/hotspot/events/{eid}/assessments").json()["data"]
+    assert assessments["algorithm_version"] == "lifecycle_v2"
+    aid = assessments["items"][0]["assessment_id"]
+
+    detail = client.get(f"/api/hotspot/event-assessments/{aid}").json()["data"]
+    assert detail["algorithm_version"] == "lifecycle_v2"
+
+
+def test_opportunity_exposes_algorithm_version(env):
+    """机会 run 响应补 ``algorithm_version``（与评估同源）。"""
+    client = env["client"]
+    eid = _create_event(client)
+    run_id = _seed_opportunity(env, eid)
+
+    run = client.get(f"/api/hotspot/opportunities/{run_id}").json()["data"]
+    assert run["algorithm_version"] == "lifecycle_v2"
+

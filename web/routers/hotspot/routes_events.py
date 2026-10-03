@@ -97,6 +97,12 @@ _BVID_RE = re.compile(r"^BV[0-9A-Za-z]{8,12}$")
 #: 事件 / 机会 ID 形状（前缀 + 十六进制 / 单词字符）。
 _ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
 
+#: 事件工作台（日信号 / 快信号）评估结果的算法版本：窗口内核直接复用
+#: ``modules/hotspot/events/windows.py`` 的 ``lifecycle_v2`` 窗口原语（``Point`` /
+#: ``valid_segments`` / ``window_measure``），故与 ``/lifecycle`` 的 ``algorithm_version`` 同源。
+#: 同样**写死取自该链路**，不经算法注册表（注册表默认 ``heuristic_v1``，与本链路口径无关）。
+_EVENT_ALGORITHM_VERSION = "lifecycle_v2"
+
 #: 反馈 kind 受控枚举。
 FEEDBACK_KINDS: tuple = ("adopted", "rejected", "published", "outcome")
 #: ``outcome_metrics`` 允许保留的有限数值键（其余一律丢弃）。
@@ -1386,7 +1392,15 @@ async def list_event_assessments(event_id: str, window_kind: Optional[str] = Non
             items = [_assessment_view(row) for row in rows]
         finally:
             session.close()
-        return {"success": True, "data": {"items": items, "count": len(items)}}
+        return {
+            "success": True,
+            "data": {
+                "items": items,
+                "count": len(items),
+                # 来源字段：本列表每项均由 lifecycle_v2 窗口内核产出（与 /lifecycle 同源）。
+                "algorithm_version": _EVENT_ALGORITHM_VERSION,
+            },
+        }
     except HTTPException:
         raise
 
@@ -1401,7 +1415,10 @@ async def get_event_assessment(assessment_id: str):
             row = session.get(HotEventAssessment, aid)
             if row is None:
                 raise _fail("assessment_not_found", 404, f"评估不存在: {aid}")
-            return {"success": True, "data": _assessment_view(row)}
+            return {
+                "success": True,
+                "data": {**_assessment_view(row), "algorithm_version": _EVENT_ALGORITHM_VERSION},
+            }
         finally:
             session.close()
     except HTTPException:
@@ -1495,6 +1512,8 @@ async def create_opportunity_task(request: OpportunityTaskRequest):
                 "revision": int(run.revision),
                 "request_fingerprint": run.request_fingerprint,
                 "policy_version": run.policy_version,
+                # 来源字段：机会排序血缘为 lifecycle_v2 窗口内核（日/快信号）。
+                "algorithm_version": _EVENT_ALGORITHM_VERSION,
             },
         }
     except HTTPException:
@@ -1549,6 +1568,8 @@ async def get_opportunity(run_id: str):
                 "candidates": row.candidates,
                 "result": row.result,
                 "feedback": row.feedback or [],
+                # 来源字段：机会排序血缘为 lifecycle_v2 窗口内核（日/快信号）。
+                "algorithm_version": _EVENT_ALGORITHM_VERSION,
             },
         }
     except HTTPException:

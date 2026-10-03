@@ -16,6 +16,7 @@ import pytest
 from modules.hotspot.algorithm import registry as registry_module
 from modules.hotspot.algorithm.base import Detection, LifecycleDetector, Snapshot
 from modules.hotspot.algorithm.heuristic_v1 import HeuristicV1
+from modules.hotspot.algorithm.lifecycle_v2 import LifecycleV2
 
 
 class _StubDetector(LifecycleDetector):
@@ -50,6 +51,19 @@ def isolated_registry(monkeypatch: pytest.MonkeyPatch) -> dict:
 def test_module_registry_has_default_algorithm() -> None:
     """真实全局注册表默认应包含 heuristic_v1。"""
     assert registry_module._REGISTRY["heuristic_v1"] is HeuristicV1
+
+
+def test_module_registry_registers_lifecycle_v2() -> None:
+    """真实全局注册表应新增 lifecycle_v2 注册（路由 / 门面默认所需）。"""
+    assert registry_module._REGISTRY["lifecycle_v2"] is LifecycleV2
+
+
+def test_create_detector_can_build_lifecycle_v2() -> None:
+    """create_detector("lifecycle_v2") 应可实例化且版本号正确。"""
+    detector = registry_module.create_detector("lifecycle_v2")
+
+    assert isinstance(detector, LifecycleV2)
+    assert detector.version == "lifecycle_v2"
 
 
 def test_register_stores_custom_factory(isolated_registry: dict) -> None:

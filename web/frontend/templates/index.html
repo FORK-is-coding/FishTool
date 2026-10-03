@@ -168,6 +168,15 @@
                     <p class="hotspot-notice">采集采用活跃时段分段采样、评论热评 Top+增量；为保护账号不被风控，宁慢勿封。</p>
                     <p class="hotspot-notice hotspot-notice-sub">首次使用仅有单日切片，阶段会显示“数据不足”属正常；连续使用几天后算法开始计算，建议持续数天以积累充足数据。</p>
                     <div id="hotspot-lifecycle-grid" class="hotspot-lifecycle-grid"><p class="text-muted">数据积累中，连续采集几天后解锁阶段判断。</p></div>
+                    <!-- 算法口径开关：复用既有 .hotspot-progress-row / .hotspot-collect-select，不新增 CSS。
+                         会话级记忆（sessionStorage，见 app.hotspot.js），不引入后端配置项。 -->
+                    <div class="hotspot-progress-row">
+                        <span>算法口径</span>
+                        <select id="hotspot-algorithm-select" class="hotspot-collect-select" title="生命周期算法">
+                            <option value="lifecycle_v2" selected>lifecycle_v2（默认）</option>
+                            <option value="heuristic_v1">heuristic_v1（对照回放）</option>
+                        </select>
+                    </div>
                     <div class="hotspot-progress-row">
                         <span id="hotspot-collect-message">采集进度查询中</span>
                         <progress id="hotspot-collect-progress" max="100" value="0"></progress>
@@ -882,18 +891,30 @@
         }
         const rows = items.map(item => {
             const label = HOTSPOT_WATCH_STATE_LABELS[item.state] || item.state;
+            // 已确认阶段 / 覆盖度由后端现算下发（routes_watch.py: last_confirmed_stage /
+            // coverage_ratio / coverage_state），前端只展示不推断；缺字段留空，
+            // 不把「未知」渲染成 0。
+            const stage = item.last_confirmed_stage
+                ? ` · 已确认阶段 ${escapeHtml(item.last_confirmed_stage)}` : '';
+            const ratio = Number(item.coverage_ratio);
+            const hasRatio = item.coverage_ratio !== null && item.coverage_ratio !== undefined && isFinite(ratio);
+            const coverage = hasRatio
+                ? ` · 覆盖 ${(ratio * 100).toFixed(0)}%${item.coverage_state ? '（' + escapeHtml(item.coverage_state) + '）' : ''}`
+                : '';
             const action = item.state === 'released'
                 ? '<span class="text-muted">已释放</span>'
                 : `<button class="btn" type="button" onclick="releaseHotspotWatch('${escapeHtml(item.bvid)}')">停止跟踪</button>`;
             return `<div class="hotspot-watch-item">
                 <span class="hotspot-stage-pill">${escapeHtml(label)}</span>
                 <strong>${escapeHtml(item.bvid)}</strong>
-                <span class="hotspot-lifecycle-meta">失败 ${Number(item.failure_count) || 0} 次 · 下次应采 ${Number(item.next_due_epoch_s) || 0}</span>
+                <span class="hotspot-lifecycle-meta">失败 ${Number(item.failure_count) || 0} 次 · 下次应采 ${Number(item.next_due_epoch_s) || 0}${stage}${coverage}</span>
                 ${action}
             </div>`;
         }).join('');
         const total = (meta.total === undefined || meta.total === null) ? items.length : Number(meta.total);
-        container.innerHTML = `<p class="hotspot-lifecycle-meta">共 ${total} 条</p>${rows}`;
+        // 来源徽标（顺带）：/watch 响应带 algorithm_version（watch 链路恒 LifecycleV2）。
+        const algorithm = meta.algorithm_version ? ` · 算法 ${escapeHtml(meta.algorithm_version)}` : '';
+        container.innerHTML = `<p class="hotspot-lifecycle-meta">共 ${total} 条${algorithm}</p>${rows}`;
     }
 
     // 手动加入跟踪：bvid 必填、采样间隔可选（留空则走后端默认 3600）。

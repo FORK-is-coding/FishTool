@@ -8,6 +8,30 @@
 > **v0.2.2 之前未逐条记录。** 更早版本只保留 tag：
 > v0.1.0 / v0.2.0 / v0.2.1
 
+## [未发布]
+
+**口径：热点生命周期双轨 —— 默认 `lifecycle_v2`，可切回 `heuristic_v1`；单视频持续追踪链（watch）固定走 v2。**
+
+- `GET /api/hotspot/lifecycle` 与 `HotspotService` 门面的默认 `algorithm` 由 `heuristic_v1`
+  切为 `lifecycle_v2`；热点页生命周期区块新增算法下拉（复用既有 `hotspot-collect-select`
+  样式，会话级记忆），可一键对照 `heuristic_v1` 回放。
+- 算法注册表新增 `lifecycle_v2` 注册；`create_detector()` 的**无参默认仍为 `heuristic_v1`**
+  （仅注册表默认，与接口 / 门面默认解耦，既有契约测试压着）。
+- 生命周期卡片按 `algorithm_version` **分流渲染指标**：v2 走 `relative_change` /
+  `coverage_ratio` / `observed_windows` / `sample_count`，v1 仍走 `growth` / `up_count` /
+  `observed_days` / `window_span_days`；趋势徽标的观测基数统一收敛为「有效观测单位」
+  （v2 取 `observed_windows`，v1 取 `observed_days`/`days`），不再因键集不匹配而整体
+  退化为 `0` /「数据不足」。
+- `confidence` 第一版仍固定 `0.0` / `not_estimated`（本批不真算）；前端按 `confidence_kind`
+  分流显示为「未估算」，不再展示 `0%`。
+- `GET /api/hotspot/watch`（列表 / 详情 / 创建 / 释放）与事件工作台评估、机会响应统一补
+  `algorithm_version`：watch 链路与事件窗口内核恒 `lifecycle_v2`，版本号写死取自各自链路，
+  不经算法注册表。
+- 热点页单视频跟踪列表上屏后端早已下发的 `last_confirmed_stage` / `coverage_ratio` /
+  `coverage_state`（纯前端展示，字段缺失时留空，不伪造 `0`）。
+- 常驻 watch 循环装配补齐默认预算门（`RequestBudget`）与事件需求整编 hook
+  （`EventWatchDemandReconciler.reconcile`）；缺省采集端口复用编排层同一 `RequestBudget`。
+
 ## [0.2.4] - 2026-10-02
 
 **主题：02 单视频时序跟踪上线；06 发现通道接通常驻调度与 watch 候选入池。**
