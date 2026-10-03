@@ -21,6 +21,55 @@ DEFAULT_WATCH_INTERVAL_S: int = 60
 DEFAULT_DISCOVERY_INTERVAL_S: int = 600
 
 
+#: 启动整编（E49）默认开关：装配层构造 watch 服务时跑一次 ``startup_reconcile``。
+#: 默认 **True**——若默认关，等价于「循环内挂但默认不跑 = 永不执行」，04 侧「重启清遗留
+#: events 需求 / 清孤儿快采 / 重算节奏」的恢复语义将永远失效。需要时显式传 False 关闭。
+DEFAULT_STARTUP_RECONCILE_ENABLED: bool = True
+
+
+def _run_startup_reconcile_once(
+    reconciler: Any = None, *, session_factory: Optional[Callable[[], Any]] = None
+) -> None:
+    """在装配层跑**一次**启动整编（E49）：失败只记日志，**绝不阻断启动**。
+
+    ``startup_reconcile`` = ``recover_on_startup``（撤遗留 events 需求 / 清孤儿快采 /
+    重算节奏）→ ``reconcile``（按当前 active 事件快照重建）。两步都在调用方短事务内
+    flush-only，本函数末尾统一 ``commit``：对外要么全成、要么整体回滚，不暴露中间态。
+
+    Args:
+        reconciler: 04 侧对账器；None 时本函数新建一个（其内部 ``WatchService`` 惰性装配，
+            导入期不发任何网络请求）。
+        session_factory: 会话工厂；None 时用 ``core.database.get_session``。
+
+    Returns:
+        无。任何异常都被吞掉并记中文日志——调用方（装配）不受影响。
+    """
+    session = None
+    try:
+        if reconciler is None:
+            from modules.hotspot.event_watch_demands import EventWatchDemandReconciler
+
+            reconciler = EventWatchDemandReconciler()
+        session = (session_factory or get_session)()
+        reconciler.startup_reconcile(session)
+        session.commit()
+        logger.info("watch 启动整编完成（撤遗留 events 需求 + 按当前快照重建）")
+    except Exception:
+        # 启动整编是「尽最大努力」的恢复动作：失败绝不能挡住启动。
+        if session is not None:
+            try:
+                session.rollback()
+            except Exception:  # noqa: BLE001 - 回滚失败也不能再抛
+                logger.exception("watch 启动整编回滚失败")
+        logger.exception("watch 启动整编失败，已跳过（不阻断启动）")
+    finally:
+        if session is not None:
+            try:
+                session.close()
+            except Exception:  # noqa: BLE001 - 关闭失败也不能再抛
+                pass
+
+
 def build_watch_service(**kwargs: Any) -> Any:
     """构造默认 watch 服务（照 modules.hotspot.discovery.service.build_discovery_service 样板）。
 
@@ -32,6 +81,8 @@ def build_watch_service(**kwargs: Any) -> Any:
 
     Args:
         **kwargs: 透传给 ``modules.hotspot.watch_service.WatchService``（便于单测注入替身）。
+            另有一个**特例**：``startup_reconcile``（bool）由本函数消费、不透传，用于显式
+            关闭启动整编（缺省用 :data:`DEFAULT_STARTUP_RECONCILE_ENABLED`）。
 
     Returns:
         WatchService: 可直接接入常驻调度的编排层实例。
@@ -40,8 +91,20 @@ def build_watch_service(**kwargs: Any) -> Any:
         P1 装配默认注入：调用方未显式传 ``budget`` / ``demand_reconcile_hook`` 时，
         本函数补齐一个 ``RequestBudget`` 与 ``EventWatchDemandReconciler().reconcile``，
         使常驻 watch 循环与「缺省采集端口」共用同一预算实例，并在每轮 tick 开头对账事件需求。
+
+        E49 启动整编：构造成功后**默认跑一次** ``startup_reconcile``（见
+        :func:`_run_startup_reconcile_once`），把上一次运行遗留的 events 需求 / 孤儿快采
+        在启动时清掉并按当前快照重建。挂在装配层而非 watch 循环内：装配层「构造即一次、
+        且只一次」（``ResidentCommentMonitor.watch_service`` 属性缓存同一实例）；循环内挂
+        则受 ``demand_reconcile_hook`` 开关约束，默认关时等于不跑。
     """
     from modules.hotspot.watch_service import WatchService
+
+    # 启动整编开关：显式 kwarg 优先（供测试 / 运维关闭），否则取模块默认（True）。
+    # 必须在构造 WatchService 前 pop，否则会被当作未知构造参数透传而报错。
+    run_startup_reconcile = kwargs.pop(
+        "startup_reconcile", DEFAULT_STARTUP_RECONCILE_ENABLED
+    )
 
     # P1 装配默认注入：缺省时补预算门与需求整编 hook。用显式 ``if not in kwargs`` 判断，
     # **不用 setdefault**——setdefault 的第二参数会被先求值，违背「调用方已显式注入时不构造
@@ -50,12 +113,23 @@ def build_watch_service(**kwargs: Any) -> Any:
         from modules.hotspot import risk_control
 
         kwargs["budget"] = risk_control.RequestBudget()
+
+    reconciler = None
     if "demand_reconcile_hook" not in kwargs:
         from modules.hotspot.event_watch_demands import EventWatchDemandReconciler
 
-        kwargs["demand_reconcile_hook"] = EventWatchDemandReconciler().reconcile
+        reconciler = EventWatchDemandReconciler()
+        kwargs["demand_reconcile_hook"] = reconciler.reconcile
 
-    return WatchService(**kwargs)
+    service = WatchService(**kwargs)
+
+    # E49：装配层挂一次。每次构造只跑一次；失败由 helper 内部吞掉，绝不阻断构造。
+    if run_startup_reconcile:
+        _run_startup_reconcile_once(
+            reconciler, session_factory=kwargs.get("session_factory")
+        )
+
+    return service
 
 
 def build_resident_discovery_service(**kwargs: Any) -> Any:

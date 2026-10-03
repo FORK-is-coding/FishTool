@@ -745,3 +745,110 @@ def test_default_config_never_builds_watch_service(db, monkeypatch):
     assert calls == []  # 工厂从未被调用 → 未构造 watch 服务
     assert monitor.watch_task is None
     assert monitor.snapshot()["watch_task_running"] is False
+
+
+# ---------------------------------------------------------------------------
+# E49 启动整编接线（第1批）：build_watch_service 构造即跑一次 startup_reconcile
+# ---------------------------------------------------------------------------
+
+
+def _patch_reconciler_startup(monkeypatch, impl):
+    """把 04 对账器 ``EventWatchDemandReconciler.startup_reconcile`` 换成替身。
+
+    Args:
+        monkeypatch: pytest 临时替换工具。
+        impl: 替换实现的函数（签名 ``(self, session, *, now_s=None)``）。
+
+    Returns:
+        type: ``EventWatchDemandReconciler`` 类对象（便于按需进一步断言）。
+    """
+    from modules.hotspot.event_watch_demands import EventWatchDemandReconciler
+
+    monkeypatch.setattr(EventWatchDemandReconciler, "startup_reconcile", impl)
+    return EventWatchDemandReconciler
+
+
+class _MinimalSession:
+    """启动整编用的最小会话替身：只记录 commit / rollback / close。"""
+
+    def __init__(self) -> None:
+        """初始化三类调用计数。"""
+        self.committed = 0
+        self.rolled_back = 0
+        self.closed = 0
+
+    def commit(self) -> None:
+        """累加提交次数。"""
+        self.committed += 1
+
+    def rollback(self) -> None:
+        """累加回滚次数。"""
+        self.rolled_back += 1
+
+    def close(self) -> None:
+        """累加关闭次数。"""
+        self.closed += 1
+
+
+def test_build_watch_service_triggers_startup_reconcile_once(monkeypatch):
+    """装配层构造 watch 服务即触发一次 startup_reconcile：默认开、只跑一次、单事务提交。"""
+    calls = []
+
+    def _spy(self, session, *, now_s=None):
+        """记录被调用并返回空快照。"""
+        calls.append(now_s)
+        return {}
+
+    _patch_reconciler_startup(monkeypatch, _spy)
+
+    session = _MinimalSession()
+    monkeypatch.setattr(monitor_module, "get_session", lambda: session)
+
+    service = monitor_module.build_watch_service()
+
+    assert service is not None
+    assert len(calls) == 1  # 构造即被调一次（默认开关为 True）
+    assert session.committed == 1  # recover + reconcile 同事务，末尾一次提交
+    assert session.closed == 1  # 会话被关闭，无泄漏
+
+
+def test_build_watch_service_startup_reconcile_failure_does_not_block(monkeypatch):
+    """startup_reconcile 抛异常时只回滚 + 记日志，构造照常返回服务（绝不阻塞启动）。"""
+
+    def _boom(self, session, *, now_s=None):
+        """模拟启动整编失败。"""
+        raise RuntimeError("startup reconcile boom")
+
+    _patch_reconciler_startup(monkeypatch, _boom)
+
+    session = _MinimalSession()
+    monkeypatch.setattr(monitor_module, "get_session", lambda: session)
+
+    service = monitor_module.build_watch_service()  # 不应抛出
+
+    assert service is not None
+    assert session.committed == 0
+    assert session.rolled_back == 1
+    assert session.closed == 1
+
+
+def test_build_watch_service_startup_reconcile_can_be_disabled(monkeypatch):
+    """显式传 startup_reconcile=False 时不跑启动整编（开关可关，供测试 / 运维）。"""
+    calls = []
+
+    def _spy(self, session, *, now_s=None):
+        """记录被调用。"""
+        calls.append(now_s)
+        return {}
+
+    _patch_reconciler_startup(monkeypatch, _spy)
+
+    session = _MinimalSession()
+    monkeypatch.setattr(monitor_module, "get_session", lambda: session)
+
+    service = monitor_module.build_watch_service(startup_reconcile=False)
+
+    assert service is not None
+    assert calls == []  # 开关关闭 → 不跑
+    assert session.committed == 0
+    assert session.closed == 0
