@@ -38,6 +38,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import partial
 from typing import Any, Callable, Protocol
 
 from sqlalchemy import bindparam, inspect as sa_inspect, text, update
@@ -637,17 +638,25 @@ def _confirmed_stage(analysis: Any) -> str | None:
     return stage
 
 
-def _build_detector(initial_states: dict[str, TrendState], as_of_epoch_s: int) -> LifecycleV2:
+def _build_detector(
+    initial_states: dict[str, TrendState],
+    as_of_epoch_s: int,
+    *,
+    domain: str = "default",
+) -> LifecycleV2:
     """缺省算法构造器：用批 1 的 ``LifecycleV2`` 并以历史状态续算（不冷启动）。
 
     Args:
         initial_states: ``bvid -> TrendState`` 的续算起点。
         as_of_epoch_s: 计算截止时刻（UTC 秒）。
+        domain: 领域名，透传给 v2 供后续分桶阈值；缺省 ``"default"``（与改前一致）。
 
     Returns:
         LifecycleV2: 已注入历史状态的算法实例。
     """
-    return LifecycleV2(as_of_epoch_s=as_of_epoch_s, initial_states=initial_states)
+    return LifecycleV2(
+        domain=domain, as_of_epoch_s=as_of_epoch_s, initial_states=initial_states
+    )
 
 
 # --------------------------------------------------------------------- 编排层
@@ -662,6 +671,7 @@ class WatchService:
         collector_port: Any | None = None,
         session_factory: Callable[[], Session] | None = None,
         detector_factory: Callable[[dict[str, TrendState], int], LifecycleV2] | None = None,
+        domain: str = "default",
         snapshot_loader: Callable[[Session, str], list[Snapshot]] | None = None,
         now_fn: Callable[[], int] = utc_now_epoch_s,
         now_mono_fn: Callable[[], float] = time.monotonic,
@@ -676,7 +686,9 @@ class WatchService:
                 缺省时**惰性**构造真实 ``BilibiliAPI`` + ``HotspotCollector`` 端口。
             session_factory: 会话工厂；缺省用 ``core.database.get_session``。
             detector_factory: 算法构造器 ``(initial_states, as_of_epoch_s) -> LifecycleV2``；
-                缺省用批 1 的 ``LifecycleV2``。
+                缺省用批 1 的 ``LifecycleV2``。**保持两参契约**，本层不向其追加必填参数。
+            domain: 领域名（Step 2 domain 管道）；缺省 ``"default"``。仅缺省构造器据此把
+                domain 透传给 ``LifecycleV2``；注入 ``detector_factory`` 时由注入方自理。
             snapshot_loader: 历史快照读取器 ``(session, bvid) -> list[Snapshot]``；
                 缺省用本模块 :func:`load_bvid_snapshots`。
             now_fn: 时钟，返回 UTC 秒级 int；缺省 ``utc_now_epoch_s``。
@@ -692,7 +704,11 @@ class WatchService:
         """
         self._collector_port = collector_port
         self._session_factory = session_factory or get_session
-        self._detector_factory = detector_factory or _build_detector
+        self._domain = domain
+        # 保持 ``detector_factory`` 的两参契约 ``(initial_states, as_of_epoch_s)``：注入方
+        # 无需感知 domain；仅缺省构造器把 domain 透传给 ``LifecycleV2``（缺省值仍是
+        # "default"，故缺省构造与改前逐字节一致）。
+        self._detector_factory = detector_factory or partial(_build_detector, domain=self._domain)
         self._snapshot_loader = snapshot_loader or load_bvid_snapshots
         self._now_fn = now_fn
         self._now_mono_fn = now_mono_fn

@@ -170,6 +170,8 @@ async def get_lifecycle(
     bvid: str | None = Query(default=None),
     # 默认口径切 lifecycle_v2（固定日窗 + 连续证据状态机）；显式传 heuristic_v1 可对照回放。
     algorithm: str = Query(default="lifecycle_v2"),
+    # 领域分桶（Step 2 domain 管道）：缺省 "default" 即改前现行取值，零行为变化。
+    domain: str = Query(default="default"),
 ):
     """返回生命周期 Detection DTO，展示层不感知算法实现。"""
     try:
@@ -178,7 +180,7 @@ async def get_lifecycle(
         # marker 单独计数上报，不把 None 送进旧算式造成 TypeError。
         valid_snapshots = [snapshot for snapshot in snapshots if type(snapshot.view) is int]
         rejected_count = len(snapshots) - len(valid_snapshots)
-        service = HotspotService(algorithm_name=algorithm)
+        service = HotspotService(algorithm_name=algorithm, domain=domain)
         # 按算法分流输入：v2 依赖 view=None + captured_epoch_s 作为断段 marker
         # （lifecycle_v2.valid_segments），若先按 int-view 过滤会把断段信息抹掉，
         # 与 watch 链路（watch_service.load_bvid_snapshots 传全量行）行为不一致。

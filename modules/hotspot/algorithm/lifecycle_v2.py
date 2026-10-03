@@ -27,6 +27,7 @@ from enum import Enum
 from typing import Any
 
 from .base import Detection, LifecycleDetector, Snapshot
+from .config import get_lifecycle_v2_config
 
 # --------------------------------------------------------------------- 常量
 
@@ -557,7 +558,8 @@ class LifecycleV2(LifecycleDetector):
 
         Args:
             domain: 领域名（当前仅透传，便于后续分桶阈值）。
-            config: 显式配置；缺省用 :class:`LifecycleV2Config` 默认值。
+            config: 显式配置；缺省按 ``domain`` 经 :func:`config.get_lifecycle_v2_config`
+                取域配置，桶内无覆盖时即 :class:`LifecycleV2Config` 默认值（与改前一致）。
             as_of_epoch_s: 计算截止时刻（UTC 秒）；``None`` 时回退到最大观测点。
             initial_states: 先前状态（bvid -> TrendState），用于续算而非每次冷启动。
 
@@ -565,7 +567,7 @@ class LifecycleV2(LifecycleDetector):
             ValueError: 配置非法或 ``as_of_epoch_s`` 非法。
         """
         self.domain = domain
-        self.config = config or LifecycleV2Config()
+        self.config = config or get_lifecycle_v2_config(domain)
         _validate_config(self.config)
         if as_of_epoch_s is not None and (type(as_of_epoch_s) is not int or as_of_epoch_s < 0):
             raise ValueError("invalid_as_of_epoch_s")
