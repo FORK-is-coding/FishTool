@@ -247,11 +247,16 @@ class HotspotCollectorPort:
         )
 
 
-def default_collector_port() -> HotspotCollectorPort:
+def default_collector_port(budget: Any | None = None) -> HotspotCollectorPort:
     """惰性构造缺省采集端口：真实 ``BilibiliAPI`` + 既有 ``HotspotCollector``。
 
     只在调用方未显式注入端口时惰性触发；**模块导入期不构造客户端、不发任何网络请求**。
     采集类别走 ``watch`` 域（与 ``BilibiliAPICore`` 的 ``quota_category`` 口径一致）。
+
+    Args:
+        budget: 可选的 ``RequestBudget``（或同契约替身）；透传给 ``HotspotCollector``。
+            缺省 ``None`` = 采集器自建默认预算（保持既有行为）。传入编排层的同一实例即可
+            让缺省采集端口与 tick 预算门共用同一预算。
 
     Returns:
         绑定既有采集器的 :class:`HotspotCollectorPort`。
@@ -265,7 +270,7 @@ def default_collector_port() -> HotspotCollectorPort:
         from .collector import HotspotCollector
     except Exception as exc:  # noqa: BLE001 - 环境缺依赖时给中文错误而非裸 ImportError
         raise RuntimeError(f"构造 watch 缺省采集端口失败: {exc}") from exc
-    return HotspotCollectorPort(HotspotCollector(BilibiliAPI(quota_category="watch")))
+    return HotspotCollectorPort(HotspotCollector(BilibiliAPI(quota_category="watch"), budget=budget))
 
 
 # --------------------------------------------------------------------- 纯函数工具
@@ -699,9 +704,12 @@ class WatchService:
 
     @property
     def collector_port(self) -> Any:
-        """采集端口；未显式注入时惰性构造（导入期不建客户端、不发请求）。"""
+        """采集端口；未显式注入时惰性构造（导入期不建客户端、不发请求）。
+
+        缺省构造复用编排层自身的 ``budget``，使采集端口与 tick 预算门共用同一预算实例。
+        """
         if self._collector_port is None:
-            self._collector_port = default_collector_port()
+            self._collector_port = default_collector_port(self._budget)
         return self._collector_port
 
     @property

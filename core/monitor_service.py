@@ -35,8 +35,25 @@ def build_watch_service(**kwargs: Any) -> Any:
 
     Returns:
         WatchService: 可直接接入常驻调度的编排层实例。
+
+    Note:
+        P1 装配默认注入：调用方未显式传 ``budget`` / ``demand_reconcile_hook`` 时，
+        本函数补齐一个 ``RequestBudget`` 与 ``EventWatchDemandReconciler().reconcile``，
+        使常驻 watch 循环与「缺省采集端口」共用同一预算实例，并在每轮 tick 开头对账事件需求。
     """
     from modules.hotspot.watch_service import WatchService
+
+    # P1 装配默认注入：缺省时补预算门与需求整编 hook。用显式 ``if not in kwargs`` 判断，
+    # **不用 setdefault**——setdefault 的第二参数会被先求值，违背「调用方已显式注入时不构造
+    # 真实依赖」的意图。budget 先于 hook 构造，二者互不依赖。
+    if "budget" not in kwargs:
+        from modules.hotspot import risk_control
+
+        kwargs["budget"] = risk_control.RequestBudget()
+    if "demand_reconcile_hook" not in kwargs:
+        from modules.hotspot.event_watch_demands import EventWatchDemandReconciler
+
+        kwargs["demand_reconcile_hook"] = EventWatchDemandReconciler().reconcile
 
     return WatchService(**kwargs)
 
