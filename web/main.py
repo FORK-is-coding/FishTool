@@ -39,6 +39,10 @@ from contextlib import asynccontextmanager
 import logging
 # 导入系统模块，用于识别 PyInstaller frozen 环境。
 import sys
+# 导入操作系统接口，用于读取 §18.2 事件开关环境变量。
+import os
+# 导入类型工具
+from typing import Any
 # 从 pathlib 导入符号
 from pathlib import Path
 
@@ -73,6 +77,11 @@ monitor_service = None
 # 排名服务与它拥有的 client：由 lifespan 组装 / 关闭（只关自己的 client）。
 benchmark_service = None
 benchmark_client = None
+# 第三批 g：事件评估服务与生成编排服务（由 lifespan 装配；不另起第二份 API/watch 链）。
+event_aggregation_service = None
+topic_generation_service = None
+# 第三批 h：事件发现服务（3c 门面，由同一 lifespan 装配；开关默认关）。
+event_discovery_service = None
 
 
 class _LazyBilibiliClient:
@@ -121,6 +130,125 @@ class _LazyBilibiliClient:
             await self._api.close()
 
 
+def _read_event_switch(config_key: str, env_name: str, *, default: bool) -> bool:
+    """读取 §18.2 事件开关（环境变量 > config.yaml > 默认值）。
+
+    Args:
+        config_key: ``config.yaml`` 点号键（如 ``event_switches.auto_discovery_enabled``）。
+        env_name: 对应环境变量名（如 ``EVENT_AUTO_DISCOVERY_ENABLED``）。
+        default: 两者均缺失时的默认布尔值。
+
+    Returns:
+        bool: 归一后的开关值（1/true/yes/on 视为真）。
+    """
+    raw_env = os.environ.get(env_name)
+    if raw_env is not None:
+        return str(raw_env).strip().lower() in ("1", "true", "yes", "on")
+    if config_manager is not None:
+        raw = config_manager.get(config_key)
+        if raw is not None:
+            if isinstance(raw, bool):
+                return raw
+            return str(raw).strip().lower() in ("1", "true", "yes", "on")
+    return bool(default)
+
+
+def _to_source_outcome(source: str, parsed: Any, now_s: int):
+    """把 06 ``ParseOutcome`` 归一为 3c ``SourceOutcome``（候选只保留带 bvid 的条目）。
+
+    Args:
+        source: 来源标识（``popular`` / ``ranking`` / ``search_square``）。
+        parsed: 06 解析结果（``ParseOutcome``）。
+        now_s: 本轮采样时刻（UTC 秒）。
+
+    Returns:
+        SourceOutcome: 归一结果；06 视频条目缺标题等文本处**不补造**。
+    """
+    from modules.hotspot.event_discovery_service import SourceOutcome
+
+    candidates: list = []
+    for item in getattr(parsed, "items", None) or []:
+        data = item.to_dict() if hasattr(item, "to_dict") else dict(item)
+        bvid = data.get("bvid")
+        # 热搜关键词（search_square）没有 bvid，不是视频候选：只记来源状态，不硬塞候选。
+        if not isinstance(bvid, str) or not bvid:
+            continue
+        candidates.append(
+            {
+                "bvid": bvid,
+                "title": str(data.get("title") or ""),
+                "sources": [source],
+                "owner_mid": data.get("owner_mid"),
+                "published_epoch_s": data.get("captured_epoch_s"),
+                "raw_tid": data.get("tidv2") or data.get("legacy_tid"),
+                "discovered_at_s": int(now_s),
+            }
+        )
+    raw_code = getattr(parsed, "error_code", None)
+    return SourceOutcome(
+        source=source,
+        state=str(getattr(parsed, "state", "ok") or "ok"),
+        candidates=candidates,
+        returned_count=int(getattr(parsed, "returned_count", 0) or 0),
+        error_code=(str(raw_code) if raw_code not in (None, 0) else None),
+        reason=getattr(parsed, "reason", None),
+    )
+
+
+def _build_event_discovery_fetcher():
+    """构造事件发现的可注入聚合源（复用 06 现有采集能力，不新建第二套采集）。
+
+    复用 ``modules.hotspot.discovery.sources`` 的三个既有入口与同一 ``BilibiliAPI`` 单例；
+    仅在「发现已启用」时才被围栏调用（默认关闭 → 不发任何真实请求）。
+
+    Returns:
+        Callable[[int], Awaitable[list]]: 一轮读三个入口，返回 ``SourceOutcome`` 列表。
+    """
+
+    async def _fetcher(now_s: int) -> list:
+        """读取 popular / ranking / search_square 三个既有入口（单入口失败不影响其它）。"""
+        from modules.hotspot.discovery.sources import (
+            fetch_hot_keywords,
+            fetch_popular_page,
+            fetch_ranking,
+            parse_hot_keywords,
+            parse_popular,
+            parse_ranking,
+        )
+        from modules.hotspot.event_discovery_service import SourceOutcome
+        from web.routers.hotspot.deps import get_api as _hotspot_get_api
+
+        api = _hotspot_get_api()  # 复用既有 BilibiliAPI 单例（延迟构造，无网络）
+        parsers = {
+            "popular": parse_popular,
+            "ranking": parse_ranking,
+            "search_square": parse_hot_keywords,
+        }
+
+        async def _one(source: str, coro) -> Any:
+            """执行单个入口并归一为 SourceOutcome（异常记为该来源失败）。"""
+            try:
+                envelope = await coro
+            except Exception as exc:  # noqa: BLE001 - 外部源失败不炸整轮
+                return SourceOutcome(
+                    source=source,
+                    state="error",
+                    error_code=f"fetch_error:{type(exc).__name__}",
+                    started_s=int(now_s),
+                    finished_s=int(now_s),
+                )
+            parsed = parsers[source](envelope, int(now_s))
+            return _to_source_outcome(source, parsed, int(now_s))
+
+        return [
+            await _one("popular", fetch_popular_page(api, page=1, ps=20)),
+            await _one("ranking", fetch_ranking(api, rid=0)),
+            await _one("search_square", fetch_hot_keywords(api, limit=10)),
+        ]
+
+    return _fetcher
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理
@@ -161,6 +289,82 @@ async def lifespan(app: FastAPI):
         {'max_http_attempts': 3000},
     )
     benchmark.set_benchmark_service(benchmark_service)
+
+    # 第三批 g：事件评估服务 + 生成编排服务（复用既有 TopicGenerator；不新建第二套 API/watch 链）。
+    global event_aggregation_service, topic_generation_service, event_discovery_service
+    try:
+        from web.routers.hotspot import routes_events as _routes_events
+        from web.routers.hotspot import routes_topics_generate as _routes_gen
+        from web.routers.hotspot.deps import get_api as _hotspot_get_api
+        from web.routers.hotspot.deps import get_llm_client as _hotspot_get_llm
+        from modules.hotspot.events.service import EventAggregationService
+        from modules.hotspot.topic_generation_service import TopicGenerationService, TopicGenerationStore
+        from modules.hotspot import TopicGenerator as _HotspotTopicGenerator
+
+        event_aggregation_service = EventAggregationService(session_factory=get_session)
+        _store = TopicGenerationStore(session_factory=get_session)
+        _generator = _HotspotTopicGenerator(_hotspot_get_api(), _hotspot_get_llm())
+        topic_generation_service = TopicGenerationService(_generator, _store)
+
+        # 第三批 h：事件发现服务（3c 门面）在**同一 lifespan** 装配；
+        # 不另起第二份 API / watch / 清理链，fetcher 复用现有公共采集能力。
+        from core.database.event_discovery_repository import EventDiscoveryRepository
+        from modules.hotspot.event_discovery_fence import EventDiscoveryFence
+        from modules.hotspot.event_discovery_service import (
+            EventDiscoveryBatchStore as _BatchStore,
+            EventDiscoveryService as _EventDiscoveryService,
+            SharedDiscoveryCache as _SharedCache,
+        )
+
+        # §18.2 开关（默认关闭）：关闭时发现端点返回明确未启用状态，不发任何真实外部请求。
+        auto_discovery_enabled = _read_event_switch(
+            "event_switches.auto_discovery_enabled", "EVENT_AUTO_DISCOVERY_ENABLED", default=False
+        )
+        fast_watch_enabled = _read_event_switch(
+            "event_switches.fast_watch_enabled", "EVENT_FAST_WATCH_ENABLED", default=False
+        )
+        _shared_cache = _SharedCache(
+            _build_event_discovery_fetcher(),
+            batch_store=_BatchStore(),
+            ttl_s=600,
+            max_candidates=100,
+            policy_plan=["popular", "ranking", "search_square"],
+        )
+        _fence_holder: dict = {}
+
+        async def _fence_fetch(event_id: str, rule_version: int, source_policy_hash: str):
+            """围栏外部源：转发到服务真实分发（读共享缓存；同轮只读一次）。"""
+            return await _fence_holder["fetch"](event_id, rule_version, source_policy_hash)
+
+        event_discovery_service = _EventDiscoveryService(
+            fence=EventDiscoveryFence(
+                repository=EventDiscoveryRepository(),
+                session_factory=get_session,
+                fetch_fn=_fence_fetch,
+            ),
+            shared_cache=_shared_cache,
+            session_factory=get_session,
+        )
+        _fence_holder["fetch"] = event_discovery_service.make_fetch_fn()
+
+        _routes_events.configure(
+            session_factory=get_session,
+            aggregation_service=event_aggregation_service,
+            discovery_service=event_discovery_service,
+            discovery_enabled=auto_discovery_enabled,
+        )
+        _routes_gen.set_generation_service(topic_generation_service)
+        # 恢复失联的生成任务（有界；不静默换阈值）。
+        await topic_generation_service.recover_expired()
+        logger.info(
+            "事件 API 服务已装配（EventAggregationService / TopicGenerationService / "
+            "EventDiscoveryService auto_discovery=%s fast_watch=%s）",
+            auto_discovery_enabled,
+            fast_watch_enabled,
+        )
+    except Exception as exc:  # noqa: BLE001 - 装配失败不阻塞 Web 启动，端点按契约返 503
+        logger.error("事件 API 服务装配失败（相关端点将返回 503）: %s", exc)
+
     logger.info("Web服务已启动")
     
     try:

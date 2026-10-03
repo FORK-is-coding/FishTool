@@ -149,7 +149,13 @@ async function generateTopics() {
 
 // 渲染 AI 选题结果：列出选题卡片与生成方式、热门 Tag 摘要。
 function renderTopicsResult(result) {
-    const topics = result.topics.map((topic, i) => `
+    // 第三批 g：202（生成中）形状**绝不能**被当成“已生成”渲染；专用轮询负责读账本。
+    if (result && (result.accepted || result.status === 'running')) {
+        document.getElementById('topic-result').innerHTML =
+            '<p class="event-status event-status-running">[生成中] 生成账本已受理，结果稍后从账本读取。</p>';
+        return;
+    }
+    const topics = (result.topics || []).map((topic, i) => `
         <div style="padding: 15px; margin: 10px 0; background: white; border-radius: 8px;">
             <h4>${i + 1}. ${escapeHtml(topic.title)}</h4>
             <p>${escapeHtml(topic.description)}</p>
@@ -159,8 +165,10 @@ function renderTopicsResult(result) {
         </div>
     `).join('');
 
+    // 显示**实际 generation_mode**（无 LLM 时同样出规则模板选题）；缺字段时按 used_llm 回退。
+    const generationMode = result.generation_mode || (result.used_llm ? 'llm_assisted' : 'rule_template');
     document.getElementById('topic-result').innerHTML = `
-        <p>生成方式: ${result.used_llm ? 'AI增强' : '降级方案'}</p>
+        <p>生成方式（实际 generation_mode）: ${escapeHtml(generationMode)}</p>
         <p>热门Tag: ${escapeHtml((result.hot_tags || []).slice(0, 5).join(', ')) || '暂无'}</p>
         ${topics}
     `;
@@ -301,6 +309,28 @@ async function loadHotspotTimeline(bvid, titleRow) {
     } catch (error) {
         box.innerHTML = `<p class="hotspot-timeline-empty">时间轴加载失败：${escapeHtml(error.message)}</p>`;
     }
+}
+
+// §15.1-④：字符化入口——定位某个视频的 02 原卡片并展开时间轴（复用既有逻辑，不新建详情页）。
+// 跳转失败返回 false，由调用方给明确提示（不静默无反应）。
+async function openHotspotVideoCard(bvid) {
+    if (!bvid) return false;
+    if (typeof navigateTo === 'function') navigateTo('hotspot');
+    const grid = document.getElementById('hotspot-lifecycle-grid');
+    if (!grid) return false;
+    const findBox = () => grid.querySelector(`.hotspot-timeline-box[data-bvid="${String(bvid).replace(/"/g, '')}"]`);
+    let box = findBox();
+    if (!box) {
+        await loadHotspotLifecycle();
+        box = findBox();
+    }
+    if (!box) return false;
+    const card = box.closest('.hotspot-lifecycle-card');
+    const titleRow = card ? card.querySelector('.hotspot-card-title-row') : null;
+    if (!titleRow) return false;
+    await loadHotspotTimeline(bvid, titleRow);
+    if (typeof box.scrollIntoView === 'function') box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return true;
 }
 
 // 打开账号关联抽屉：同时加载 UP 主关联数据与时间轴。

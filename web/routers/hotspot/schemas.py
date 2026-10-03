@@ -3,8 +3,8 @@
 
 拆分自 hotspot.py 原始 L143-L256。
 """
-from pydantic import BaseModel
-from typing import List, Optional
+from pydantic import BaseModel, ConfigDict, Field
+from typing import Any, Dict, List, Optional
 
 
 # ============ 请求/响应数据模型 ============
@@ -93,10 +93,20 @@ class TopicGenerateRequest(BaseModel):
             use_llm=True
         )
     """
+    # 第三批 g：带键请求 
+    # ``extra=forbid``——客户端只能提交声明过的字段，
+    # 不能往请求里塞 ``phase`` / 指标 / 已验证 deadline 等服务器真值。
+    model_config = ConfigDict(extra="forbid")
+
     direction: str  # 创作方向描述
     zone_name: str  # 目标分区
     count: int = 10  # 生成数量
     use_llm: bool = True  # 是否使用LLM
+    # 第三批 g：生成幂等键。event 模式必填；tag_only 无键时留 None 走旧兼容路径。
+    generation_request_id: Optional[str] = None  # 客户端 UUID 幂等键
+    opportunity_run_id: Optional[str] = None  # event 模式：关联机会运行 ID
+    selected_event_ids: Optional[List[str]] = None  # 选中的事件 ID（需 run_id）
+    context_mode: str = "current"  # current / historical
 
 class TopicUpdateRequest(BaseModel):
     """
@@ -139,3 +149,95 @@ class WatchCreateRequest(BaseModel):
     bvid: str  # 视频BV号（必填）
     collection_tid: Optional[int] = None  # 采集分区ID（可选）
     sample_interval_s: Optional[int] = None  # 采样间隔秒（可选，缺省 3600）
+
+
+# ============ 第三批 g：事件 / 机会 / 反馈请求模型 ============
+
+
+class _StrictRequest(BaseModel):
+    """禁止未知字段的请求基类（extra=forbid）。
+
+    第三批 g 硬口径：客户端只能提交自己有权提交的字段，**不能**通过额外字段
+    自填 phase / 指标 / evidence 真值 / 已验证 deadline 等服务器真值。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class EventCreateRequest(_StrictRequest):
+    """创建事件草稿 / 激活规则。
+
+    Attributes:
+        name: 事件名（必填）。
+        event_id: 可选客户端 ID；缺省由服务端生成。
+        status: draft / active（受控枚举）。
+        entity_scope / source_policy / links: 整对象 JSON（服务端只存不解释真值）。
+    """
+
+    name: str = Field(..., min_length=1, max_length=200)
+    event_id: Optional[str] = Field(default=None, max_length=64)
+    status: str = Field(default="draft", max_length=16)
+    entity_scope: Optional[Dict[str, Any]] = None
+    source_policy: Optional[Dict[str, Any]] = None
+    links: Optional[Dict[str, Any]] = None
+
+
+class EventPatchRequest(_StrictRequest):
+    """PATCH /events/{id}：CAS 新规则版本 / 暂停。
+
+    expected_revision 不匹配 → 409；事件不存在 → 404。
+    """
+
+    expected_revision: int
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    status: Optional[str] = Field(default=None, max_length=16)
+    source_policy: Optional[Dict[str, Any]] = None
+    links: Optional[Dict[str, Any]] = None
+
+
+class MemberDecision(_StrictRequest):
+    """单条成员决定（bvid + proposed / accepted / rejected）。"""
+
+    bvid: str = Field(..., min_length=1, max_length=20)
+    status: str = Field(..., max_length=16)
+    evidence: Optional[Dict[str, Any]] = None
+
+
+class MemberDecisionsRequest(_StrictRequest):
+    """批量 append 成员决定（CAS revision）。"""
+
+    expected_revision: int
+    decisions: List[MemberDecision] = Field(default_factory=list)
+
+
+class AssessTaskRequest(_StrictRequest):
+    """POST /events/{id}/assess/tasks：固定 as_of 后台计算 assessment。"""
+
+    as_of_s: Optional[int] = None
+    window_kind: str = Field(default="daily24h", max_length=16)
+
+
+class OpportunityTaskRequest(_StrictRequest):
+    """POST /opportunities/tasks：CreatorBrief + event ids → 冻结 OpportunityRun。"""
+
+    creator_brief: Dict[str, Any]
+    event_ids: List[str] = Field(default_factory=list)
+    as_of_s: Optional[int] = None
+
+
+class FeedbackRequest(_StrictRequest):
+    """POST /opportunities/{id}/feedback：采用 / 拒绝 / 发布 / 结果（append 且幂等）。
+
+    固定九字段；feedback_id + expected_revision + 服务器 created_s
+    **不参与** 内容 hash（见路由层规范化）。
+    """
+
+    feedback_id: str = Field(..., min_length=1, max_length=64)
+    expected_revision: int
+    event_id: str = Field(..., min_length=1, max_length=64)
+    topic_id: str = Field(..., min_length=1, max_length=64)
+    kind: str = Field(..., max_length=16)
+    reason: str = Field(..., max_length=2000)
+    published_bvid: Optional[str] = Field(default=None, max_length=20)
+    actual_production_hours: Optional[float] = None
+    outcome_metrics: Optional[Dict[str, Any]] = None

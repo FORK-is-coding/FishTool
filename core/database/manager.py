@@ -107,6 +107,7 @@ class DatabaseManager:
         self._migrate_comment_member_columns()
         self._migrate_up_master_charge_count()
         self._migrate_video_stats_columns()
+        self._migrate_hotspot_watch_event_columns()
         logger.info(f"数据库表创建完成: {self.db_path}")
 
     def _migrate_comment_member_columns(self) -> None:
@@ -189,6 +190,58 @@ class DatabaseManager:
                     ))
         except Exception:
             logger.exception("视频统计来源字段迁移失败")
+            raise
+
+    def _migrate_hotspot_watch_event_columns(self) -> None:
+        """为旧数据库幂等补充 ``hotspot_watch`` 的 04 事件列。
+
+        补列（照 04 §3.4）：``sample_interval_s`` / ``fast_until_s`` / ``manual_pinned`` /
+        ``source_demands``。其中 ``sample_interval_s`` 已由 02 批 2 的模型定义，检测到即跳过，
+        **不重复 ALTER**；其余三列由本迁移补。
+
+        幂等要点：
+        - 表不存在时先确保 02 模型注册建表，**绝不对不存在的表盲 ALTER**；
+        - 已存在的列一律跳过，重复启动不报错、不重复加列；
+        - 旧记录默认普通节奏（``manual_pinned`` 落 0、``fast_until_s`` / ``source_demands``
+          为 NULL），**不**推断旧 watch 的来源、不臆造 ``source_demands`` 内容。
+
+        Args:
+            无。
+
+        Returns:
+            无；缺失列通过 SQLite ``ALTER TABLE`` 原位新增。
+        """
+        try:
+            inspector = inspect(self.engine)
+            if not inspector.has_table("hotspot_watch"):
+                # 02 模型可能尚未注册：显式导入并补建该表，绝不盲 ALTER 一个不存在的表。
+                from .models_hotspot_watch import HotspotWatch
+
+                HotspotWatch.__table__.create(bind=self.engine, checkfirst=True)
+                inspector = inspect(self.engine)
+                if not inspector.has_table("hotspot_watch"):
+                    logger.warning("hotspot_watch 表不存在，跳过 04 事件列迁移")
+                    return
+            existing = {column["name"] for column in inspector.get_columns("hotspot_watch")}
+            statements = {
+                "sample_interval_s": (
+                    "ALTER TABLE hotspot_watch "
+                    "ADD COLUMN sample_interval_s INTEGER NOT NULL DEFAULT 3600"
+                ),
+                "fast_until_s": "ALTER TABLE hotspot_watch ADD COLUMN fast_until_s INTEGER",
+                "manual_pinned": (
+                    "ALTER TABLE hotspot_watch "
+                    "ADD COLUMN manual_pinned BOOLEAN NOT NULL DEFAULT 0"
+                ),
+                "source_demands": "ALTER TABLE hotspot_watch ADD COLUMN source_demands JSON",
+            }
+            with self.engine.begin() as connection:
+                for column_name, statement in statements.items():
+                    if column_name not in existing:
+                        connection.execute(text(statement))
+                        logger.info("数据库迁移完成: hotspot_watch.%s", column_name)
+        except Exception:
+            logger.exception("hotspot_watch 事件字段迁移失败")
             raise
 
     def get_session(self) -> Session:

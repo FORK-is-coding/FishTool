@@ -369,13 +369,17 @@ def test_save_to_topic_library_defaults_generated_at_when_missing(db_env) -> Non
         session.close()
 
 
-def test_save_to_topic_library_returns_empty_on_error(db_env) -> None:
-    """缺少必填 title 时保存失败应回滚并返回空列表。"""
+def test_save_to_topic_library_raises_and_rolls_back_on_error(db_env) -> None:
+    """缺少必填 title 时保存失败应回滚并**向上抛出**（不静默返回空 saved_ids 让外层误称 success）。
+
+    契约更新依据：02 执行案 §11.6 / 3f 规格第 2 节第 8 条——``失败全部回滚，不 catch 后 return []``。
+    """
     import asyncio
 
     generator = _build()
 
-    assert asyncio.run(generator._save_to_topic_library([{"keywords": ["k"]}])) == []
+    with pytest.raises(ValueError):
+        asyncio.run(generator._save_to_topic_library([{"keywords": ["k"]}]))
     # 失败不应留下任何行
     session = db_env.get_session()
     try:

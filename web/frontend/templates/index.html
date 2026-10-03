@@ -23,7 +23,7 @@
 <link rel="stylesheet" href="/static/css/style.responsive.css?v=split-20260824">
 <link rel="stylesheet" href="/static/css/style.logviewer.css?v=split-20260824">
 <link rel="stylesheet" href="/static/css/style.help.css?v=split-20260824">
-<link rel="stylesheet" href="/static/css/style.hotspot.css?v=rev5">
+<link rel="stylesheet" href="/static/css/style.hotspot.css?v=rev6">
 </head>
 <body>
     <div class="container">
@@ -34,7 +34,7 @@
                 <img class="logo-badge" src="/static/图标.png" alt="FishTool图标">
                 <div class="logo-copy">
                     <h2>FishTool运营助手</h2>
-                    <span class="logo-version">v0.1.0测试版</span>
+                    <span class="logo-version">v0.2.5测试版</span>
                 </div>
             </div>
             <nav class="nav-menu">
@@ -143,15 +143,6 @@
                             <!-- 已配置作者仓库地址，供用户直接访问项目源码。 -->
                             <a class="btn btn-primary" href="https://github.com/FORK-is-coding/FishTool" aria-label="前往github">前往github</a>
                         </div>
-                        <div class="card notice-card">
-                            <div class="card-icon">📌</div>
-                            <h3>注意事项</h3>
-                            <div class="notice-copy">
-                                <p>1.本项目完全<strong>开源免费</strong>，无任何盈利计划，谨防诈骗。</p>
-                                <p>2.本项目由<strong>无技术背景</strong>的<strong>落榜美术生</strong>制作，欢迎提交代码优化意见。</p>
-                                <p>3.本项目仅供个人学习交流，严禁任何企业或机构用于商业行为。</p>
-                            </div>
-                        </div>
                         <div class="card">
                             <div class="card-icon">👥</div>
                             <h3>意见反馈</h3>
@@ -226,6 +217,34 @@
                     <div id="hotspot-watch-list"><p class="text-muted">加载中...</p></div>
                 </section>
 
+                <!-- 聚合入口发现（discovery）区块：三入口条目 + 热搜词上屏。
+                     数据来自 /api/hotspot/discovery/latest（只读、零 HTTP）。
+                     sources 逐源透出（state=error 与 item_count=0 分开显示，不合并成单一 state），
+                     served_from_cache 上屏（新抓 / 上轮缓存），conflict=True 的多来源冲突显式标出。
+                     无快照显示占位「尚未跑过发现轮」，未知值显示空值不显示 0。
+                     低成本研究草案复用降级模板路径（不新增采集）。 -->
+                <section class="section hotspot-discovery-section">
+                    <div class="hotspot-section-heading">
+                        <div>
+                            <p class="dashboard-eyebrow">DISCOVERY SOURCES</p>
+                            <h2>聚合入口发现（首屏）</h2>
+                        </div>
+                        <button class="btn" type="button" onclick="loadHotspotDiscovery()">刷新</button>
+                    </div>
+                    <div id="hotspot-discovery-meta" class="hotspot-lifecycle-meta"></div>
+                    <div id="hotspot-discovery-sources"></div>
+                    <div id="hotspot-discovery-videos"></div>
+                    <div id="hotspot-discovery-keywords"></div>
+                    <div class="form-group">
+                        <label for="hotspot-draft-direction">低成本研究草案（复用降级模板，不新增采集）：</label>
+                        <input id="hotspot-draft-direction" class="form-control" type="text" placeholder="创作方向（可空）">
+                        <input id="hotspot-draft-zone" class="form-control" type="text" placeholder="分区名（可空，仅作标签）">
+                        <input id="hotspot-draft-count" class="form-control" type="number" min="1" max="20" value="5" placeholder="条数">
+                        <button class="btn btn-primary" type="button" onclick="generateHotspotResearchDraft()">生成研究草案</button>
+                    </div>
+                    <div id="hotspot-draft-result" class="result-area"></div>
+                </section>
+
                 <!-- 账号关联抽屉：遮罩 + 抽屉本体，内容由 app.hotspot.js 动态渲染 -->
                 <div id="hotspot-drawer-mask" class="hotspot-drawer-mask" onclick="closeHotspotDrawer()"></div>
                 <aside id="hotspot-drawer" class="hotspot-drawer" aria-label="账号关联抽屉"></aside>
@@ -277,6 +296,59 @@
                     </div>
                     <button class="btn btn-primary" onclick="generateTopics()">生成选题</button>
                     <div id="topic-result" class="result-area"></div>
+                </section>
+
+                <!-- 第三批 h：事件工作台完整版（§15.1 六条）。
+                     实体+锚点或热门 Tag 建草稿；示例命中/冲突/排除 + 手动或 strict-auto；
+                     一次点击“发现并观察”显示预算/候选/待确认/采样名额；双通道卡片；
+                     覆盖不足显示缺的窗口与预计下次数据到达；数值可展开到来源 BVID 与窗口；
+                     不依赖颜色唯一表达；不自动发布。 -->
+                <section class="card event-workbench" aria-labelledby="event-workbench-title">
+                    <h2 id="event-workbench-title">事件工作台</h2>
+                    <div class="form-group">
+                        <label>实体 + 具体事件锚点：</label>
+                        <input type="text" id="event-name" class="form-control" placeholder="例如：原神 5.2 版本前瞻">
+                    </div>
+                    <div class="form-group">
+                        <label>热门 Tag 建议（先加载，再点 Tag 建草稿）：</label>
+                        <div>
+                            <button class="btn btn-sm" onclick="loadEventHotTags()">加载热门 Tag</button>
+                        </div>
+                        <div id="event-hot-tags" class="event-hot-tags"></div>
+                    </div>
+                    <fieldset class="event-attribution">
+                        <legend>归属方式（§15.1-2）</legend>
+                        <label><input type="radio" name="event-auto-membership" value="review" checked
+                                      onchange="setEventAutoMembership('review')"> 手动确认（review）</label>
+                        <label><input type="radio" name="event-auto-membership" value="strict_auto"
+                                      onchange="setEventAutoMembership('strict_auto')"> strict-auto（高精度自动接受）</label>
+                        <div id="event-attribution-preview" class="event-attribution-preview"></div>
+                    </fieldset>
+                    <div class="form-group">
+                        <label>创作方向（事件选题）：</label>
+                        <input type="text" id="event-topic-direction" class="form-control" placeholder="例如：差异化实测与避坑">
+                    </div>
+                    <details class="event-brief">
+                        <summary>CreatorBrief · 可用素材 · 制作时间（§15.2-1）</summary>
+                        <div class="event-brief-grid">
+                            <label>制作(h)<input type="number" id="event-brief-production" class="form-control" value="2" min="0" step="0.5"></label>
+                            <label>复核(h)<input type="number" id="event-brief-review" class="form-control" value="1" min="0" step="0.5"></label>
+                            <label>发布缓冲(h)<input type="number" id="event-brief-buffer" class="form-control" value="0" min="0" step="0.5"></label>
+                            <label>最大试验(h)<input type="number" id="event-brief-experiment" class="form-control" value="4" min="0" step="0.5"></label>
+                            <label>可用素材(逗号)<input type="text" id="event-brief-assets" class="form-control" placeholder="screen_record,voiceover"></label>
+                            <label>支持形式(逗号)<input type="text" id="event-brief-formats" class="form-control" placeholder="video"></label>
+                            <label>允许实体(逗号)<input type="text" id="event-brief-entities" class="form-control" placeholder="原神"></label>
+                        </div>
+                    </details>
+                    <div class="event-action-row">
+                        <button class="btn" onclick="createEventDraft()">新建事件</button>
+                        <button class="btn" onclick="previewEventMembers()">预览归属示例</button>
+                        <button class="btn" onclick="discoverAndObserveEvent()">发现并观察</button>
+                        <button class="btn" onclick="assessEventDaily()">评估（当日窗口）</button>
+                        <button class="btn" onclick="createOpportunityForEvent()">生成机会列表</button>
+                    </div>
+                    <div id="event-workbench-result" class="result-area"></div>
+                    <div id="event-opportunity-result" class="result-area"></div>
                 </section>
             </div>
 
@@ -758,6 +830,8 @@
     <!-- 版本参数用于让 8000 端口加载本次弹窗修复后的脚本，避免旧 JS 缓存导致 onclick 无响应。 -->
     <script src="/static/js/app.core.js?v=split-20260824"></script>
 <script src="/static/js/app.hotspot.js?v=split-20260824-tagcard-dq03"></script>
+<!-- 第三批 g：事件工作台 / 机会列表 / 证据回看 / 最小反馈（新增脚本，不改既有结构）。 -->
+<script src="/static/js/app.events.js?v=batch3h-20261003"></script>
 <script src="/static/js/app.comment.js?v=split-20260824"></script>
 <script src="/static/js/app.config.js?v=split-20260824"></script>
 <script src="/static/js/app.up.js?v=split-20260824-dq03-ranking01"></script>
@@ -857,6 +931,202 @@
     // 首次加载时拉一次列表（与热点页其他区块同一时机，DOMContentLoaded）。
     window.addEventListener('DOMContentLoaded', () => {
         loadHotspotWatch();
+    });
+    </script>
+
+    <!-- 聚合入口发现（discovery）区块的配套 JS：本批新增脚本，内联在 index.html 内，
+         不改动 static/ 下任何既有脚本，也不改动上方任何既有结构。
+         知识口径：未知值一律显示为空值（绝不显示 0 冒充真实数据）；sources 逐源展示
+         （state=error 与 item_count=0 分开）；served_from_cache 上屏；conflict 显式标出。 -->
+    <script>
+    // ===== 热点发现 · 聚合入口发现（discovery）区块 =====
+    const HOTSPOT_DISCOVERY_SOURCE_LABELS = {
+        search_square: '热搜(search_square)',
+        popular: '综合热门(popular)',
+        ranking_all: '全站榜(ranking_all)',
+        ranking_all_others: '全站榜·同UP其他(ranking_all_others)',
+    };
+
+    // 未知值统一显示为空值（null/undefined 不显示为 0）。
+    function hotspotDiscoveryValue(value) {
+        if (value === null || value === undefined) return '';
+        return String(value);
+    }
+
+    // 质量三态标注：ok / missing / invalid；未知状态原样透出。
+    function hotspotDiscoveryQualityLabel(status) {
+        if (status === 'ok') return 'ok';
+        if (status === 'missing') return 'missing(缺失)';
+        if (status === 'invalid') return 'invalid(非法)';
+        return hotspotDiscoveryValue(status);
+    }
+
+    // 加载最近一轮发现：无快照显示占位「尚未跑过发现轮」，不显示 0。
+    async function loadHotspotDiscovery() {
+        const meta = document.getElementById('hotspot-discovery-meta');
+        const sourcesBox = document.getElementById('hotspot-discovery-sources');
+        const videosBox = document.getElementById('hotspot-discovery-videos');
+        const keywordsBox = document.getElementById('hotspot-discovery-keywords');
+        if (!meta) return;
+        try {
+            const result = await apiRequest('/hotspot/discovery/latest');
+            const snapshot = (result && result.data) ? result.data.snapshot : null;
+            if (!snapshot) {
+                meta.innerHTML = '<p class="text-muted">尚未跑过发现轮</p>';
+                if (sourcesBox) sourcesBox.innerHTML = '';
+                if (videosBox) videosBox.innerHTML = '';
+                if (keywordsBox) keywordsBox.innerHTML = '';
+                return;
+            }
+            renderHotspotDiscovery(snapshot);
+        } catch (error) {
+            meta.innerHTML = `<p style="color:red;">加载发现结果失败: ${escapeHtml(error.message)}</p>`;
+        }
+    }
+
+    // 总览：served_from_cache 必须上屏（新抓 / 上轮缓存）。
+    function renderHotspotDiscovery(snapshot) {
+        const meta = document.getElementById('hotspot-discovery-meta');
+        if (!meta) return;
+        let cacheText;
+        if (snapshot.served_from_cache === true) {
+            cacheText = '上轮缓存';
+        } else if (snapshot.served_from_cache === false) {
+            cacheText = '本轮新抓';
+        } else {
+            cacheText = hotspotDiscoveryValue(snapshot.served_from_cache);
+        }
+        meta.innerHTML = `<p class="hotspot-lifecycle-meta">
+            <span class="hotspot-stage-pill">${escapeHtml(cacheText)}</span>
+            采样时间 ${escapeHtml(hotspotDiscoveryValue(snapshot.captured_epoch_s))} ·
+            视频 ${escapeHtml(hotspotDiscoveryValue(snapshot.video_count))} ·
+            热搜词 ${escapeHtml(hotspotDiscoveryValue(snapshot.keyword_count))} ·
+            others ${escapeHtml(hotspotDiscoveryValue(snapshot.others_count))}</p>`;
+        renderHotspotDiscoverySources(snapshot.sources || {});
+        renderHotspotDiscoveryVideos(snapshot.videos || []);
+        renderHotspotDiscoveryKeywords(snapshot.keywords || []);
+    }
+
+    // 逐源展示：绝不在前端把多来源合并成单一 state；
+    // state=error（异常，红）与 item_count=0（真实的空）分开显示。
+    function renderHotspotDiscoverySources(sources) {
+        const box = document.getElementById('hotspot-discovery-sources');
+        if (!box) return;
+        const names = Object.keys(sources);
+        if (!names.length) {
+            box.innerHTML = '<h3>来源运行态（逐源，不合并）</h3><p class="text-muted">无来源运行态</p>';
+            return;
+        }
+        const rows = names.map(name => {
+            const info = sources[name] || {};
+            const label = HOTSPOT_DISCOVERY_SOURCE_LABELS[name] || name;
+            const stateTag = info.state === 'error'
+                ? '<span class="hotspot-stage-pill" style="background:#ffebee;color:#c62828;">异常 error</span>'
+                : `<span class="hotspot-stage-pill">${escapeHtml(hotspotDiscoveryValue(info.state))}</span>`;
+            const cacheText = info.from_cache === true ? '上轮缓存' : (info.from_cache === false ? '新抓' : '');
+            const parts = [
+                `条目 ${escapeHtml(hotspotDiscoveryValue(info.item_count))}`,
+                `接口返回 ${escapeHtml(hotspotDiscoveryValue(info.returned_count))}`,
+            ];
+            if (cacheText) parts.push(escapeHtml(cacheText));
+            if (info.error_code !== null && info.error_code !== undefined) {
+                parts.push(`error_code ${escapeHtml(hotspotDiscoveryValue(info.error_code))}`);
+            }
+            if (info.reason !== null && info.reason !== undefined && info.reason !== '') {
+                parts.push(escapeHtml(String(info.reason)));
+            }
+            return `<div class="hotspot-watch-item">
+                ${stateTag}
+                <strong>${escapeHtml(label)}</strong>
+                <span class="hotspot-lifecycle-meta">${parts.join(' · ')}</span>
+            </div>`;
+        }).join('');
+        box.innerHTML = `<h3>来源运行态（逐源，不合并）</h3>${rows}`;
+    }
+
+    // 视频候选：来源全留；conflict=True 的多来源冲突显式标出；
+    // 「加入关注」调现成的 POST /api/hotspot/watch（本批不改该端点）。
+    function renderHotspotDiscoveryVideos(videos) {
+        const box = document.getElementById('hotspot-discovery-videos');
+        if (!box) return;
+        if (!videos.length) {
+            box.innerHTML = '<h3>视频候选</h3><p class="text-muted">本轮无视频候选（真实空榜）；与来源 error 是两回事。</p>';
+            return;
+        }
+        const rows = videos.map(video => {
+            const conflictTag = video.conflict === true
+                ? '<span class="hotspot-stage-pill" style="background:#fff8e1;color:#ef6c00;">多来源不一致</span>'
+                : '';
+            const sourceList = Array.isArray(video.sources) ? video.sources.join(' + ') : hotspotDiscoveryValue(video.sources);
+            return `<div class="hotspot-watch-item">
+                <strong>${escapeHtml(hotspotDiscoveryValue(video.bvid))}</strong>
+                <span class="hotspot-lifecycle-meta">来源 ${escapeHtml(sourceList)} · 展示取 ${escapeHtml(hotspotDiscoveryValue(video.display_source))} · 播放 ${escapeHtml(hotspotDiscoveryValue(video.view))}(${escapeHtml(hotspotDiscoveryQualityLabel(video.view_status))}) · legacy_tid ${escapeHtml(hotspotDiscoveryValue(video.legacy_tid))} · tidv2 ${escapeHtml(hotspotDiscoveryValue(video.tidv2))} · pid_v2 ${escapeHtml(hotspotDiscoveryValue(video.pid_v2))} · 采样 ${escapeHtml(hotspotDiscoveryValue(video.captured_epoch_s))}</span>
+                ${conflictTag}
+                <button class="btn" type="button" onclick="watchHotspotDiscovery('${escapeHtml(String(video.bvid))}')">加入关注</button>
+            </div>`;
+        }).join('');
+        box.innerHTML = `<h3>视频候选（展示值来源优先级 ranking_all &gt; popular &gt; ranking_all_others）</h3>${rows}`;
+    }
+
+    // 热搜词：heat_score 只叫「平台接口返回热搜分数」，缺失显示空值不显示 0。
+    function renderHotspotDiscoveryKeywords(keywords) {
+        const box = document.getElementById('hotspot-discovery-keywords');
+        if (!box) return;
+        if (!keywords.length) {
+            box.innerHTML = '<h3>热搜词</h3><p class="text-muted">本轮无热搜词候选。</p>';
+            return;
+        }
+        const rows = keywords.map(item => `<div class="hotspot-watch-item">
+            <strong>${escapeHtml(hotspotDiscoveryValue(item.keyword))}</strong>
+            <span class="hotspot-lifecycle-meta">名次 ${escapeHtml(hotspotDiscoveryValue(item.rank))} · 平台接口返回热搜分数 ${escapeHtml(hotspotDiscoveryValue(item.heat_score))}(${escapeHtml(hotspotDiscoveryQualityLabel(item.heat_status))}) · 展示名 ${escapeHtml(hotspotDiscoveryValue(item.show_name))} · 采样 ${escapeHtml(hotspotDiscoveryValue(item.captured_epoch_s))}</span>
+        </div>`).join('');
+        box.innerHTML = `<h3>热搜词（heat_score = 平台接口返回热搜分数）</h3>${rows}`;
+    }
+
+    // 加入关注：复用现成的 POST /api/hotspot/watch（02 批 4 已交付，一行不用改）。
+    async function watchHotspotDiscovery(bvid) {
+        try {
+            await apiRequest('/hotspot/watch', { method: 'POST', body: JSON.stringify({ bvid }) });
+            showAppAlert(`已加入关注: ${bvid}`);
+        } catch (error) {
+            showAppAlert(`加入关注失败: ${error.message}`);
+        }
+    }
+
+    // 低成本研究草案：复用 topic_generator 降级模板路径，零新增采集。
+    async function generateHotspotResearchDraft() {
+        const box = document.getElementById('hotspot-draft-result');
+        if (!box) return;
+        const directionInput = document.getElementById('hotspot-draft-direction');
+        const zoneInput = document.getElementById('hotspot-draft-zone');
+        const countInput = document.getElementById('hotspot-draft-count');
+        const direction = directionInput ? directionInput.value : '';
+        const zoneName = zoneInput ? zoneInput.value : '';
+        const count = (countInput && Number(countInput.value)) ? Number(countInput.value) : 5;
+        box.innerHTML = '<p class="text-muted">生成中...</p>';
+        try {
+            const result = await apiRequest('/hotspot/discovery/research_draft', {
+                method: 'POST',
+                body: JSON.stringify({ direction, zone_name: zoneName, count }),
+            });
+            const data = (result && result.data) || {};
+            if (!data.topics || !data.topics.length) {
+                box.innerHTML = '<p class="text-muted">暂无可用热搜词，未生成草案（不伪造内容）。</p>';
+                return;
+            }
+            const rows = data.topics.map(topic => `<div class="hotspot-watch-item">
+                <strong>${escapeHtml(String(topic.title || ''))}</strong>
+                <span class="hotspot-lifecycle-meta">${escapeHtml(String(topic.description || ''))} · 依据：${escapeHtml(String(topic.reason || ''))}</span>
+            </div>`).join('');
+            box.innerHTML = `<p class="hotspot-lifecycle-meta">模式 ${escapeHtml(String(data.mode || ''))} · 未使用 LLM · 共 ${escapeHtml(hotspotDiscoveryValue(data.count))} 条</p>${rows}`;
+        } catch (error) {
+            box.innerHTML = `<p style="color:red;">生成研究草案失败: ${escapeHtml(error.message)}</p>`;
+        }
+    }
+
+    // 首次加载时拉一次发现结果（与热点页其他区块同一时机，DOMContentLoaded）。
+    window.addEventListener('DOMContentLoaded', () => {
+        loadHotspotDiscovery();
     });
     </script>
 </body>

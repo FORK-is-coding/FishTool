@@ -34,11 +34,13 @@ Cookie），并按指数退避推进 ``next_due_epoch_s``（退避不小于正�
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Protocol
 
-from sqlalchemy import update
+from sqlalchemy import bindparam, inspect as sa_inspect, text, update
 from sqlalchemy.orm import Session
 
 from core.data_quality import parse_count, utc_now_epoch_s
@@ -46,12 +48,26 @@ from core.database import HotspotWatch, Video, VideoStats, get_session
 from core.logger import get_logger
 
 from .algorithm import Detection, LifecycleV2, Snapshot, Stage, TrendState
+from .watch_demand import (
+    REASON_BLOCKED_BY_USER,
+    REASON_NO_DEMAND,
+    REASON_RELEASED,
+    REASON_TRACKING,
+    demand_reason,
+    has_demands,
+    resolve_interval_s,
+)
+from .watch_queue import AdmissionResult, WatchPool
 from .watch_store import (
     DEFAULT_SAMPLE_INTERVAL_S,
     claim_revision,
     commit_state,
     find_due_for_eval,
+    load_fast_until_map,
+    reactivate_watch,
     release_expired,
+    release_watch,
+    reschedule_watch,
 )
 
 logger = get_logger(__name__)
@@ -71,6 +87,26 @@ MAX_FAILURE_COUNT: int = 10
 #: 采集来源标签：写入 ``videos`` / ``video_stats.source``，与 ranking / paint_c 并列。
 WATCH_SOURCE: str = "watch"
 
+#: 需求命名空间白名单（04 联合前置 P3）：只允许这三类，别处不许新造。
+DEMAND_NAMESPACES: frozenset = frozenset({"manual", "ranking", "events"})
+
+#: 释放原因码：需求（events 命名空间）全撤后停止采样（第二批 B / D）。**不是新列**，
+#: 复用既有的 ``stop_reason`` 列（其列注释允许 ``expired`` / ``manual_stop``，本值同族）。
+STOP_REASON_EVENTS_REVOKED: str = "events_revoked"
+
+#: 预算类别（04 §6.3 L626 / §8.1 L656）：普通 watch 与快信号 watch 各自独立硬上限，
+#: 目的就是「不让 fast 通道饿死 normal 基础采样」。
+BUDGET_CATEGORY_NORMAL: str = "normal_watch"
+BUDGET_CATEGORY_FAST: str = "fast_watch"
+
+#: 预算类别白名单（顺序即选取优先级：先保底 normal，再 fast）。
+BUDGET_CATEGORIES: tuple = (BUDGET_CATEGORY_NORMAL, BUDGET_CATEGORY_FAST)
+
+#: 准入派生 reason 的稳定取值集合（供调度侧 / 测试复用，不在本层另造态名）。
+DEMAND_REASONS: frozenset = frozenset(
+    {REASON_BLOCKED_BY_USER, REASON_TRACKING, REASON_RELEASED, REASON_NO_DEMAND}
+)
+
 #: 成功提交但阶段仍为「数据不足」时，不覆盖历史的 ``last_confirmed_stage``。
 _UNCONFIRMED_STAGE: str = Stage.INSUFFICIENT
 
@@ -87,12 +123,15 @@ class WatchTarget:
         collection_tid: 该行归属的采集分区 ID，可为 None。
         sample_interval_s: 该行的采样间隔（秒），用于步骤 6 推进 ``next_due_epoch_s``。
         initial_state: 从 ``state_json`` 还原的状态机续算起点（无历史时为全新状态）。
+        category: 本目标的预算类别（``normal_watch`` / ``fast_watch``），由
+            ``fast_until_s`` 是否仍生效决定；第二批 F 的「不互相饿死」按它分桶。
     """
 
     bvid: str
     collection_tid: int | None
     sample_interval_s: int
     initial_state: TrendState
+    category: str = BUDGET_CATEGORY_NORMAL
 
 
 @dataclass(frozen=True)
@@ -120,6 +159,9 @@ class TickResult:
         dropped: 因代际过期被丢弃的目标数（fencing 生效次数）。
         failed: 采集 / 评估 / 写回任一步抛异常的目标数。
         detections: 本轮全部算法契约输出。
+        budget_skipped: 因所属类别预算暂不可授予而被本轮跳过的到点目标数（第二批 F）。
+        retry_delay_s: 本轮若有类别因预算被跳过，最早可重试的等待秒数；否则 None。
+        budget_exhausted: 是否出现「所有到点项都被预算挡住、无一项可运行」。
     """
 
     now_epoch_s: int = 0
@@ -129,6 +171,19 @@ class TickResult:
     dropped: int = 0
     failed: int = 0
     detections: list = field(default_factory=list)
+    budget_skipped: int = 0
+    retry_delay_s: float | None = None
+    budget_exhausted: bool = False
+
+
+@dataclass
+class _Selection:
+    """一轮「捞」的结果（含预算分桶信息，第二批 F）。"""
+
+    targets: list = field(default_factory=list)
+    budget_skipped: int = 0
+    retry_delay_s: float | None = None
+    budget_exhausted: bool = False
 
 
 # --------------------------------------------------------------------- 采集端口
@@ -293,6 +348,74 @@ def state_from_json(payload: Any) -> TrendState:
         stable_count=_non_negative_int("stable_count"),
         stage=(stage if isinstance(stage, str) and stage else Stage.OBSERVING),
     )
+
+
+def _require_epoch_s(value: int) -> int:
+    """校验秒级 UTC epoch：必须是非负 int（显式排除 bool）。
+
+    Args:
+        value: 待校验值。
+
+    Returns:
+        int: 校验通过的秒级 epoch。
+
+    Raises:
+        ValueError: 非 int / 为 bool / 为负时抛出 ``invalid_now_s``。
+    """
+    if type(value) is not int or value < 0:
+        raise ValueError("invalid_now_s")
+    return value
+
+
+def _json_to_obj(value: Any) -> Any:
+    """把 ``source_demands`` 列原值还原成 Python 对象（缺失 / 非法一律当空）。
+
+    Args:
+        value: 从列里读出的原值（可能是 None / str / bytes / 已解析对象）。
+
+    Returns:
+        Any: 解析后的对象；无法解析时返回 None。
+    """
+    if value is None or isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        value = value.decode("utf-8", errors="ignore")
+    if isinstance(value, str) and value.strip():
+        try:
+            return json.loads(value)
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def _demand_bvids(namespace: str, demand_key: str, descriptor: dict) -> list:
+    """从一个需求条目里解析出涉及的 bvid 列表。
+
+    Args:
+        namespace: 命名空间（``events`` 必须显式给 bvid，不拿 event_id 兜底当视频号）。
+        demand_key: 该条目在 ``desired`` 里的键。
+        descriptor: 需求描述。
+
+    Returns:
+        list[str]: 涉及的 bvid 列表（可能多个）。
+
+    Raises:
+        ValueError: 解析不出任何合法 bvid。
+    """
+    raw = descriptor.get("bvids")
+    if isinstance(raw, (list, tuple)) and raw:
+        return [b for b in (str(item).strip() for item in raw) if b]
+    single = descriptor.get("bvid")
+    if single is not None and str(single).strip():
+        return [str(single).strip()]
+    if namespace == "events":
+        # events 的键是 event_id，不是视频号，缺 bvid/bvids 一律判非法而不是静默兜底。
+        raise ValueError("invalid_desired_entry")
+    # manual / ranking：键本身就是 bvid。
+    bvid = str(demand_key).strip()
+    if not bvid:
+        raise ValueError("invalid_desired_entry")
+    return [bvid]
 
 
 def _resolve_view(stats: VideoStats) -> tuple[int | None, str]:
@@ -536,6 +659,10 @@ class WatchService:
         detector_factory: Callable[[dict[str, TrendState], int], LifecycleV2] | None = None,
         snapshot_loader: Callable[[Session, str], list[Snapshot]] | None = None,
         now_fn: Callable[[], int] = utc_now_epoch_s,
+        now_mono_fn: Callable[[], float] = time.monotonic,
+        pool: WatchPool | None = None,
+        budget: Any | None = None,
+        demand_reconcile_hook: Callable[..., Any] | None = None,
     ) -> None:
         """构造编排层（全部依赖可注入，便于单测与离线回放）。
 
@@ -548,12 +675,25 @@ class WatchService:
             snapshot_loader: 历史快照读取器 ``(session, bvid) -> list[Snapshot]``；
                 缺省用本模块 :func:`load_bvid_snapshots`。
             now_fn: 时钟，返回 UTC 秒级 int；缺省 ``utc_now_epoch_s``。
+            now_mono_fn: 单调时钟（``time.monotonic`` 口径），只喂 :class:`RequestBudget`；
+                缺省 ``time.monotonic``。**绝不**把它当 epoch 落库。
+            pool: watch 池有界准入控制器（第二批 A）；缺省惰性构造默认实例。
+            budget: ``RequestBudget``（或同契约替身），第二批 F 的类别预算闸门；
+                缺省 None = 不做预算门（保持既有 tick 行为）。
+            demand_reconcile_hook: 每轮 tick 开头调一次的需求整编 hook，签名与 04 侧
+                ``EventWatchDemandReconciler.reconcile`` 一致（``(session, *, now_s)``）；
+                由组装处注入；**缺省 None = 不调用，行为与现状逐字节一致**。flush-only，
+                与本轮调度同处一个短事务，随末尾 commit 一并落库。
         """
         self._collector_port = collector_port
         self._session_factory = session_factory or get_session
         self._detector_factory = detector_factory or _build_detector
         self._snapshot_loader = snapshot_loader or load_bvid_snapshots
         self._now_fn = now_fn
+        self._now_mono_fn = now_mono_fn
+        self._pool = pool
+        self._budget = budget
+        self._demand_reconcile_hook = demand_reconcile_hook
 
     # ---- 依赖 ----
 
@@ -564,9 +704,419 @@ class WatchService:
             self._collector_port = default_collector_port()
         return self._collector_port
 
+    @property
+    def pool(self) -> WatchPool:
+        """watch 池有界准入控制器；未显式注入时惰性构造默认实例（第二批 A）。"""
+        if self._pool is None:
+            self._pool = WatchPool()
+        return self._pool
+
+    @property
+    def budget(self) -> Any | None:
+        """预算对象（可为 None；None 表示不做类别预算门）。"""
+        return self._budget
+
+    @property
+    def demand_reconcile_hook(self) -> Callable[..., Any] | None:
+        """每轮需求整编 hook；None 表示不接线（行为与现状一致，4e）。"""
+        return self._demand_reconcile_hook
+
+    # ---- 需求整编（04 联合前置 P3 · flush-only）----
+
+    def admit(
+        self,
+        session: Session,
+        *,
+        bvid: str,
+        now_s: int,
+        ttl_end_epoch_s: int | None = None,
+        category_key: str | None = None,
+        collection_tid: int | None = None,
+        discovery_source: str | None = None,
+        sample_interval_s: int = DEFAULT_SAMPLE_INTERVAL_S,
+        next_due_epoch_s: int | None = None,
+    ) -> AdmissionResult:
+        """容量检查后准入一个 bvid（第二批 A）：超上限返回 ``queued_capacity``。
+
+        Args:
+            session: 调用方会话；只 flush，提交由调用方完成。
+            bvid: 目标 BV 号。
+            now_s: 本次准入时刻（UTC 秒）。
+            ttl_end_epoch_s / category_key / collection_tid / discovery_source: 元信息。
+            sample_interval_s: 采样间隔（秒）。
+            next_due_epoch_s: 首采下次应采样时刻。
+
+        Returns:
+            AdmissionResult: 见 :class:`modules.hotspot.watch_queue.AdmissionResult`。
+        """
+        return self.pool.try_admit(
+            session,
+            bvid=bvid,
+            now_epoch_s=now_s,
+            ttl_end_epoch_s=ttl_end_epoch_s,
+            category_key=category_key,
+            collection_tid=collection_tid,
+            discovery_source=discovery_source,
+            sample_interval_s=sample_interval_s,
+            next_due_epoch_s=next_due_epoch_s,
+        )
+
+    def drain_admissions(self, session: Session, *, now_s: int) -> dict:
+        """把待入队队列里仍有效的项在有空位时放进池，并淘汰超 deadline 的项（第二批 A）。
+
+        Args:
+            session: 调用方会话；只 flush。
+            now_s: 本次放行时刻（UTC 秒）。
+
+        Returns:
+            dict: 见 :meth:`modules.hotspot.watch_queue.WatchPool.drain`。
+        """
+        return self.pool.drain(session, now_epoch_s=now_s)
+
+    def demand_eligibility(self, session: Session, bvid: str) -> str:
+        """现算某 bvid 的准入派生 reason（第二批 E；不落任何新列）。
+
+        Args:
+            session: 调用方会话。
+            bvid: 目标 BV 号。
+
+        Returns:
+            str: ``manual_stop`` 的行返回 ``blocked_by_user``；否则见
+            :func:`modules.hotspot.watch_demand.demand_reason`；行不存在返回 ``released``。
+        """
+        clean_bvid = str(bvid or "").strip()
+        if not clean_bvid:
+            return "released"
+        stmt = text(
+            "SELECT active, stop_reason, source_demands FROM hotspot_watch WHERE bvid = :bvid"
+        )
+        row = session.execute(stmt, {"bvid": clean_bvid}).first()
+        if row is None:
+            return "released"
+        return demand_reason(
+            active=bool(row[0]), stop_reason=row[1], source_demands=_json_to_obj(row[2])
+        )
+
+    def reconcile_demands(
+        self, session: Session, *, namespace: str, desired: dict, now_s: int
+    ) -> None:
+        """按命名空间整编 ``source_demands``：只替换该命名空间，保留其他命名空间。
+
+        语义（照 04 §3.4 原文）：
+
+        - ``namespace`` 限 ``manual`` / ``ranking`` / ``events``，其他值直接 ``ValueError``；
+        - ``desired`` 是**该命名空间的完整当前快照**：本轮没传进来的旧需求即「已撤销」，
+          必须从 ``source_demands`` 里移除，**不许永久残留**；``events`` 按 ``event_id`` 分组；
+        - 只替换该命名空间：``manual`` / ``ranking`` 等其它命名空间的子快照一字不动；
+        - ``session`` 由调用方传入并持有短事务：本方法**只 flush**，
+          **不** commit / rollback / close，也**不发任何网络**；
+        - 需求落 ``hotspot_watch.source_demands`` JSON 列（该列由 04 幂等迁移补齐）。
+
+        需求驱动的节奏重算（第二批 B，照 §6.3 L681 / §8.3 L682）：
+
+        - 该命名空间快照**发生变化**的行，重算 ``sample_interval_s`` 与 ``next_due_epoch_s``：
+          仍有需求 -> 取当前所有命名空间的最小间隔；无任何需求 -> 停采（``active=0``，
+          ``stop_reason='events_revoked'``），但**保留全部历史**（快照 / 阶段 / coverage）；
+        - ``active=0 AND stop_reason='manual_stop'`` 的行优先级最高：**不重开、不重排**（第二批 E）；
+        - 重算只动调度 / 生命周期列，**不清** 02 阶段历史、原始快照或其它命名空间需求；
+        - 任何需求变化都推进 ``state_revision``，作为迟到写入的围栏（第二批 C）。
+
+        边界：``desired`` 里没有对应 watch 行的 bvid 本轮不落库（建行仍属
+        ``upsert_watch`` / 发现入库的职责）。
+
+        Args:
+            session: 调用方持有的 SQLAlchemy 会话（短事务，本方法只 flush）。
+            namespace: 需求命名空间，限 ``manual`` / ``ranking`` / ``events``。
+            desired: 该命名空间的完整需求快照。``events`` 形如
+                ``{"<event_id>": {"bvid": "BV..."}}`` 或 ``{"<event_id>": {"bvids": [...]}}``；
+                ``manual`` / ``ranking`` 形如 ``{"<bvid>": {...}}``（键即 bvid）。
+            now_s: 本次整编时刻（UTC 秒级整数 epoch）。
+
+        Returns:
+            无。
+
+        Raises:
+            ValueError: ``namespace`` 非法、``desired`` 非 dict / 条目非法、``now_s`` 非法，
+                或 ``events`` 条目既无 ``bvid`` 也无 ``bvids``。
+        """
+        if namespace not in DEMAND_NAMESPACES:
+            raise ValueError(f"invalid_namespace:{namespace}")
+        if not isinstance(desired, dict):
+            raise ValueError("invalid_desired")
+        now_epoch_s = _require_epoch_s(now_s)
+
+        # 归一化：bvid -> {本次该命名空间下的需求键 -> 需求描述}
+        by_bvid = self._normalize_desired(namespace, desired)
+
+        rows = self._load_demand_rows(session, list(by_bvid.keys()))
+        for row_id, bvid, payload, active, stop_reason in rows:
+            current = payload if isinstance(payload, dict) else {}
+            incoming = by_bvid.get(bvid)
+            merged = dict(current)
+            if incoming:
+                merged[namespace] = incoming
+            else:
+                merged.pop(namespace, None)  # 撤销：本轮快照里已消失的需求
+            if merged == current:
+                continue  # 无变化不写，避免无谓 UPDATE
+            self._write_source_demands(session, row_id, merged or None)
+            # 需求变了 -> 立刻重算该行节奏（第二批 B）
+            self._apply_rhythm(
+                session,
+                bvid=bvid,
+                merged=merged,
+                active=active,
+                stop_reason=stop_reason,
+                now_s=now_epoch_s,
+            )
+        session.flush()
+        logger.debug(
+            "reconcile_demands namespace=%s now_s=%s 目标bvid数=%s 命中行数=%s",
+            namespace,
+            now_epoch_s,
+            len(by_bvid),
+            len(rows),
+        )
+
+    def _apply_rhythm(
+        self,
+        session: Session,
+        *,
+        bvid: str,
+        merged: dict,
+        active: bool,
+        stop_reason: Any,
+        now_s: int,
+    ) -> None:
+        """按 ``merged`` 重算某行的采样节奏（第二批 B/E）；只动调度 / 生命周期列。
+
+        Args:
+            session: 调用方会话；只 flush。
+            bvid: 目标 BV 号。
+            merged: 该行重算后的完整需求快照。
+            active: 该行当前 ``active``。
+            stop_reason: 该行当前 ``stop_reason``。
+            now_s: 重算时刻（UTC 秒）。
+
+        Returns:
+            无。
+        """
+        # manual_stop 优先级最高：不改 active、不重排、不自动重开（第二批 E）。
+        if (not active) and isinstance(stop_reason, str) and stop_reason == "manual_stop":
+            logger.info("reconcile 跳过 manual_stop 行（blocked_by_user） bvid=%s", bvid)
+            return
+        interval = resolve_interval_s(merged)
+        if interval is None:
+            # 无任何需求 -> 停采；行保留、历史全留（第二批 B/D）。
+            if active:
+                release_watch(
+                    session, bvid, now_epoch_s=now_s, stop_reason=STOP_REASON_EVENTS_REVOKED
+                )
+            return
+        if not active:
+            # 已释放（非 manual_stop）但当前有需求：按需求重新入池并排程。
+            reactivate_watch(
+                session,
+                bvid,
+                now_epoch_s=now_s,
+                next_due_epoch_s=now_s + interval,
+                sample_interval_s=interval,
+            )
+            return
+        reschedule_watch(session, bvid, now_epoch_s=now_s, sample_interval_s=interval)
+
+    # ---- 启动清理（第二批 D）----
+
+    def recover_on_startup(self, session: Session, *, now_s: int) -> dict:
+        """应用重启清理：撤遗留 events 需求、重算节奏、清孤儿快采（第二批 D / E49）。
+
+        照 E49「04关闭后事件服务已停止再重启应用 | 启动清理遗留 events 需求并重算节奏；
+        manual/ranking 继续，无孤儿快采」：
+
+        - 逐行移除 ``source_demands`` 里的 ``events`` 命名空间，并按剩余需求重算节奏：
+          仍有 manual / ranking -> 退回其原节奏（``active=1`` 保留）；无任何需求 -> 停采
+          （``active=0``，``stop_reason='events_revoked'``），**历史全留**；
+        - ``manual_stop`` 行不重开、不重排（派生 reason=``blocked_by_user``）；
+        - 把主表所有 ``fast_until_s`` 置空：重启后不得留下不属于任何有效 panel 的孤儿快采。
+
+        本方法只 flush，提交由调用方短事务完成；不改任何评估历史 / 原始快照。
+
+        Args:
+            session: 调用方会话。
+            now_s: 本次恢复时刻（UTC 秒）。
+
+        Returns:
+            dict: ``events_cleared`` / ``released`` / ``rescheduled`` / ``blocked`` / ``fast_cleared``。
+        """
+        now_epoch_s = _require_epoch_s(now_s)
+        summary = {
+            "events_cleared": 0,
+            "released": 0,
+            "rescheduled": 0,
+            "blocked": 0,
+            "fast_cleared": 0,
+        }
+        for row_id, bvid, payload, active, stop_reason in self._load_demand_rows(session, []):
+            current = payload if isinstance(payload, dict) else {}
+            if "events" not in current:
+                continue
+            # manual_stop 优先：撤掉遗留的 events 需求，但绝不重开 / 重排（`_apply_rhythm` 会跳）。
+            blocked = (not active) and isinstance(stop_reason, str) and stop_reason == "manual_stop"
+            merged = dict(current)
+            merged.pop("events", None)
+            self._write_source_demands(session, row_id, merged or None)
+            summary["events_cleared"] += 1
+            self._apply_rhythm(
+                session,
+                bvid=bvid,
+                merged=merged,
+                active=active,
+                stop_reason=stop_reason,
+                now_s=now_epoch_s,
+            )
+            if blocked:
+                summary["blocked"] += 1
+            elif not has_demands(merged) and active:
+                summary["released"] += 1
+            else:
+                summary["rescheduled"] += 1
+        summary["fast_cleared"] = self._clear_orphan_fast(session)
+        session.flush()
+        logger.info(
+            "watch 启动清理：events撤=%s 停采=%s 重排=%s manual_stop拦截=%s 清快采=%s",
+            summary["events_cleared"],
+            summary["released"],
+            summary["rescheduled"],
+            summary["blocked"],
+            summary["fast_cleared"],
+        )
+        return summary
+
+    @staticmethod
+    def _clear_orphan_fast(session: Session) -> int:
+        """把 ``hotspot_watch.fast_until_s`` 全部置空（清孤儿快采，第二批 D）。
+
+        ``fast_until_s`` 由 04 迁移补齐，ORM 模型未声明；缺列（未跑迁移的库）时静默跳过。
+
+        Args:
+            session: 调用方会话；只 flush。
+
+        Returns:
+            int: 被置空的行数；缺列 / 异常时为 0。
+        """
+        try:
+            inspector = sa_inspect(session.get_bind())
+            if not inspector.has_table("hotspot_watch"):
+                return 0
+            columns = {col["name"] for col in inspector.get_columns("hotspot_watch")}
+            if "fast_until_s" not in columns:
+                return 0
+            result = session.execute(
+                text("UPDATE hotspot_watch SET fast_until_s = NULL WHERE fast_until_s IS NOT NULL")
+            )
+            session.flush()
+            return int(result.rowcount or 0)
+        except Exception:  # noqa: BLE001 - 清理快采失败不许炸启动
+            logger.exception("清孤儿快采失败")
+            return 0
+
+    @staticmethod
+    def _normalize_desired(namespace: str, desired: dict) -> dict:
+        """把 ``desired`` 归一化成 ``bvid -> {需求键: 需求描述}``。
+
+        Args:
+            namespace: 已校验的命名空间。
+            desired: 该命名空间的完整快照。
+
+        Returns:
+            dict: ``bvid -> {需求键: 需求描述}``。
+
+        Raises:
+            ValueError: 条目不是 dict，或 ``events`` 条目缺 bvid / bvids。
+        """
+        by_bvid: dict = {}
+        for key, descriptor in desired.items():
+            if descriptor is None:
+                descriptor = {}
+            if not isinstance(descriptor, dict):
+                raise ValueError("invalid_desired_entry")
+            demand_key = str(key)
+            for bvid in _demand_bvids(namespace, demand_key, descriptor):
+                by_bvid.setdefault(bvid, {})[demand_key] = descriptor
+        return by_bvid
+
+    @staticmethod
+    def _load_demand_rows(session: Session, bvids: list) -> list:
+        """读出「可能受影响」的行：``source_demands`` 非空的行 + 本次 desired 覆盖的 bvid 行。
+
+        需求列是 JSON 文本，无法直接 SQL 过滤命名空间，故先把候选行读出来在 Python 侧整编；
+        候选集由「已有需求的行」与「本轮 desired 涉及的行」两部分并集界定，足以覆盖「新增 /
+        更新 / 撤销」三种情形。
+
+        Args:
+            session: 调用方会话。
+            bvids: 本轮 desired 覆盖的 bvid 列表。
+
+        Returns:
+            list[tuple[int, str, Any, bool, Any]]:
+            ``(id, bvid, source_demands 原值, active, stop_reason)``。
+        """
+        out: dict = {}
+        base = text(
+            "SELECT id, bvid, source_demands, active, stop_reason FROM hotspot_watch "
+            "WHERE source_demands IS NOT NULL"
+        )
+        for row in session.execute(base).all():
+            out[int(row[0])] = (
+                int(row[0]),
+                str(row[1]),
+                _json_to_obj(row[2]),
+                bool(row[3]),
+                row[4],
+            )
+        wanted = [str(b).strip() for b in bvids if str(b).strip()]
+        if wanted:
+            stmt = text(
+                "SELECT id, bvid, source_demands, active, stop_reason FROM hotspot_watch "
+                "WHERE bvid IN :bvids"
+            ).bindparams(bindparam("bvids", expanding=True))
+            for row in session.execute(stmt, {"bvids": wanted}).all():
+                out[int(row[0])] = (
+                    int(row[0]),
+                    str(row[1]),
+                    _json_to_obj(row[2]),
+                    bool(row[3]),
+                    row[4],
+                )
+        return list(out.values())
+
+    @staticmethod
+    def _write_source_demands(session: Session, row_id: int, payload: Any) -> None:
+        """把整编后的需求写回 ``source_demands``（``payload`` 为 None 表示清空）。
+
+        Args:
+            session: 调用方会话。
+            row_id: ``hotspot_watch.id``。
+            payload: 待写入的 Python 对象；None 表示置空。
+
+        Returns:
+            无。
+        """
+        session.execute(
+            text("UPDATE hotspot_watch SET source_demands = :payload WHERE id = :row_id"),
+            {
+                "payload": None
+                if payload is None
+                else json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                "row_id": int(row_id),
+            },
+        )
+
     # ---- 对外入口 ----
 
-    async def run_tick(self, *, limit: int = DEFAULT_TICK_LIMIT) -> TickResult:
+    async def run_tick(
+        self, *, limit: int = DEFAULT_TICK_LIMIT, budget: Any | None = None
+    ) -> TickResult:
         """跑一轮完整 tick（顺序：先清 → 捞 → 领 → 采 → 评 → 写 → 排）。
 
         目标级异常在此被隔离并计入 ``TickResult.failed``；调度阶段（先清 / 捞）的
@@ -574,19 +1124,31 @@ class WatchService:
 
         Args:
             limit: 本轮最多处理多少个目标（>=1）。
+            budget: 预算对象（第二批 F）；None 时回退构造注入的 ``budget``；两者都 None =
+                不做类别预算门（保持既有 tick 行为）。
 
         Returns:
             TickResult: 本轮结构化结果。
         """
         now_epoch_s = int(self._now_fn())
         result = TickResult(now_epoch_s=now_epoch_s)
+        active_budget = budget if budget is not None else self._budget
 
         # ---- 先清 + 1. 捞：同一事务内「到期先归档、再捞该评估的」，
         #      保证本轮被释放的行不会出现在本轮调度结果里。
         session = self._session_factory()
         try:
+            # ---- 可选：每轮开头做一次需求整编（4e 快采节奏接线）----
+            # 组装处注入 04 侧 EventWatchDemandReconciler.reconcile（flush-only）；默认 None 时
+            # 整段跳过 → 与既有 tick 行为逐字节一致。与本轮调度同处一个短事务，随末尾 commit 落库。
+            if self._demand_reconcile_hook is not None:
+                self._demand_reconcile_hook(session, now_s=now_epoch_s)
             result.released = release_expired(session, now_epoch_s)
-            targets = self._load_targets(session, now_epoch_s, limit)
+            selection = self._select_targets(session, now_epoch_s, limit, budget=active_budget)
+            targets = selection.targets
+            result.budget_skipped = selection.budget_skipped
+            result.retry_delay_s = selection.retry_delay_s
+            result.budget_exhausted = selection.budget_exhausted
             session.commit()
         except Exception:
             session.rollback()
@@ -597,7 +1159,12 @@ class WatchService:
 
         result.due_count = len(targets)
         if not targets:
-            logger.info("watch tick 空转：now_epoch_s=%s 无该评估的目标", now_epoch_s)
+            logger.info(
+                "watch tick 空转：now_epoch_s=%s 无该评估的目标（预算跳过=%s 预算耗尽=%s）",
+                now_epoch_s,
+                result.budget_skipped,
+                result.budget_exhausted,
+            )
             return result
 
         # 算法只构造一次：用本轮各目标的历史状态续算，避免每次冷启动。
@@ -627,13 +1194,14 @@ class WatchService:
                 result.dropped += 1
 
         logger.info(
-            "watch tick: now_epoch_s=%s 释放=%s 到点=%s 写回=%s 丢弃=%s 失败=%s",
+            "watch tick: now_epoch_s=%s 释放=%s 到点=%s 写回=%s 丢弃=%s 失败=%s 预算跳过=%s",
             result.now_epoch_s,
             result.released,
             result.due_count,
             result.committed,
             result.dropped,
             result.failed,
+            result.budget_skipped,
         )
         return result
 
@@ -643,6 +1211,7 @@ class WatchService:
         interval_s: int = DEFAULT_LOOP_INTERVAL_S,
         stop_event: asyncio.Event | None = None,
         limit: int = DEFAULT_TICK_LIMIT,
+        budget: Any | None = None,
     ) -> None:
         """常驻调度循环：每 ``interval_s`` 秒跑一轮 tick，单轮异常只记日志、不中断循环。
 
@@ -650,32 +1219,62 @@ class WatchService:
         职责不放 watch 采样循环，「先清后调」由本方法承担。本批只提供循环入口，**不改**
         ``core/`` 任何存量文件；是否挂到全局调度由后续整合批次决定。
 
+        预算公平（第二批 F，照 §6.3 L630）：每轮只从**当前可授予预算**的类别里选 due 项，
+        某类别配额用尽立即跳过，**绝不**在唯一 watch 循环里死等 fast 额度而挡住仍可运行的
+        normal；只有「无类别可运行」时才等最早 ``retry_at`` 或 ``stop_event``。
+
         Args:
             interval_s: 轮询间隔（秒，>=1）。
             stop_event: 外部停止信号；缺省新建一个永不触发的 Event。
             limit: 每轮最多处理的目标数。
+            budget: 预算对象；None 时回退构造注入的 ``budget``。
 
         Returns:
             无。
         """
         stop_event = stop_event or asyncio.Event()
         interval_s = max(1, int(interval_s))
+        active_budget = budget if budget is not None else self._budget
         while not stop_event.is_set():
+            wait_s = float(interval_s)
             try:
-                await self.run_tick(limit=limit)
+                result = await self.run_tick(limit=limit, budget=active_budget)
+                wait_s = self._compute_wait_s(interval_s=interval_s, result=result)
             except Exception as exc:  # noqa: BLE001 - 单轮失败不允许中断常驻循环
                 logger.exception("watch tick 异常，继续下一轮: %s", exc)
+            if wait_s <= 0:
+                # 兜底：绝不让唯一循环忙转（理论不可达，被拒时 retry_at 必在未来）。
+                await asyncio.sleep(0)
+                continue
             try:
-                await asyncio.wait_for(stop_event.wait(), timeout=interval_s)
+                await asyncio.wait_for(stop_event.wait(), timeout=wait_s)
             except asyncio.TimeoutError:
                 continue
+
+    @staticmethod
+    def _compute_wait_s(*, interval_s: float, result: TickResult) -> float:
+        """算下一轮等待秒数（纯函数，便于用假时钟直接断言，第二批 F）。
+
+        规则（照 §6.3 L630）：无类别可运行（所有到点项都被预算挡住）-> 等最早 ``retry_at``；
+        否则 -> 等正常轮询间隔。
+
+        Args:
+            interval_s: 正常轮询间隔（秒）。
+            result: 本轮 tick 结果。
+
+        Returns:
+            float: 下一轮等待秒数（>=0）。
+        """
+        if result.budget_exhausted and result.retry_delay_s is not None:
+            return max(0.0, float(result.retry_delay_s))
+        return max(0.0, float(interval_s))
 
     # ---- 步骤 1：捞 ----
 
     def _load_targets(
         self, session: Session, now_epoch_s: int, limit: int
     ) -> list[WatchTarget]:
-        """1. 捞：读该评估的 watch 行，抽出脱离 session 仍可用的目标。
+        """1. 捞：读该评估的 watch 行，抽出脱离 session 仍可用的目标（不做预算门）。
 
         Args:
             session: 调度会话。
@@ -686,24 +1285,98 @@ class WatchService:
             list[WatchTarget]: 按 ``next_due_epoch_s`` 升序的目标列表。
         """
         rows = find_due_for_eval(session, now_epoch_s, limit=max(1, int(limit)))
+        return [self._build_target(row) for row in rows]
+
+    def _select_targets(
+        self,
+        session: Session,
+        now_epoch_s: int,
+        limit: int,
+        *,
+        budget: Any | None = None,
+        now_mono: float | None = None,
+    ) -> _Selection:
+        """1. 捞（预算感知版，第二批 F）：只从**当前可授予预算**的类别里选 due 项。
+
+        选取规则（照 §6.3 L630）：
+
+        - 每个到点行先按其 ``fast_until_s`` 是否仍生效归类 ``normal_watch`` / ``fast_watch``；
+        - 调 ``RequestBudget.try_acquire(kind, now_mono)``：**granted 才入选**（同时原子记费）；
+        - 某类别配额用尽（拒绝）**立即跳过该项、继续看后面的项**，绝不死等该类别；
+        - ``budget`` 为 None 时退化为不做预算门（保持既有 tick 行为）。
+
+        Args:
+            session: 调度会话。
+            now_epoch_s: 本轮时刻（UTC 秒）。
+            limit: 单轮上限（>=1）。
+            budget: 预算对象或 None。
+            now_mono: 单调时钟读数；None 时用 ``now_mono_fn``。
+
+        Returns:
+            _Selection: 入选目标 + 预算跳过计数 + 最早可重试等待 + 是否预算耗尽。
+        """
+        limit = max(1, int(limit))
+        if budget is None:
+            return _Selection(targets=self._load_targets(session, now_epoch_s, limit))
+
+        now_mono = float(self._now_mono_fn() if now_mono is None else now_mono)
+        # 取比 limit 更宽的一批，才能跳过被预算挡住的类别继续往后选（不饿死别的类别）。
+        rows = find_due_for_eval(session, now_epoch_s, limit=max(limit, limit * 8))
+        fast_map = load_fast_until_map(session, [str(row.bvid) for row in rows])
         targets: list[WatchTarget] = []
+        skipped = 0
+        earliest_retry: float | None = None
         for row in rows:
-            sample_interval_s = getattr(row, "sample_interval_s", None)
-            targets.append(
-                WatchTarget(
-                    bvid=str(row.bvid),
-                    collection_tid=(
-                        int(row.collection_tid) if row.collection_tid is not None else None
-                    ),
-                    sample_interval_s=(
-                        int(sample_interval_s)
-                        if type(sample_interval_s) is int and sample_interval_s > 0
-                        else DEFAULT_SAMPLE_INTERVAL_S
-                    ),
-                    initial_state=state_from_json(getattr(row, "state_json", None)),
-                )
+            if len(targets) >= limit:
+                break
+            bvid = str(row.bvid)
+            fast_until = fast_map.get(bvid)
+            category = (
+                BUDGET_CATEGORY_FAST
+                if (type(fast_until) is int and fast_until > now_epoch_s)
+                else BUDGET_CATEGORY_NORMAL
             )
-        return targets
+            decision = budget.try_acquire(category, now_mono)
+            if not getattr(decision, "granted", False):
+                skipped += 1
+                retry = getattr(decision, "retry_at_mono", None)
+                if retry is not None:
+                    earliest_retry = retry if earliest_retry is None else min(earliest_retry, retry)
+                continue
+            targets.append(self._build_target(row, category))
+        retry_delay_s = None
+        if earliest_retry is not None:
+            retry_delay_s = max(0.0, float(earliest_retry) - now_mono)
+        return _Selection(
+            targets=targets,
+            budget_skipped=skipped,
+            retry_delay_s=retry_delay_s,
+            budget_exhausted=(not targets) and skipped > 0,
+        )
+
+    @staticmethod
+    def _build_target(row: Any, category: str = BUDGET_CATEGORY_NORMAL) -> WatchTarget:
+        """把一行 ``hotspot_watch`` 抽成脱离 session 仍可用的目标。
+
+        Args:
+            row: ``hotspot_watch`` 行。
+            category: 预算类别。
+
+        Returns:
+            WatchTarget。
+        """
+        sample_interval_s = getattr(row, "sample_interval_s", None)
+        return WatchTarget(
+            bvid=str(row.bvid),
+            collection_tid=(int(row.collection_tid) if row.collection_tid is not None else None),
+            sample_interval_s=(
+                int(sample_interval_s)
+                if type(sample_interval_s) is int and sample_interval_s > 0
+                else DEFAULT_SAMPLE_INTERVAL_S
+            ),
+            initial_state=state_from_json(getattr(row, "state_json", None)),
+            category=category,
+        )
 
     # ---- 步骤 2..6：单目标处理 ----
 
@@ -740,8 +1413,20 @@ class WatchService:
             rows = self._snapshot_loader(session, target.bvid)
             detections, analysis = self._evaluate(detector, target.bvid, rows)
 
-            # ---- 5. 写：带「领取时」代际的 fenced 提交 ----
-            # False = 领取后被别的代际抢先 -> 丢弃这次结果，不许硬写。
+            # ---- 4.5 需求围栏（第二批 C）：写入前再检查 active / 代际 ----
+            # 需求撤销 / 手动停追会在采集期间把 active 置 0 并推进代际；此时**迟到结果必须丢弃**，
+            # 绝不能「先写进去再判」。这里显式再查一次，步骤 5 的 UPDATE 还额外带 active 原子谓词。
+            if not self._write_fence_ok(session, target.bvid, claim):
+                session.rollback()
+                logger.info(
+                    "watch 迟到写入被需求围栏拦下（需求已撤销 / 已停追） bvid=%s claim_revision=%s",
+                    target.bvid,
+                    claim,
+                )
+                return TargetOutcome(status="dropped")
+
+            # ---- 5. 写：带「领取时」代际的 fenced 提交（+ active 原子围栏）----
+            # False = 领取后被别的代际抢先 / 需求已撤销 -> 丢弃这次结果，不许硬写。
             committed = commit_state(
                 session,
                 target.bvid,
@@ -751,12 +1436,13 @@ class WatchService:
                 state_json=state_to_json(analysis.state),
                 coverage_ratio=float(analysis.coverage_ratio),
                 coverage_state=analysis.coverage_state.value,
+                require_active=True,
             )
             if not committed:
                 # 不写快照、不动调度、不覆盖新 owner：整轮结果丢弃。
                 session.rollback()
                 logger.info(
-                    "watch 写回被 fence 丢弃（代际已过期） bvid=%s claim_revision=%s",
+                    "watch 写回被 fence 丢弃（代际已过期 / 已释放） bvid=%s claim_revision=%s",
                     target.bvid,
                     claim,
                 )
@@ -808,6 +1494,33 @@ class WatchService:
         analysis = detector.analyze_one(bvid, snapshots)
         return detections, analysis
 
+    @staticmethod
+    def _write_fence_ok(session: Session, bvid: str, claim_revision: int) -> bool:
+        """写入前的最终围栏检查（第二批 C）：``active`` 仍为真且代际未变。
+
+        需求撤销 / 手动停追会 ``release_watch``（``active=0`` + ``state_revision + 1``），
+        因此这条检查能拦住「采集期间需求被撤、随后才回来写」的迟到 worker。它只是显式防线，
+        真正的原子性由 :func:`modules.hotspot.watch_store.commit_state` 的
+        ``require_active=True`` 在同一条 UPDATE 里保证。
+
+        Args:
+            session: 调用方会话。
+            bvid: 目标 BV 号。
+            claim_revision: 领取时读到的代际号。
+
+        Returns:
+            bool: 可写回返回 True；行不存在 / 已释放 / 代际变了返回 False。
+        """
+        row = session.execute(
+            text("SELECT active, state_revision FROM hotspot_watch WHERE bvid = :bvid"),
+            {"bvid": str(bvid or "").strip()},
+        ).first()
+        if row is None:
+            return False
+        if not bool(row[0]):
+            return False
+        return int(row[1]) == int(claim_revision)
+
     # ---- 失败隔离落点 ----
 
     def _record_failure(
@@ -849,17 +1562,30 @@ class WatchService:
 #: 便于外部按名字取缺省算法（与 ``TickResult.detections`` 的类型提示配合）。
 DEFAULT_DETECTOR = LifecycleV2
 
+#: 04 文档把 02 的唯一采样服务称作 ``HotspotWatchService``；仓库实现名是 :class:`WatchService`。
+#: 这里给同一个类建档一个别名，**不是** 新起第二个采样服务。
+HotspotWatchService = WatchService
+
 __all__ = [
+    "BUDGET_CATEGORIES",
+    "BUDGET_CATEGORY_FAST",
+    "BUDGET_CATEGORY_NORMAL",
+    "DEMAND_NAMESPACES",
+    "DEMAND_REASONS",
     "DEFAULT_LOOP_INTERVAL_S",
     "DEFAULT_TICK_LIMIT",
     "MAX_BACKOFF_S",
     "MAX_FAILURE_COUNT",
+    "STOP_REASON_EVENTS_REVOKED",
     "WATCH_SOURCE",
+    "AdmissionResult",
     "Detection",
     "HotspotCollectorPort",
     "SnapshotCollectorPort",
     "TargetOutcome",
     "TickResult",
+    "WatchPool",
+    "HotspotWatchService",
     "WatchService",
     "WatchTarget",
     "advance_next_due",

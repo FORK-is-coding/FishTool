@@ -67,6 +67,14 @@ from .models_system import Task, OperationLog, LLMUsage, MonitorState
 from .models_benchmark import BenchmarkRun
 from .models_quota import HttpQuotaBucket
 from .models_hotspot_watch import HotspotWatch
+from .models_hot_event import (
+    HotEvent,
+    HotEventMember,
+    EventDiscoveryRun,
+    HotEventAssessment,
+    OpportunityRun,
+    TopicGenerationRun,
+)
 from .manager import DatabaseManager
 from .api import init_database, get_session, get_db, db_manager
 

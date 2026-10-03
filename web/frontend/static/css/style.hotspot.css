@@ -58,3 +58,47 @@
 .hotspot-drawer-actions { margin-top:16px; display:flex; gap:8px; }
 .hotspot-drawer-error { padding:16px; color:var(--danger-color, #c0392b); font-size:13px; }
 @media (max-width: 760px) { .hotspot-lifecycle-grid { grid-template-columns:1fr; } .hotspot-section-heading { align-items:flex-start; flex-direction:column; } }
+
+
+/* ===== 第三批 g：事件工作台 / 机会列表 / 证据回看 / 最小反馈 =====
+   约束：不依赖颜色唯一表达（状态同时给文字 + 边框样式）；只增状态 / 证据区。 */
+.event-workbench { margin-top: 16px; }
+.event-status { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 12px; border: 1px solid currentColor; }
+.event-status-running { border-style: dashed; }
+.event-status-completed, .event-status-complete { font-weight: 600; }
+.event-status-insufficient, .event-status-stale { border-style: dotted; }
+.event-action { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 12px; border: 1px solid currentColor; }
+.event-topic-card, .event-opportunity-card {
+    padding: 12px; margin: 10px 0; background: #fff; border-radius: 8px;
+    border-left: 3px solid var(--primary-color);
+}
+.event-meta { color: var(--text-secondary); font-size: 12px; }
+.event-insufficient { border-left: 3px solid #b8860b; padding-left: 8px; }
+.event-error { color: #b00020; }
+
+/* ===== 第三批 h：事件工作台完整版（双通道 / 可溯源 / 历史时间 / 热门 Tag）=====
+   约束仍为：不依赖颜色唯一表达（状态同时给文字 + 边框样式）。 */
+.event-hot-tags { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.event-tag-chip { border:1px solid var(--border-color); background:var(--primary-soft); color:var(--text-primary); }
+.event-attribution { margin:12px 0; padding:10px 12px; border:1px solid var(--border-color); border-radius:8px; }
+.event-attribution legend { padding:0 6px; color:var(--text-secondary); font-size:12px; }
+.event-attribution label { margin-right:16px; font-size:13px; }
+.event-attribution-preview { margin-top:8px; }
+.event-brief { margin:12px 0; }
+.event-brief-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:8px; }
+.event-brief-grid label { display:flex; flex-direction:column; font-size:12px; color:var(--text-secondary); gap:4px; }
+.event-action-row { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0; }
+.event-trace { margin-top:8px; }
+.event-trace-list { margin:6px 0; padding-left:18px; font-size:12px; color:var(--text-secondary); }
+.event-dual-channel { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:10px; }
+.event-channel { padding:10px 12px; border:1px solid var(--border-color); border-radius:8px; background:var(--bg-elevated); }
+.event-channel h4 { font-size:13px; margin-bottom:4px; color:var(--text-primary); }
+.event-assessment { margin-top:12px; padding:12px; border:1px dashed var(--border-color); border-radius:8px; }
+.event-assessment-history { margin-top:8px; }
+@media (max-width:760px) { .event-brief-grid, .event-dual-channel { grid-template-columns:1fr; } }
+
+/* ===== 第三批 i：只读预览 / 预算名额 / 单视频跳 02 卡片 =====
+   约束不变：不依赖颜色唯一表达（提示同时给文字）。 */
+.event-video-links { margin-top:10px; }
+.event-video-link { margin:2px 4px 2px 0; }
+.event-jump-hint { margin-top:6px; font-size:12px; color:var(--text-secondary); min-height:1em; }

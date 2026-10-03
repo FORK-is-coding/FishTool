@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from sqlalchemy import func, update
+from sqlalchemy import bindparam, func, inspect as sa_inspect, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
@@ -184,6 +184,199 @@ def upsert_watch(
     return session.query(HotspotWatch).filter(HotspotWatch.bvid == clean_bvid).one()
 
 
+def count_active_watch(session: Session) -> int:
+    """统计当前在池（``active=1``）的行数（准入容量闸门用）。
+
+    Args:
+        session: 调用方会话。
+
+    Returns:
+        int: ``active=1`` 的行数。
+    """
+    return int(
+        session.query(func.count())
+        .select_from(HotspotWatch)
+        .filter(HotspotWatch.active.is_(True))
+        .scalar()
+        or 0
+    )
+
+
+def reactivate_watch(
+    session: Session,
+    bvid: str,
+    *,
+    now_epoch_s: int,
+    next_due_epoch_s: int | None = None,
+    sample_interval_s: int | None = None,
+) -> bool:
+    """把已释放（非 manual_stop）的行重新放回池并排程（准入放行用）。
+
+    只写调度 / 生命周期列，**不碰** ``state_json`` / ``last_confirmed_stage`` /
+    ``coverage_*`` / ``last_evaluation_epoch_s`` 等评估历史（连续窗状态必须保留）；
+    按 02 §0 裁定一，改变调度状态即同事务 ``state_revision + 1``。
+
+    Args:
+        session: 调用方会话；只 flush。
+        bvid: 目标 BV 号。
+        now_epoch_s: 本次放行时刻（UTC 秒）。
+        next_due_epoch_s: 下次应采样时刻；None 时按 ``now + interval``。
+        sample_interval_s: 采样间隔；None 时保持原值（若非法则回退默认）。
+
+    Returns:
+        bool: 命中该 bvid 返回 True（rowcount==1），否则 False。
+
+    Raises:
+        ValueError: bvid 为空或时间戳非法。
+    """
+    clean_bvid = str(bvid or "").strip()
+    if not clean_bvid:
+        raise ValueError("invalid_bvid")
+    now_epoch_s = _require_epoch(now_epoch_s, "invalid_now_epoch_s")
+    values: dict = {
+        "active": True,
+        "stop_reason": None,
+        "released_epoch_s": None,
+        "last_seen_epoch_s": now_epoch_s,
+        "state_revision": HotspotWatch.state_revision + 1,
+    }
+    if sample_interval_s is not None:
+        values["sample_interval_s"] = _require_epoch(sample_interval_s, "invalid_sample_interval_s")
+    if next_due_epoch_s is not None:
+        values["next_due_epoch_s"] = _require_epoch(next_due_epoch_s, "invalid_next_due_epoch_s")
+    result = session.execute(
+        update(HotspotWatch).where(HotspotWatch.bvid == clean_bvid).values(**values)
+    )
+    session.flush()
+    return int(result.rowcount or 0) == 1
+
+
+def release_watch(
+    session: Session,
+    bvid: str,
+    *,
+    now_epoch_s: int,
+    stop_reason: str,
+) -> bool:
+    """把在池行置为「已释放」（``active=0``），保留全部历史。
+
+    用于「需求全撤 / 启动清理」场景：停采但**不删**任何评估历史、快照或其它列。
+    同时把 ``state_revision + 1``：释放改变调度状态，借此 fence 掉释放前领取、释放后
+    才回来的迟到写入（第二批 C）。
+
+    Args:
+        session: 调用方会话；只 flush。
+        bvid: 目标 BV 号。
+        now_epoch_s: 释放时刻（UTC 秒）。
+        stop_reason: 释放原因码（如 ``events_revoked``）。
+
+    Returns:
+        bool: 命中该 bvid 返回 True。
+
+    Raises:
+        ValueError: bvid 为空或时间戳非法。
+    """
+    clean_bvid = str(bvid or "").strip()
+    if not clean_bvid:
+        raise ValueError("invalid_bvid")
+    now_epoch_s = _require_epoch(now_epoch_s, "invalid_now_epoch_s")
+    result = session.execute(
+        update(HotspotWatch)
+        .where(HotspotWatch.bvid == clean_bvid, HotspotWatch.active.is_(True))
+        .values(
+            active=False,
+            stop_reason=str(stop_reason or "released")[:32],
+            released_epoch_s=now_epoch_s,
+            state_revision=HotspotWatch.state_revision + 1,
+        )
+    )
+    session.flush()
+    return int(result.rowcount or 0) == 1
+
+
+def reschedule_watch(
+    session: Session,
+    bvid: str,
+    *,
+    now_epoch_s: int,
+    sample_interval_s: int,
+    next_due_epoch_s: int | None = None,
+) -> bool:
+    """按新的需求节奏重排某行（只改调度列 + 代际，不动评估历史）。
+
+    用于「撤销某命名空间后重算 ``next_due_epoch_s``」（第二批 B）：清除 events 需求但仍有
+    manual / ranking 需求时，退回其原节奏。**不碰** ``state_json`` / 快照 / 其它命名空间需求。
+
+    Args:
+        session: 调用方会话；只 flush。
+        bvid: 目标 BV 号。
+        now_epoch_s: 重算时刻（UTC 秒）。
+        sample_interval_s: 新的采样间隔（正整数秒）。
+        next_due_epoch_s: 新的下次应采样时刻；None 时按 ``now + interval``。
+
+    Returns:
+        bool: 命中该 bvid 返回 True。
+
+    Raises:
+        ValueError: bvid 为空或时间戳非法。
+    """
+    clean_bvid = str(bvid or "").strip()
+    if not clean_bvid:
+        raise ValueError("invalid_bvid")
+    now_epoch_s = _require_epoch(now_epoch_s, "invalid_now_epoch_s")
+    interval = _require_epoch(sample_interval_s, "invalid_sample_interval_s")
+    if interval <= 0:
+        raise ValueError("invalid_sample_interval_s")
+    due = (
+        now_epoch_s + interval
+        if next_due_epoch_s is None
+        else _require_epoch(next_due_epoch_s, "invalid_next_due_epoch_s")
+    )
+    result = session.execute(
+        update(HotspotWatch)
+        .where(HotspotWatch.bvid == clean_bvid)
+        .values(
+            sample_interval_s=interval,
+            next_due_epoch_s=due,
+            state_revision=HotspotWatch.state_revision + 1,
+        )
+    )
+    session.flush()
+    return int(result.rowcount or 0) == 1
+
+
+def load_fast_until_map(session: Session, bvids: list) -> dict:
+    """读出给定 bvid 的 ``fast_until_s``（04 迁移补的列，ORM 模型未声明）。
+
+    列由 ``_migrate_hotspot_watch_event_columns`` 幂等补齐；在未跑迁移的库（如仅用
+    ``Base.metadata.create_all`` 的测试库）上该列不存在，此时**优雅降级**为
+    ``{}``（一律按普通节奏处理），绝不因缺列炸整轮。
+
+    Args:
+        session: 调用方会话。
+        bvids: 待查询的 bvid 列表。
+
+    Returns:
+        dict: ``bvid -> fast_until_s (int 或 None)``；缺列时为空 dict。
+    """
+    wanted = [str(b).strip() for b in bvids if str(b).strip()]
+    if not wanted:
+        return {}
+    try:
+        if not sa_inspect(session.get_bind()).has_table("hotspot_watch"):
+            return {}
+        columns = {col["name"] for col in sa_inspect(session.get_bind()).get_columns("hotspot_watch")}
+        if "fast_until_s" not in columns:
+            return {}
+        stmt = text(
+            "SELECT bvid, fast_until_s FROM hotspot_watch WHERE bvid IN :bvids"
+        ).bindparams(bindparam("bvids", expanding=True))
+        rows = session.execute(stmt, {"bvids": wanted}).all()
+    except Exception:  # noqa: BLE001 - 缺列 / 旧库一律降级为「无快采」，不炸整轮
+        return {}
+    return {str(row[0]): (int(row[1]) if row[1] is not None else None) for row in rows}
+
+
 def find_due_for_eval(session: Session, now_epoch_s: int, *, limit: int = 1) -> list:
     """调度查询：捞出「该评估的 watch」（先清后调中的「调」侧）。
 
@@ -302,6 +495,7 @@ def commit_state(
     state_json: dict | None = None,
     coverage_ratio: float | None = None,
     coverage_state: str | None = None,
+    require_active: bool = False,
 ) -> bool:
     """带 revision 校验的写回：旧代际写入一律丢弃（02 §0 裁定一）。
 
@@ -318,9 +512,12 @@ def commit_state(
         state_json: 状态 JSON（候选基线 / 计数 / segment 标识），可为 None。
         coverage_ratio: coverage 数值，可为 None。
         coverage_state: coverage 枚举值，可为 None；与 ratio 必须同给同缺。
+        require_active: 为 True 时把 ``active=1`` 一并放进 WHERE 谓词，作为**原子围栏** ——
+            需求被撤销 / 手动停追（``release_watch`` / ``manual_stop``）后，迟到 worker 的写回
+            在同一条 UPDATE 内被判无效并丢弃（第二批 C）。默认 False 保持既有调用点不变。
 
     Returns:
-        提交成功 True；因代际过期被丢弃 False。
+        提交成功 True；因代际过期 / 已释放被丢弃 False。
 
     Raises:
         ValueError: bvid 空、时间戳非法，或 coverage 两级不成对 / 取值非法。
@@ -344,13 +541,13 @@ def commit_state(
         values["coverage_ratio"] = float(coverage_ratio)
         values["coverage_state"] = coverage_state
 
-    result = session.execute(
-        update(HotspotWatch)
-        .where(
-            HotspotWatch.bvid == clean_bvid,
-            HotspotWatch.state_revision == _require_epoch(claim_revision, "invalid_claim_revision"),
-        )
-        .values(**values)
-    )
+    predicates = [
+        HotspotWatch.bvid == clean_bvid,
+        HotspotWatch.state_revision == _require_epoch(claim_revision, "invalid_claim_revision"),
+    ]
+    if require_active:
+        # 迟到围栏：需求撤销 / 停追把 active 置 0，这条 UPDATE 便匹配不到行 -> 丢弃。
+        predicates.append(HotspotWatch.active.is_(True))
+    result = session.execute(update(HotspotWatch).where(*predicates).values(**values))
     session.flush()
     return int(result.rowcount or 0) == 1

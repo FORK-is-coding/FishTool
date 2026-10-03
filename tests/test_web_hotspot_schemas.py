@@ -92,14 +92,24 @@ def test_topic_generate_request_requires_direction_and_zone():
 
 
 def test_topic_generate_request_model_dump_contract():
-    """model_dump 输出字段集合应与接口契约一致。"""
+    """model_dump 输出字段集合应与接口契约一致（第三批 g 扩展幂等键字段）。"""
     request = TopicGenerateRequest(direction="d", zone_name="z", count=5, use_llm=False)
     assert request.model_dump() == {
         "direction": "d",
         "zone_name": "z",
         "count": 5,
         "use_llm": False,
+        "generation_request_id": None,
+        "opportunity_run_id": None,
+        "selected_event_ids": None,
+        "context_mode": "current",
     }
+
+
+def test_topic_generate_request_forbids_extra_fields():
+    """第三批 g：extra=forbid——客户端不能自填 phase / 指标 / 已验 deadline 等真值。"""
+    with pytest.raises(ValidationError):
+        TopicGenerateRequest(direction="d", zone_name="z", phase="rising")
 
 
 # ---------------------------------------------------------------------------

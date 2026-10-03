@@ -13,7 +13,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 # 桌面测试在无显示器环境运行，避免 Qt 尝试连接真实桌面会话。
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# 显式**规整**（去空白）而非 setdefault：外部若把该变量设成 "offscreen " 这类带空白的
+# 污染值，setdefault 不会纠正，Qt 解析平台插件名失败会以 0xC0000409（解释器级崩溃）
+# 带走整个 pytest 进程；这里统一去空白，空值回退 offscreen。
+_QT_PLATFORM = os.environ.get("QT_QPA_PLATFORM", "").strip() or "offscreen"
+os.environ["QT_QPA_PLATFORM"] = _QT_PLATFORM
 
 
 # ===========================================================================
@@ -363,3 +367,10 @@ def _install_import_time_isolation() -> None:
 
 _install_import_time_isolation()
 print(f"[conftest] 测试落盘隔离已启用 -> {_ISOLATED_ROOT}")
+
+
+def pytest_configure(config):
+    """注册第三批 i 新增的测试标记，避免未知标记告警。"""
+    config.addinivalue_line(
+        "markers", "live: 需显式授权（BILIBILI_LIVE_CONTRACT=1）才执行的真网络契约验证（默认跳过）"
+    )

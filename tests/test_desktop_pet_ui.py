@@ -25,9 +25,25 @@ Qt 顺序约束（实测）：
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
+
+# ---- 环境自愈门（必须在任何 Qt 对象构造之前执行）----
+# 实测根因：cmd 里 `set QT_QPA_PLATFORM=offscreen && ...` 会把值设成带**尾空格**的
+# "offscreen "，Qt 解析平台插件名失败 → 进程 qFatal/abort，退出码 0xC0000409
+# (3221226505)。这是**解释器级崩溃**，pytest 的 try/except 拦不住，会把整个全量进程
+# 带走（后面的用例全丢）。这里在 import 期把该变量规整为合法的 offscreen，保证即使调用方
+# 环境被污染，本文件也不会把全量跑崩（可接受本文件跑不成，绝不可带走全量）。
+_qt_platform = os.environ.get("QT_QPA_PLATFORM")
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+if _qt_platform and _qt_platform.strip() != "offscreen":
+    print(
+        f"[test_desktop_pet_ui] 已覆写 QT_QPA_PLATFORM={_qt_platform!r} -> 'offscreen'"
+        "（本文件硬约束：必须 offscreen；防解释器级崩溃污染全量）"
+    )
+
 from PyQt5.QtCore import QEvent, QObject, QPoint, QPropertyAnimation, QRect, Qt
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QApplication, QLabel, QWidget

@@ -11,6 +11,9 @@ from . import router
 from .deps import TopicGenerator, get_api, get_llm_client
 from .schemas import TopicUpdateRequest
 
+#: 第三批 g：选题库允许的合法状态（旧 Topic 只支持这四个；前端不支持新值）。
+LEGAL_TOPIC_STATUSES: tuple = ("pending", "adopted", "published", "rejected")
+
 
 @router.get("/topics")
 async def get_topic_library(
@@ -90,6 +93,9 @@ async def get_topic_library(
         }
     """
     try:
+        # 第三批 g：合法 status 验证（非法 → 422，不落库、不拼 SQL）。
+        if status is not None and status not in LEGAL_TOPIC_STATUSES:
+            raise HTTPException(status_code=422, detail=f"非法选题状态: {status}")
         # 获取API客户端实例
         api = get_api()
         # 获取LLM客户端（查询不需要LLM，但TopicGenerator需要初始化）
@@ -175,6 +181,9 @@ async def update_topic_status(topic_id: int, request: TopicUpdateRequest):
         }
     """
     try:
+        # 第三批 g：合法 status 验证（非法 → 422）。旧 tag_only 的 PUT 行为不变。
+        if request.status not in LEGAL_TOPIC_STATUSES:
+            raise HTTPException(status_code=422, detail=f"非法选题状态: {request.status}")
         # 获取API客户端实例
         api = get_api()
         # 获取LLM客户端

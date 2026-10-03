@@ -1,141 +1,153 @@
-"""
-热点发现模块 - AI选题生成接口
+"""热点发现模块 - AI 选题生成接口（第三批 g：接入生成账本 / 幂等键）。
 
-拆分自 hotspot.py 原始 L535-L662。
+拆分自 hotspot.py 原始 L535-L662；第三批 g 在此扩展 **带键** 路径：
+
+- 无键 tag_only：**保留原行为**，功能可用，但**不宣称具备幂等保证**；
+- 带键（``generation_request_id`` / ``opportunity_run_id``）：转
+  :class:`TopicGenerationService`，返回 **200 已完成 / 202 生成中 / 409 键冲突**；
+- 新增只读 ``GET /topics/generation-runs/{generation_request_id}`` 生成账本，
+  **不触发生成、不隐式重试**；``404`` 表示尚无该键。
 """
+from __future__ import annotations
+
+from typing import Optional
+
 from fastapi import HTTPException
+from fastapi.responses import JSONResponse
+
+from modules.hotspot.topic_generation_service import (
+    GenerationKeyConflict,
+    GenerationRequest,
+    GenerationTerminalError,
+    GenerationTimeoutError,
+    GenerationUnavailable,
+    GenerationValidationError,
+    TopicGenerationService,
+)
 
 from . import router
 from .deps import TopicGenerator, get_api, get_llm_client
 from .schemas import TopicGenerateRequest
 
+#: 生成编排服务（由 ``web/main.py`` lifespan 装配；测试可注入）。
+_generation_service: Optional[TopicGenerationService] = None
 
-@router.post("/topics/generate")
-async def generate_topics(request: TopicGenerateRequest):
-    """
-    生成AI选题
-    
-    功能说明：
-    - 基于创作方向和分区热点数据生成创作选题
-    - 支持AI生成（LLM）和规则生成两种模式
-    - 提供选题标题、描述、数据支撑等结构化信息
-    
+
+def set_generation_service(service: Optional[TopicGenerationService]) -> None:
+    """装配生成编排服务（lifespan / 测试调用）。
+
     Args:
-        request: TopicGenerateRequest对象，包含：
-            - direction: 创作方向（如'游戏攻略'）
-            - zone_name: 目标分区（如'游戏'）
-            - count: 生成数量（默认10）
-            - use_llm: 是否使用LLM（默认True）
-    
+        service: ``TopicGenerationService``；``None`` 表示未装配。
+    """
+    global _generation_service
+    _generation_service = service
+
+
+def get_generation_service() -> Optional[TopicGenerationService]:
+    """返回已装配的生成编排服务（未装配为 ``None``）。"""
+    return _generation_service
+
+
+async def _legacy_generate(request: TopicGenerateRequest):
+    """旧无键 tag_only 路径：行为与拆分前一致（无幂等保证）。
+
+    Args:
+        request: 旧请求模型。
+
     Returns:
-        dict: {
-            "success": True,
-            "data": {
-                "topics": [  # 选题列表
-                    {
-                        "title": str,          # 选题标题
-                        "description": str,    # 选题描述
-                        "reasoning": str,      # 选题依据
-                        "data_support": {      # 数据支撑
-                            "hot_tags": List[str],      # 相关热门tag
-                            "reference_videos": List,   # 参考视频
-                            "trend_score": float        # 热度评分
-                        },
-                        "zone_name": str,      # 所属分区
-                        "created_at": str,     # 生成时间
-                        "status": "pending"    # 状态（新生成默认pending）
-                    },
-                    ...
-                ],
-                "count": int,           # 实际生成数量
-                "llm_used": bool,       # 是否使用了LLM
-                "generation_time": float  # 生成耗时（秒）
-            }
-        }
-    
+        dict: ``{"success": True, "data": <原生成结果>}``。
+
     Raises:
-        HTTPException(500): 生成失败（如LLM调用失败、数据获取失败）
-    
-    工作流程：
-    1. 获取目标分区的热点数据（热门视频、tag、趋势）
-    2. 如果use_llm=True且LLM已配置：
-       - 将热点数据和创作方向发送给LLM
-       - LLM生成有创意的选题（标题+描述+依据）
-    3. 如果use_llm=False或LLM不可用：
-       - 使用规则生成基础选题（基于热门tag组合）
-    4. 将生成的选题保存到数据库（状态为pending）
-    5. 返回选题列表
-    
-    LLM生成 vs 规则生成：
-    - LLM生成：更有创意，贴合创作方向，但需要配置API Key
-    - 规则生成：基于数据统计，稳定可靠，但创意有限
-    
-    性能考虑：
-    - 异步调用，不阻塞其他请求
-    - LLM调用可能较慢（2-5秒），前端需要loading提示
-    
-    使用场景：
-    - UP主寻找创作灵感
-    - 批量生成选题库供后续选择
-    - 数据驱动的内容规划
-    
-    示例请求：
-        POST /topics/generate
-        {
-            "direction": "搞笑游戏实况，面向年轻观众",
-            "zone_name": "游戏",
-            "count": 10,
-            "use_llm": true
-        }
-    
-    示例响应：
-        {
-            "success": true,
-            "data": {
-                "topics": [
-                    {
-                        "title": "原神新角色无伤挑战，结局笑死我了",
-                        "description": "结合当前热门角色，以搞笑视角展示挑战过程...",
-                        "reasoning": "原神是当前最热话题，无伤挑战有话题性...",
-                        "data_support": {
-                            "hot_tags": ["原神", "挑战", "搞笑"],
-                            "reference_videos": [...],
-                            "trend_score": 0.92
-                        },
-                        "zone_name": "游戏",
-                        "created_at": "2024-01-01 12:00:00",
-                        "status": "pending"
-                    }
-                ],
-                "count": 10,
-                "llm_used": true,
-                "generation_time": 3.2
-            }
-        }
+        HTTPException: 500 —— 生成失败。
     """
     try:
         # 获取API客户端实例
         api = get_api()
         # 获取LLM客户端（可能为None）
         llm_client = get_llm_client()
-        
         # 创建选题生成器
         generator = TopicGenerator(api, llm_client)
-        
         # 生成选题（异步调用）
         result = await generator.generate_topics(
-            direction=request.direction,  # 创作方向
-            zone_name=request.zone_name,  # 目标分区
-            count=request.count,  # 生成数量
-            use_llm=request.use_llm  # 是否使用LLM
+            direction=request.direction,
+            zone_name=request.zone_name,
+            count=request.count,
+            use_llm=request.use_llm,
         )
-        
-        # 成功返回选题列表
-        return {
-            "success": True,
-            "data": result
-        }
-        
+        return {"success": True, "data": result}
     except Exception as e:
         # 生成失败（LLM调用失败、数据获取失败等）
         raise HTTPException(status_code=500, detail=f"生成选题失败: {str(e)}")
+
+
+@router.post("/topics/generate")
+async def generate_topics(request: TopicGenerateRequest):
+    """生成 AI 选题（200 已完成 / 202 生成中 / 409 键冲突）。
+
+    - 无 ``generation_request_id`` 且无 ``opportunity_run_id`` → 旧 tag_only 路径；
+    - 带键 → :class:`TopicGenerationService`；运行中返回 **202**（**不能**被旧
+      ``renderTopicsResult`` 当成已生成）。
+
+    Raises:
+        HTTPException: 409 键冲突 / 终态；422 请求非法；503 状态未知；500 生成失败。
+    """
+    try:
+        keyed = request.generation_request_id is not None or request.opportunity_run_id is not None
+        if not keyed:
+            return await _legacy_generate(request)
+
+        service = get_generation_service()
+        if service is None:
+            raise HTTPException(status_code=503, detail={"error_code": "generation_service_unavailable"})
+
+        generation_request = GenerationRequest(
+            direction=request.direction,
+            zone_name=request.zone_name,
+            count=request.count,
+            use_llm=request.use_llm,
+            opportunity_run_id=request.opportunity_run_id,
+            selected_event_ids=request.selected_event_ids,
+            generation_request_id=request.generation_request_id,
+            context_mode=request.context_mode,
+        )
+        result = await service.generate(generation_request)
+        if isinstance(result, dict) and result.get("accepted"):
+            # 运行中受理视图 → HTTP 202（专用 pollTopicGeneration 识别）。
+            return JSONResponse(status_code=202, content={"success": True, "data": result})
+        return {"success": True, "data": result}
+    except HTTPException:
+        # 必须排在宽泛异常之前：422 不许被吞成 500。
+        raise
+    except GenerationValidationError as exc:
+        raise HTTPException(status_code=422, detail={"error_code": exc.code, "message": str(exc)})
+    except GenerationKeyConflict as exc:
+        raise HTTPException(status_code=409, detail={"error_code": exc.code, "message": str(exc)})
+    except GenerationTerminalError as exc:
+        raise HTTPException(status_code=409, detail={"error_code": exc.code, "message": str(exc)})
+    except GenerationTimeoutError as exc:
+        raise HTTPException(status_code=503, detail={"error_code": exc.code, "message": str(exc)})
+    except GenerationUnavailable as exc:
+        raise HTTPException(status_code=503, detail={"error_code": exc.code, "message": str(exc)})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"生成选题失败: {str(e)}")
+
+
+@router.get("/topics/generation-runs/{generation_request_id}")
+async def get_generation_run(generation_request_id: str):
+    """只读生成账本：running/completed/failed/cancelled/interrupted。
+
+    ``completed`` 含持久 result，其它终态含 ``reason_code``；``404`` 表示尚无该键。
+    **该 GET 不触发生成或隐式重试。**
+    """
+    try:
+        service = get_generation_service()
+        if service is None:
+            raise HTTPException(status_code=503, detail={"error_code": "generation_service_unavailable"})
+        view = service.store.read_state(generation_request_id)
+        if view is None:
+            raise HTTPException(status_code=404, detail={"error_code": "generation_run_not_found"})
+        return {"success": True, "data": view}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"读取生成账本失败: {str(e)}")

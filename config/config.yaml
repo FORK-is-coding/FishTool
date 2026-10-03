@@ -65,6 +65,17 @@ export:
   - markdown
   - json
   output_dir: exports
+hotspot:
+  events:
+    # FishTool 04 生成账本（第三批 f）：generation_deadline_seconds 必须 < generation_lease_seconds
+    generation_lease_seconds: 300
+    generation_deadline_seconds: 120
+    # FishTool 04 discovery 侧三项（原案 L1258，3f 未做，第四批 a 补齐）：
+    # discovery_deadline_seconds 必须 < discovery_lease_seconds；manual_discovery_cooldown_seconds 为手动发现冷却。
+    # 注意：本段同时是 EventPolicy 的严格白名单段，这三项不并入策略语义、不进入 policy_version。
+    discovery_lease_seconds: 300
+    discovery_deadline_seconds: 120
+    manual_discovery_cooldown_seconds: 60
 llm:
   api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
   api_key: ''
@@ -92,3 +103,26 @@ server:
   host: 127.0.0.1
   port: 8080
   reload: false
+
+# FishTool 04 §18.2 功能开关与降级（第三批 h 增补）。
+# 刻意与 hotspot.events（EventPolicy 策略白名单段）隔离：把非策略键放进策略段会触犯
+# EventPolicy 的严格白名单（policy.py 本批不许改动）。环境变量同名优先：
+# EVENT_AUTO_DISCOVERY_ENABLED / EVENT_FAST_WATCH_ENABLED。
+event_switches:
+  workbench_enabled: true          # 事件工作台：功能实施验收后开启
+  auto_discovery_enabled: false    # 自动/手动外部发现：用户激活并确认预算后才开（默认关）
+  fast_watch_enabled: false        # 快道 watch：用户选定事件后按容量申请（默认关）
+  auto_membership: review          # strict_rule 需规则预览确认
+  llm_brief_enabled: true          # 未配置 LLM 时自动走规则模板
+
+# FishTool 04 §7.1-§7.5 供给角度密度与缺口候选策略（第四批 c）。
+# 刻意放独立顶层段，避免污染 hotspot.events（EventPolicy 严格白名单段）。
+# threshold=0.7、3 作者为策略默认，可配置并随结果输出 policy_version。
+supply:
+  candidate_gap_coverage_threshold: 0.7   # candidate_gap 需正文可评估覆盖 >= 此值，否则只能 coverage_probe
+  candidate_gap_min_authors: 3            # candidate_gap 最少参与者（作者）数
+  candidate_gap_min_queries: 2            # 定向检索至少查询次数
+  angle_min_classified: 3                 # 可评价「拥挤」的最少可分类成员数 |C|（小样本门）
+  angle_min_coverage: 0.7                 # 可评价「拥挤」所需的最低 angle_coverage（低覆盖门）
+  supply_present_min_addresses: 2         # supply_present 所需最少可确认 addresses 作品数
+  policy_version: supply_c_v1             # 供给策略版本；随结果输出

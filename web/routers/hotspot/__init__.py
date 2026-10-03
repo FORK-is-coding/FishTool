@@ -48,5 +48,8 @@ from .routes_topic_library import get_topic_library, update_topic_status
 from .routes_status import check_llm_status
 from .routes_lifecycle import get_lifecycle, get_collect_progress
 from .routes_watch import list_watch, get_watch, create_watch, release_watch
+from .routes_discovery import get_discovery_latest, create_research_draft
+# 第三批 g：事件 API（§14 完整清单）。导入即用装饰器把端点注册到本 router。
+from . import routes_events  # noqa: F401  （注册事件 / 机会 / 反馈端点）
 
 __all__ = ['router']
