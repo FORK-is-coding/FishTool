@@ -852,3 +852,35 @@ def test_build_watch_service_startup_reconcile_can_be_disabled(monkeypatch):
     assert calls == []  # 开关关闭 → 不跑
     assert session.committed == 0
     assert session.closed == 0
+
+
+# ---------------------------------------------------------------------------
+# W3（07 执行案 §10.2）：默认工厂真实加载 watch_scheduler 策略；kwargs 优先
+# ---------------------------------------------------------------------------
+
+
+def test_build_watch_service_default_wires_policy_budget():
+    """§10.2：未注入 budget 时按 watch_scheduler 策略造唯一真预算（partitioned）。"""
+    from modules.hotspot.risk_control import RequestBudget
+
+    service = monitor_module.build_watch_service(startup_reconcile=False)
+
+    assert isinstance(service.budget, RequestBudget)
+    # config/budget.yaml 的 watch_scheduler 段为 partitioned -> 类别窗真启用。
+    assert service.budget.category_limits is not None
+
+
+def test_build_watch_service_explicit_budget_skips_policy(monkeypatch):
+    """§10.2：显式注入 budget 时 kwargs 优先，绝不读真实配置，也不再造第二个预算。"""
+    from modules.hotspot import risk_control
+    from modules.hotspot.risk_control import RequestBudget
+
+    def _boom(*_a, **_k):
+        raise AssertionError("显式注入 budget 时不应读真实配置")
+
+    monkeypatch.setattr(risk_control, "load_watch_scheduler_policy", _boom)
+    injected = RequestBudget(per_minute=3, per_hour=30, per_day=300)
+
+    service = monitor_module.build_watch_service(budget=injected, startup_reconcile=False)
+
+    assert service.budget is injected

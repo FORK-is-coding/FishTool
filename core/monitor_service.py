@@ -90,7 +90,22 @@ def build_watch_service(**kwargs: Any) -> Any:
     Note:
         P1 装配默认注入：调用方未显式传 ``budget`` / ``demand_reconcile_hook`` 时，
         本函数补齐一个 ``RequestBudget`` 与 ``EventWatchDemandReconciler().reconcile``，
-        使常驻 watch 循环与「缺省采集端口」共用同一预算实例，并在每轮 tick 开头对账事件需求。
+        使常驻 watch 循环与「缺省采集端口」共用**同一个**预算实例，并在每轮 tick 开头对账事件需求。
+
+        07 执行案 §10.2 接线口径：
+        - **kwargs 优先**：调用方（含测试）显式传了 ``budget`` 时**绝不**读真实配置，也绝不
+          再构造第二个 ``RequestBudget``；
+        - 未显式注入时，从 ``config/budget.yaml`` 的 ``watch_scheduler`` 段加载策略
+          （:func:`modules.hotspot.risk_control.load_watch_scheduler_policy`）并以其
+          ``build_budget()`` 造**唯一**预算实例；随后该实例经 ``WatchService.collector_port``
+          传给缺省采集端口，整条链路（策略 → 预算 → WatchService → 采集端口）**只存在一个**
+          预算实例，**绝不**按 target 复制；
+        - **生效口径**：该策略在「watch 服务重建 / 应用重启」时生效；普通
+          ``ConfigManager.reload`` **不等于** ``budget.yaml`` 热更新。本函数只读 L 段，
+          **绝不**借热重载清空 H 层 HTTP 账本（``http_quota_buckets``）；
+        - 策略段非法时**显式抛出** :class:`WatchSchedulerConfigError`（停 watch 采样），
+          不静默回 shared；缺文件 / 缺段则按显式 shared_only 兼容运行并在状态里如实标
+          ``category_isolation=false``。
 
         E49 启动整编：构造成功后**默认跑一次** ``startup_reconcile``（见
         :func:`_run_startup_reconcile_once`），把上一次运行遗留的 events 需求 / 孤儿快采
@@ -109,10 +124,21 @@ def build_watch_service(**kwargs: Any) -> Any:
     # P1 装配默认注入：缺省时补预算门与需求整编 hook。用显式 ``if not in kwargs`` 判断，
     # **不用 setdefault**——setdefault 的第二参数会被先求值，违背「调用方已显式注入时不构造
     # 真实依赖」的意图。budget 先于 hook 构造，二者互不依赖。
+    #
+    # 07 执行案 §10.2：**仅未显式注入 budget** 时加载 watch_scheduler 逻辑策略并构造**唯一**预算；
+    # kwargs 优先（测试注入时绝不读真实配置）；整条链路只允许一个 RequestBudget 实例。
     if "budget" not in kwargs:
         from modules.hotspot import risk_control
 
-        kwargs["budget"] = risk_control.RequestBudget()
+        policy = risk_control.load_watch_scheduler_policy()
+        kwargs["budget"] = policy.build_budget()
+        logger.info(
+            "watch 逻辑调度策略已接线：version=%s mode=%s category_isolation=%s"
+            "（策略以 watch 服务重建 / 应用重启生效；ConfigManager.reload 不热更新本段）",
+            policy.policy_version,
+            policy.mode,
+            policy.category_isolation,
+        )
 
     reconciler = None
     if "demand_reconcile_hook" not in kwargs:

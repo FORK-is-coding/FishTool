@@ -30,7 +30,7 @@ from modules.hotspot.event_watch_demands import (
     FAST_WATCH_KEY_SUFFIX,
     EventWatchDemandReconciler,
 )
-from modules.hotspot.risk_control import BudgetDecision
+from modules.hotspot.risk_control import AdmissionResult, BudgetDecision, LogicalAdmission
 from modules.hotspot.watch_demand import namespace_intervals, resolve_interval_s
 from modules.hotspot.watch_service import (
     BUDGET_CATEGORY_FAST,
@@ -86,6 +86,10 @@ class RecordingCollector:
         self.calls.append(bvid)
         return 1
 
+    async def collect_admitted(self, bvid, *, admission, collection_tid=None, source=WATCH_SOURCE):
+        """带单请求准用凭证的采集替身：记录并转调 collect。"""
+        return await self.collect(bvid, collection_tid=collection_tid, source=source)
+
 
 class FakeBudget:
     """预算替身：指定类别一律拒绝（带 retry_at），其余准许；记录每次 ``try_acquire``。"""
@@ -94,6 +98,9 @@ class FakeBudget:
         self.denied = set(denied)
         self.retry_after = retry_after
         self.calls: list = []
+        self.reserve_calls: list = []
+        self.redeem_calls: list = []
+        self._seq: int = 0
 
     def try_acquire(self, kind, now_mono):
         self.calls.append((kind, now_mono))
@@ -102,6 +109,42 @@ class FakeBudget:
                 granted=False, retry_at_mono=now_mono + self.retry_after, reason_code="rate_limited"
             )
         return BudgetDecision(granted=True)
+
+    def clock(self):
+        """单调时钟替身：返回与本文件固定 MONO 一致的读数。"""
+        return MONO
+
+    def peek(self, kind, now_mono):
+        """只读视图：记一次查询，不改任何占用（单请求协议的选择器入口）。"""
+        return self.try_acquire(kind, now_mono)
+
+    def reserve(self, kind, now_mono, *, operation_key):
+        """签发替身准用凭证；denied 类别拒发。reserve 单独记录，不混进 peek/try 序列。"""
+        self.reserve_calls.append((kind, now_mono, operation_key))
+        if kind in self.denied:
+            return AdmissionResult(
+                decision=BudgetDecision(
+                    granted=False,
+                    retry_at_mono=now_mono + self.retry_after,
+                    reason_code="rate_limited",
+                )
+            )
+        self._seq += 1
+        admission = LogicalAdmission(
+            entry_id=f"fake-{self._seq}",
+            operation_key=str(operation_key),
+            kind=kind,
+            issuer=self,
+        )
+        return AdmissionResult(decision=BudgetDecision(granted=True), admission=admission)
+
+    def redeem(self, admission, *, operation_key, now_mono):
+        """替身兑换：记录即可。"""
+        self.redeem_calls.append((admission, operation_key, now_mono))
+
+    def release_unused(self, admission):
+        """替身释放：总是成功。"""
+        return True
 
 
 def _seed_watch(session, *bvids: str, now: int = E) -> None:

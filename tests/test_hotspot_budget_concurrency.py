@@ -21,7 +21,11 @@ import time
 
 import pytest
 
-from modules.hotspot.risk_control import BudgetDecision, RequestBudget
+from modules.hotspot.risk_control import (
+    BudgetDecision,
+    InvalidLogicalAdmission,
+    RequestBudget,
+)
 
 
 def _run(coro):
@@ -202,3 +206,73 @@ def test_other_coroutine_can_enter_critical_section_while_acquire_waits() -> Non
             await waiter
 
     _run(scenario())
+
+
+# --------------------------------------------------------------------------- W3 · 真预算类别窗 / 释放过期 / 时钟
+#
+# 07 执行案 W3 / §7.5：以下用**真实** ``RequestBudget``（不用 FakeBudget 冒充类别隔离）验证
+# 类别窗独立、reservation 释放 / 超时过期、以及 peek / reserve / redeem 共用同一 clock。
+
+
+def _partitioned_budget(**limits) -> RequestBudget:
+    """构造分桶模式真预算：指定类别窗，其余给足；固定时钟 ``500.0``。"""
+    default = {"per_minute": 100, "per_hour": 1000, "per_day": 10000}
+    return RequestBudget(
+        per_minute=200,
+        per_hour=2000,
+        per_day=20000,
+        category_limits={
+            "normal_watch": dict(default, **limits.get("normal_watch", {})),
+            "fast_watch": dict(default, **limits.get("fast_watch", {})),
+        },
+        clock=lambda: 500.0,
+    )
+
+
+def test_real_budget_category_windows_isolated_and_release_reopens() -> None:
+    """真 RequestBudget：类别窗独立；释放未兑换 reservation 后该窗恢复可放行。"""
+    budget = _partitioned_budget(normal_watch={"per_minute": 1})
+
+    n1 = budget.reserve("normal_watch", 500.0, operation_key="N1")
+    assert n1.decision.granted is True
+    # normal 分钟窗 1/1 满 -> 同窗再 reserve 被拒；fast 独立窗仍可放行（不连坐）。
+    assert budget.reserve("normal_watch", 500.0, operation_key="N2").decision.granted is False
+    assert budget.peek("fast_watch", 500.0).granted is True
+
+    # 释放未兑换的 normal reservation -> normal 窗恢复。
+    assert budget.release_unused(n1.admission) is True
+    assert budget.peek("normal_watch", 500.0).granted is True
+
+
+def test_real_budget_reservation_expiry_frees_capacity() -> None:
+    """真 RequestBudget：reserve 后既不 redeem 也不 release，超过 reserve_timeout 自动释放占用。"""
+    budget = RequestBudget(
+        per_minute=1, per_hour=100, per_day=1000, reserve_timeout_s=30.0, clock=lambda: 1000.0
+    )
+    reserved = budget.reserve("general", 1000.0, operation_key="G1")
+    assert reserved.decision.granted is True
+    assert budget.peek("general", 1000.0).granted is False  # 占用中
+
+    # 超过 deadline（1000 + 30）后清扫：占用自动释放。
+    assert budget.peek("general", 1031.0).granted is True
+    snapshot = budget.snapshot(1031.0)
+    assert snapshot["reserved"] == 0 and snapshot["cancelled"] >= 1
+
+    # 超时后的 redeem 一律拒绝，不补记 committed。
+    with pytest.raises(InvalidLogicalAdmission):
+        budget.redeem(reserved.admission, operation_key="G1", now_mono=1031.0)
+    assert budget.snapshot(1031.0)["committed"] == 0
+
+
+def test_real_budget_peek_reserve_redeem_share_one_clock() -> None:
+    """真 RequestBudget：peek / reserve / redeem 共用同一 clock，选择器固定 now 不会与采集器错位。"""
+    budget = RequestBudget(per_minute=2, per_hour=100, per_day=1000, clock=lambda: 200.0)
+    now = budget.clock()
+    assert budget.peek("normal_watch", now).granted is True
+    reserved = budget.reserve("normal_watch", now, operation_key="BV1")
+    assert reserved.decision.granted is True
+    budget.redeem(reserved.admission, operation_key="BV1", now_mono=budget.clock())
+
+    snapshot = budget.snapshot(budget.clock())
+    assert snapshot["committed"] == 1 and snapshot["reserved"] == 0
+    assert len(budget._requests) == 0  # 准入路径不追加 legacy 队列

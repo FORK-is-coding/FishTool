@@ -61,3 +61,43 @@ domains:
 # IP 级熔断：两域同时大量 412/403 时全局停采（两域共享同一 IP，必须一起停）
 ip_circuit_breaker:
   cooldown_s: 3600
+
+# ---------------------------------------------------------------------------
+# watch 逻辑调度策略（L 层，仅 modules/hotspot/risk_control.RequestBudget 消费）
+#
+# 【维护者已确认：叉子，2026-10-05】原状态为「待维护者确认（pending_maintainer_approval）」，
+# 已于 2026-10-05 获批「先照这组走」，获批标记：approved_maintainer_2026-10-05。
+# 下面的 total / category_limits / fair_order 是 07 执行案 §10.1 提出的**初始 L 层策略**，
+# 不是仓库既有常量、也不是实盘最优值（比例可按需调整，调整后请同步 policy_version）。
+# 它只约束逻辑请求账本（peek/reserve/redeem 的 L 层占用），
+#   ① 不改上方 quota 的 1800 与五类 HTTP 上限；
+#   ② 不写 HTTP 账本、不冒充跨进程持久限额；
+#   ③ 不保证各类实盘各 1500 / 1200 次真实 HTTP。
+# 获批前若需上线：把 mode 改为 shared_only（category_isolation=false，如实显示类别隔离未启用）。
+# 有本段但非法：加载期抛 WatchSchedulerConfigError（停 watch 采样），绝不悄悄回 shared。
+# ---------------------------------------------------------------------------
+watch_scheduler:
+  policy_version: watch_logical_v1
+  mode: partitioned            # partitioned=类别窗+总窗并行；shared_only=仅总窗（category_isolation=false）
+  total:                       # 总窗（与 RequestBudget 既有默认同值；本段不新增配额）
+    per_minute: 20
+    per_hour: 300
+    per_day: 3000
+  # 类别窗：每个窗口「各类上限之和 <= 对应 total」，加载期强校验，越界即抛。
+  # 10/8/2、150/120/30、1500/1200/300 为 §10.1 提案值：# approved_maintainer_2026-10-05。
+  category_limits:
+    normal_watch:              # 普通基础采样
+      per_minute: 10           # approved_maintainer_2026-10-05（§10.1 提案，原 pending_maintainer_approval）
+      per_hour: 150            # approved_maintainer_2026-10-05
+      per_day: 1500            # approved_maintainer_2026-10-05
+    fast_watch:                # 快信号采样（fast_until_s 生效期内）
+      per_minute: 8            # approved_maintainer_2026-10-05
+      per_hour: 120            # approved_maintainer_2026-10-05
+      per_day: 1200            # approved_maintainer_2026-10-05
+    general:                   # 同一 collector 被独立调用时仍走 acquire('general')
+      per_minute: 2            # approved_maintainer_2026-10-05
+      per_hour: 30             # approved_maintainer_2026-10-05
+      per_day: 300             # approved_maintainer_2026-10-05
+  fair_order:
+    - normal_watch
+    - fast_watch

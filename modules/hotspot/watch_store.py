@@ -14,14 +14,20 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import Any
 
-from sqlalchemy import bindparam, func, inspect as sa_inspect, text, update
+from sqlalchemy import and_, bindparam, func, inspect as sa_inspect, or_, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from core.database import HotspotWatch
 
 from .algorithm.lifecycle_v2 import CoverageState
+
+#: 逻辑预算类别标签（与 ``watch_service.BUDGET_CATEGORY_*`` 同值；本模块不反向上层 import，
+#: 用字面量避免循环依赖）。
+BUDGET_CATEGORY_NORMAL: str = "normal_watch"
+BUDGET_CATEGORY_FAST: str = "fast_watch"
 
 #: 默认采样间隔（秒）：02 §8.3「sample_interval_s 默认 3600」。
 DEFAULT_SAMPLE_INTERVAL_S: int = 3600
@@ -405,6 +411,161 @@ def find_due_for_eval(session: Session, now_epoch_s: int, *, limit: int = 1) -> 
         .limit(limit)
         .all()
     )
+
+
+def _normalize_due_cursor(cursor: Any) -> tuple[int, str] | None:
+    """把 keyset 游标归一化为 ``(next_due_epoch_s, bvid)``；形状不对就当没有游标。
+
+    Args:
+        cursor: ``(next_due_epoch_s, bvid)`` 或 None。
+
+    Returns:
+        tuple | None: 归一化后的游标；非法输入返回 None（从队首取）。
+    """
+    if cursor is None:
+        return None
+    try:
+        due, bvid = cursor
+        return int(due), str(bvid)
+    except Exception:  # noqa: BLE001 - 游标形状不对不抛错，按无游标处理
+        return None
+
+
+def _hotspot_watch_columns(session: Session) -> set | None:
+    """读 ``hotspot_watch`` 的列名集合；表不存在 / 读取失败返回 None（供降级判断）。
+
+    Args:
+        session: 调用方会话。
+
+    Returns:
+        set | None: 列名集合；无法读取时为 None。
+    """
+    try:
+        inspector = sa_inspect(session.get_bind())
+        if not inspector.has_table("hotspot_watch"):
+            return None
+        return {col["name"] for col in inspector.get_columns("hotspot_watch")}
+    except Exception:  # noqa: BLE001 - 旧库 / 缺表一律降级，不炸整轮
+        return None
+
+
+def _query_due_normal_fallback(
+    session: Session, now_epoch_s: int, limit: int, cursor: tuple[int, str] | None
+) -> list:
+    """缺 ``fast_until_s`` 列时的降级取候选：ORM 直接取 due 行（全部按普通节奏）。
+
+    与 :func:`find_due_for_budget_category` 的 ``normal_watch`` 同谓词、同排序、同 keyset 语义，
+    区别只是不额外过滤 ``fast_until_s``（列不存在时无从过滤）。
+
+    Args:
+        session: 调用方会话。
+        now_epoch_s: 当前时刻（UTC 秒）。
+        limit: 最多取多少条（>=1）。
+        cursor: keyset 游标 ``(next_due_epoch_s, bvid)`` 或 None。
+
+    Returns:
+        list: ``HotspotWatch`` 行列表，按 ``(next_due_epoch_s, bvid)`` 升序。
+    """
+    query = session.query(HotspotWatch).filter(
+        HotspotWatch.active.is_(True),
+        HotspotWatch.ttl_end_epoch_s > now_epoch_s,
+        HotspotWatch.next_due_epoch_s <= now_epoch_s,
+    )
+    if cursor is not None:
+        query = query.filter(
+            or_(
+                HotspotWatch.next_due_epoch_s > cursor[0],
+                and_(
+                    HotspotWatch.next_due_epoch_s == cursor[0],
+                    HotspotWatch.bvid > cursor[1],
+                ),
+            )
+        )
+    return (
+        query.order_by(HotspotWatch.next_due_epoch_s.asc(), HotspotWatch.bvid.asc())
+        .limit(limit)
+        .all()
+    )
+
+
+def find_due_for_budget_category(
+    session: Session,
+    now_epoch_s: int,
+    *,
+    category: str,
+    limit: int = 1,
+    cursor: tuple[int, str] | None = None,
+) -> list:
+    """按逻辑预算类别取「该评估的 watch」候选（07 执行案 §9.1）。
+
+    谓词与 :func:`find_due_for_eval` 一致（``active=1 AND ttl_end_epoch_s > now AND
+    next_due_epoch_s <= now``），再按类别窗口分桶：
+
+    - ``fast_watch``  ：``fast_until_s`` 是有效值且 ``> now``；
+    - ``normal_watch``：``fast_until_s`` 为空或 ``<= now``。
+
+    稳定排序 ``(next_due_epoch_s ASC, bvid ASC)``；**按类分别 LIMIT**（也支持 keyset 分页），
+    大池**不做无界 all()**。``fast_until_s`` 由 04 迁移补齐、ORM 模型未声明，这里只走原生 SQL 读取；
+    列缺失时优雅降级（``fast_watch`` 无候选、``normal_watch`` 退化为全量 due），绝不因缺列炸整轮。
+
+    Args:
+        session: 调用方会话。
+        now_epoch_s: 当前时刻（UTC 秒）。
+        category: 预算类别（``normal_watch`` / ``fast_watch``）。
+        limit: 本类最多取多少条候选（>=1）。
+        cursor: keyset 游标 ``(next_due_epoch_s, bvid)``；None 表示从本类队首取。
+
+    Returns:
+        list: ``HotspotWatch`` 行列表（按 ``(next_due_epoch_s, bvid)`` 升序）。
+
+    Raises:
+        ValueError: ``now_epoch_s`` 非法，或 ``category`` 未登记。
+    """
+    now_epoch_s = _require_epoch(now_epoch_s, "invalid_now_epoch_s")
+    if category not in (BUDGET_CATEGORY_NORMAL, BUDGET_CATEGORY_FAST):
+        raise ValueError("unknown_budget_category")
+    limit = max(1, int(limit))
+    normalized_cursor = _normalize_due_cursor(cursor)
+
+    columns = _hotspot_watch_columns(session)
+    if columns is None:
+        return []
+    if "fast_until_s" not in columns:
+        # 未跑 04 迁移的库：一律按普通节奏；fast_watch 无候选，不炸整轮。
+        if category == BUDGET_CATEGORY_FAST:
+            return []
+        return _query_due_normal_fallback(session, now_epoch_s, limit, normalized_cursor)
+
+    fast_cond = (
+        "(fast_until_s IS NOT NULL AND fast_until_s > :now)"
+        if category == BUDGET_CATEGORY_FAST
+        else "(fast_until_s IS NULL OR fast_until_s <= :now)"
+    )
+    sql_parts = [
+        "SELECT bvid FROM hotspot_watch",
+        "WHERE active = 1 AND ttl_end_epoch_s > :now AND next_due_epoch_s <= :now",
+        "AND " + fast_cond,
+    ]
+    params: dict[str, Any] = {"now": now_epoch_s, "limit": limit}
+    if normalized_cursor is not None:
+        sql_parts.append(
+            "AND (next_due_epoch_s > :cdue OR (next_due_epoch_s = :cdue AND bvid > :cbvid))"
+        )
+        params["cdue"] = normalized_cursor[0]
+        params["cbvid"] = normalized_cursor[1]
+    sql_parts.append("ORDER BY next_due_epoch_s ASC, bvid ASC LIMIT :limit")
+    try:
+        ordered = [str(row[0]) for row in session.execute(text(" ".join(sql_parts)), params).all()]
+    except Exception:  # noqa: BLE001 - 缺列 / 旧库：降级为普通节奏，不炸整轮
+        if category == BUDGET_CATEGORY_FAST:
+            return []
+        return _query_due_normal_fallback(session, now_epoch_s, limit, normalized_cursor)
+    if not ordered:
+        return []
+    # 二次用 ORM 载入真实行（保持与既有调用方一致的 ``HotspotWatch`` 行类型）。
+    loaded = session.query(HotspotWatch).filter(HotspotWatch.bvid.in_(ordered)).all()
+    by_bvid = {str(row.bvid): row for row in loaded}
+    return [by_bvid[bvid] for bvid in ordered if bvid in by_bvid]
 
 
 def find_expired_for_cleanup(session: Session, now_epoch_s: int) -> list:

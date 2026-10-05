@@ -27,7 +27,7 @@ from modules.comment.collector import CommentCollector
 from modules.comment.sentiment import SentimentAnalyzer
 from modules.hotspot.snapshot_store import persist_snapshot
 
-from .risk_control import RequestBudget
+from .risk_control import LogicalAdmission, RequestBudget, validated_issuer
 from .signal_store import HotspotSignalStore
 from .tag_cloud import TagCloudGenerator
 
@@ -88,7 +88,9 @@ class HotspotCollector:
             store: 信号存储服务，缺省时新建默认实例。
         """
         self.api = api
-        self.budget = budget or RequestBudget()
+        # 显式 ``is not None`` 判断（不用真值判断）：测试替身 / 自定义 budget 若定义 falsey
+        # （如 __bool__ 返回 False），也不会被意外替换成一个新默认预算（07 执行案 §8.1）。
+        self.budget = budget if budget is not None else RequestBudget()
         self.store = store or HotspotSignalStore()
         # 复用项目现有评论采集器：自带 4 秒限频、429 退避与按 rpid 去重落库。
         self.comment_collector = CommentCollector(api=api)
@@ -239,6 +241,7 @@ class HotspotCollector:
         collection_tid: int | None = None,
         source: str = "ranking",
         run_id: str | None = None,
+        logical_admission: LogicalAdmission | None = None,
     ) -> int:
         """采集单个视频的 view 快照并落库（公开单视频入口）。
 
@@ -257,6 +260,9 @@ class HotspotCollector:
                 生命周期列表按一级分区筛选时必须用这个归属 ID），可为 None。
             source: 快照来源标签（如 ranking / paint_c / watch）。
             run_id: 采集批次标识；缺省 None 表示单条独立采集，不并入整榜批次。
+            logical_admission: 可选的单请求准入凭证（07 执行案 §8.1）。watch 编排层在
+                逐目标 ``reserve`` 后由 ``collect_admitted`` 透传进来；直接调用本入口
+                （独立采集 / 整榜）时为 None，仍走原 ``acquire()`` 扣费。
 
         Returns:
             ``_save_snapshot`` 返回的信号条数（int）。
@@ -264,7 +270,9 @@ class HotspotCollector:
         Raises:
             异常: 详情拉取 / 落库失败时原样上抛，由上层决定失败隔离口径。
         """
-        view_data = await self._fetch_view({"bvid": str(bvid or "").strip()})
+        view_data = await self._fetch_view(
+            {"bvid": str(bvid or "").strip()}, logical_admission=logical_admission
+        )
         return await self._save_snapshot(
             view_data,
             source=source,
@@ -322,10 +330,26 @@ class HotspotCollector:
         data = await self.api.get_ranking(rid=tid, day=1, original=0, page=page)
         return data.get("data") or {}
 
-    async def _fetch_view(self, item: dict[str, Any]) -> dict[str, Any]:
-        """按 BV 号拉取视频详情，返回含 stat/owner/tid 的 data。"""
+    async def _fetch_view(
+        self, item: dict[str, Any], *, logical_admission: LogicalAdmission | None = None
+    ) -> dict[str, Any]:
+        """按 BV 号拉取视频详情，返回含 stat/owner/tid 的 data。
+
+        Args:
+            item: 含 ``bvid`` 的最小请求载体。
+            logical_admission: 可选单请求准入凭证。传入时用 ``issuer.redeem(...)`` 把
+                同一份 L 层票据兑换一次，**不再**调用 ``budget.acquire()``（避免同一次
+                逻辑操作被扣两次）；为 None 时保留原 ``acquire()`` 行为（独立采集照旧扣费）。
+                这里**不**凭 ``source == 'watch'`` 跳闸——source 只是来源标签，不是已扣费的证明。
+        """
         bvid = item.get("bvid") or ""
-        await self.budget.acquire()
+        if logical_admission is None:
+            await self.budget.acquire()
+        else:
+            # 受控取发行方：不接受任意「有 redeem 属性」的伪凭证。
+            issuer = validated_issuer(logical_admission)
+            # 只把这一条 reservation 变 committed，绝不追加第二条总量消费。
+            issuer.redeem(logical_admission, operation_key=bvid, now_mono=issuer.clock())
         data = await self.api.get(
             f"{self.api.BASE_URL}/x/web-interface/view",
             params={"bvid": bvid},

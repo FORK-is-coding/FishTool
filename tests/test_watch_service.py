@@ -41,6 +41,7 @@ from modules.hotspot.watch_service import (
     state_from_json,
     state_to_json,
 )
+from modules.hotspot.risk_control import BudgetWiringError, RequestBudget
 from modules.hotspot.watch_store import commit_state, upsert_watch
 
 # 统一测试时钟：2026-09-10T00:00:00Z（UTC 日界，秒级 int，便于固定网格对齐）。
@@ -684,3 +685,135 @@ def test_loop_runs_one_tick_then_stops(db):
 
     assert len(collector.calls) == 1
     assert read_row(db, "BV1LOOP0001").next_due_epoch_s == NOW + DEFAULT_SAMPLE_INTERVAL_S
+
+
+# --------------------------------------------------------------------------- 12. W3 接线 / 单实例 / 取消（07 执行案 §6 §8.2 §9.4）
+
+#: W3 用例统一单调时钟读数（只喂真 RequestBudget，绝不落库）。
+W3_MONO: float = 777.0
+
+
+class AdmittedRecordingCollector:
+    """采集端口替身：实现单请求准入协议；``collect_admitted`` **真兑换**票据（用真预算）。"""
+
+    def __init__(self) -> None:
+        """初始化调用记录。"""
+        self.calls: list = []
+
+    async def collect(self, bvid, *, collection_tid=None, source=WATCH_SOURCE):
+        """无票据路径：只记录，不触网。"""
+        self.calls.append(("collect", bvid))
+        return 1
+
+    async def collect_admitted(self, bvid, *, admission, collection_tid=None, source=WATCH_SOURCE):
+        """带票据路径：用票据发行方真兑换一次，再记录（绝不真发请求）。"""
+        admission.issuer.redeem(admission, operation_key=bvid, now_mono=admission.issuer.clock())
+        self.calls.append(("admitted", bvid))
+        return 1
+
+
+def test_run_tick_budget_override_uses_override_only(db):
+    """§8.2：``run_tick(budget=override)`` 该次操作**只用** override；默认 ``self._budget`` 纹丝不动。"""
+    bvid = "BVOVER0001"
+    seed_watch(db, bvid, next_due_epoch_s=NOW - 1)
+    seed_snapshots(db, bvid, [(NOW - DAY, 100), (NOW, 900)])
+    default_budget = RequestBudget(per_minute=5, per_hour=100, per_day=1000, clock=lambda: W3_MONO)
+    override = RequestBudget(per_minute=5, per_hour=100, per_day=1000, clock=lambda: W3_MONO)
+    collector = AdmittedRecordingCollector()
+    service = WatchService(
+        collector_port=collector, session_factory=db, now_fn=lambda: NOW, budget=default_budget
+    )
+
+    result = asyncio.run(service.run_tick(limit=1, budget=override))
+
+    assert result.committed == 1
+    assert collector.calls == [("admitted", bvid)]
+    # override 被扣 1；默认预算未同时被扣（一次操作不同时扣两个对象）。
+    assert override.snapshot(W3_MONO)["committed"] == 1
+    assert default_budget.snapshot(W3_MONO)["committed"] == 0
+    assert default_budget.snapshot(W3_MONO)["reserved"] == 0
+
+
+def test_run_tick_with_budget_requires_admission_capable_port(db):
+    """§8.2：有预算的 watch 路径要求端口实现 ``collect_admitted``，否则显式报错、不静默绕过。"""
+    seed_watch(db, "BVWIRE0001", next_due_epoch_s=NOW - 1)
+    budget = RequestBudget(per_minute=5, per_hour=100, per_day=1000, clock=lambda: W3_MONO)
+    collector = RecordingCollector()  # 只有 collect，无 collect_admitted
+    service = WatchService(
+        collector_port=collector, session_factory=db, now_fn=lambda: NOW, budget=budget
+    )
+
+    with pytest.raises(BudgetWiringError):
+        asyncio.run(service.run_tick(limit=1))
+
+    assert collector.calls == []  # 未静默绕过预算 -> 一次采集都没发
+
+
+def test_run_tick_serialized_by_instance_lock(db):
+    """§6：同一实例的两个 ``run_tick`` 并发时被实例级锁串行化，不进/退出交错。"""
+    seed_watch(db, "BVLCK00001", next_due_epoch_s=NOW - 2)
+    seed_watch(db, "BVLCK00002", next_due_epoch_s=NOW - 1)
+    order: list = []
+
+    class _SlowCollector:
+        """慢采集替身：用「进入→退出」标记暴露是否并发交错。"""
+
+        async def collect(self, bvid, *, collection_tid=None, source=WATCH_SOURCE):
+            """进入 -> 睡一小会 -> 退出。"""
+            order.append(("enter", bvid))
+            await asyncio.sleep(0.05)
+            order.append(("exit", bvid))
+            return 1
+
+    service = WatchService(collector_port=_SlowCollector(), session_factory=db, now_fn=lambda: NOW)
+
+    async def scenario():
+        """并发跑两轮 tick。"""
+        return await asyncio.gather(service.run_tick(limit=1), service.run_tick(limit=1))
+
+    results = asyncio.run(scenario())
+
+    # 串行：每轮「进入→退出」成对出现，绝不 enter/enter/exit/exit。
+    assert [step[0] for step in order] == ["enter", "exit", "enter", "exit"]
+    assert sum(item.committed for item in results) == 2
+
+
+def test_cancel_during_collect_releases_reservation(db):
+    """§9.4：reserve 后采集期间被取消 -> finally 释放未用票据，不留悬挂 reservation。"""
+    seed_watch(db, "BVCAN00001", next_due_epoch_s=NOW - 1)
+    budget = RequestBudget(per_minute=5, per_hour=100, per_day=1000, clock=lambda: W3_MONO)
+    started = asyncio.Event()
+
+    class _BlockingAdmittedCollector:
+        """带票据采集替身：阻塞在采集里，等待被取消。"""
+
+        async def collect(self, bvid, *, collection_tid=None, source=WATCH_SOURCE):
+            """无票据路径（本轮不会走到）。"""
+            return 1
+
+        async def collect_admitted(self, bvid, *, admission, collection_tid=None, source=WATCH_SOURCE):
+            """置位 started 后长睡，等外部取消。"""
+            started.set()
+            await asyncio.sleep(3600)
+            return 1
+
+    service = WatchService(
+        collector_port=_BlockingAdmittedCollector(),
+        session_factory=db,
+        now_fn=lambda: NOW,
+        budget=budget,
+    )
+
+    async def scenario():
+        """起 run_tick，等它进入采集后取消。"""
+        task = asyncio.create_task(service.run_tick(limit=1))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+
+    snapshot = budget.snapshot(W3_MONO)
+    assert snapshot["reserved"] == 0, "取消后不得留下悬挂 reservation"
+    assert snapshot["cancelled"] >= 1

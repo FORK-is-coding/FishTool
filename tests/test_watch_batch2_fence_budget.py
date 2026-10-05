@@ -22,7 +22,12 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from core.database import DatabaseManager, Video, VideoStats
-from modules.hotspot.risk_control import BudgetDecision
+from modules.hotspot.risk_control import (
+    AdmissionResult,
+    BudgetDecision,
+    LogicalAdmission,
+    RequestBudget,
+)
 from modules.hotspot.watch_service import (
     BUDGET_CATEGORY_FAST,
     BUDGET_CATEGORY_NORMAL,
@@ -30,7 +35,7 @@ from modules.hotspot.watch_service import (
     WATCH_SOURCE,
     WatchService,
 )
-from modules.hotspot.watch_store import commit_state, upsert_watch
+from modules.hotspot.watch_store import commit_state, find_due_for_eval, upsert_watch
 
 #: 统一测试时钟：2026-09-01T00:00:00Z（UTC 午夜，秒级 int）。
 E: int = int(datetime(2026, 9, 1, tzinfo=timezone.utc).timestamp())
@@ -65,6 +70,10 @@ class RecordingCollector:
             self._on_collect(bvid)
         return 1
 
+    async def collect_admitted(self, bvid, *, admission, collection_tid=None, source=WATCH_SOURCE):
+        """带单请求准用凭证的采集替身：记录并转调 collect（单扣由真 collector 负责）。"""
+        return await self.collect(bvid, collection_tid=collection_tid, source=source)
+
 
 class FakeBudget:
     """预算替身：指定类别一律拒绝（带 retry_at），其余准许；记录每次 try_acquire。"""
@@ -73,6 +82,9 @@ class FakeBudget:
         self.denied = set(denied)
         self.retry_after = retry_after
         self.calls: list = []
+        self.reserve_calls: list = []
+        self.redeem_calls: list = []
+        self._seq: int = 0
 
     def try_acquire(self, kind, now_mono):
         self.calls.append((kind, now_mono))
@@ -81,6 +93,42 @@ class FakeBudget:
                 granted=False, retry_at_mono=now_mono + self.retry_after, reason_code="rate_limited"
             )
         return BudgetDecision(granted=True)
+
+    def clock(self):
+        """单调时钟替身：返回与本文件固定 MONO 一致的读数。"""
+        return MONO
+
+    def peek(self, kind, now_mono):
+        """只读视图：记一次查询，不改任何占用（单请求协议的选择器入口）。"""
+        return self.try_acquire(kind, now_mono)
+
+    def reserve(self, kind, now_mono, *, operation_key):
+        """签发替身准用凭证；denied 类别拒发。reserve 单独记录，不混进 peek/try 序列。"""
+        self.reserve_calls.append((kind, now_mono, operation_key))
+        if kind in self.denied:
+            return AdmissionResult(
+                decision=BudgetDecision(
+                    granted=False,
+                    retry_at_mono=now_mono + self.retry_after,
+                    reason_code="rate_limited",
+                )
+            )
+        self._seq += 1
+        admission = LogicalAdmission(
+            entry_id=f"fake-{self._seq}",
+            operation_key=str(operation_key),
+            kind=kind,
+            issuer=self,
+        )
+        return AdmissionResult(decision=BudgetDecision(granted=True), admission=admission)
+
+    def redeem(self, admission, *, operation_key, now_mono):
+        """替身兑换：记录即可（真兑换只发生在真 RequestBudget + 真 collector 上）。"""
+        self.redeem_calls.append((admission, operation_key, now_mono))
+
+    def release_unused(self, admission):
+        """替身释放：总是成功。"""
+        return True
 
 
 def _seed(db, bvid, *, next_due, interval=HOUR, ttl=HOUR, fast_until=None):
@@ -342,3 +390,296 @@ def test_no_budget_keeps_legacy_tick_behavior(db):
     assert result.budget_skipped == 0
     assert result.budget_exhausted is False
     assert result.due_count == 2
+
+
+# ===========================================================================
+# W2 · 类别窗口与公平查询（全部使用**真实** RequestBudget，不用 FakeBudget 冒充类别隔离）
+#
+# 覆盖 07 执行案 §9.1 / §9.2 / §9.4：
+# - limit*8 反例：8 条被拒 fast 后第 9 条 normal 仍入选（两类规模均 > limit*8）；
+# - 两类都可用、连续两轮 limit=1：两类轮流拿到执行机会，同类内部 (next_due, bvid) 稳定；
+# - 两类各有 limit 候选：合计 admitted 仍 <= limit，不因两条查询让单轮处理量翻倍；
+# - 全部 budget 拒绝：无采集、failure_count 不增长、等待可用停止信号取消。
+# ===========================================================================
+
+#: W2 统一单调时钟读数（只喂 RequestBudget，绝不落库）。
+W2_MONO: float = 2000.0
+
+
+def _budget_partitioned(
+    *,
+    normal: tuple = (10, 150, 1500),
+    fast: tuple = (8, 120, 1200),
+    total: tuple = (40, 400, 4000),
+) -> RequestBudget:
+    """构造**分桶真预算**：normal / fast 各自 ``(per_minute, per_hour, per_day)``，全局窗给足。
+
+    Args:
+        normal: normal_watch 的 (per_minute, per_hour, per_day)。
+        fast: fast_watch 的 (per_minute, per_hour, per_day)。
+        total: 全局窗 (per_minute, per_hour, per_day)。
+
+    Returns:
+        RequestBudget: 固定时钟的真预算器（类别窗真正生效）。
+    """
+    def _spec(triple: tuple) -> dict:
+        pm, ph, pd = triple
+        return {"per_minute": pm, "per_hour": ph, "per_day": pd}
+
+    return RequestBudget(
+        per_minute=total[0],
+        per_hour=total[1],
+        per_day=total[2],
+        category_limits={
+            BUDGET_CATEGORY_NORMAL: _spec(normal),
+            BUDGET_CATEGORY_FAST: _spec(fast),
+        },
+        clock=lambda: W2_MONO,
+    )
+
+
+def _failure_count(db, bvid: str) -> int:
+    """读某行的 ``failure_count``（断言容量延期不算平台失败）。"""
+    session = db()
+    try:
+        return int(
+            session.execute(
+                text("SELECT failure_count FROM hotspot_watch WHERE bvid = :b"),
+                {"b": bvid},
+            ).scalar()
+        )
+    finally:
+        session.close()
+
+
+def test_w2_counterexample_limit8_misses_normal_but_category_query_finds_it(db):
+    """§9.1 核心反例：更早到期的 fast 占满扫描窗时，normal 被错过；按类查询后仍能选中。
+
+    - 旧选择器只读 ``limit * 8`` 条（本例 8）：最早的 8 条全是 fast，normal 完全在窗外；
+    - 新选择器**按类分别取候选**（每类读取上限 = limit），normal 不会被 fast 遮住。
+    两类规模均 > ``limit * 8``（各 12 条），不靠提高扫描倍数「碰巧通过」。
+    """
+    limit = 1
+    for index in range(12):
+        _seed(db, f"BVFAST{index:05d}", next_due=E - 100 + index, fast_until=E + HOUR)
+    for index in range(12):
+        _seed(db, f"BVNORM{index:05d}", next_due=E - 50 + index)
+    normal_head = "BVNORM00000"
+
+    # ---- 旧口径证据：`limit*8` 窗口被更早的 fast 占满，normal 压根不在窗口内 ----
+    session = db()
+    try:
+        old_window = find_due_for_eval(session, E, limit=max(limit, limit * 8))
+        old_bvids = [str(row.bvid) for row in old_window]
+    finally:
+        session.close()
+    assert len(old_bvids) == 8, "旧选择器只读 limit*8 = 8 条"
+    assert all(bvid.startswith("BVFAST") for bvid in old_bvids), "旧窗口 8 条全是 fast"
+    assert normal_head not in old_bvids, "旧口径下 normal 落在扫描窗外，根本看不见"
+
+    # ---- 新口径：fast 类额度已满被跳过，normal 仍被按类查询选中 ----
+    budget = _budget_partitioned(fast=(1, 120, 1200), normal=(10, 150, 1500))
+    seeded = budget.reserve(BUDGET_CATEGORY_FAST, W2_MONO, operation_key="SEEDFAST")
+    assert seeded.decision.granted is True
+    budget.redeem(seeded.admission, operation_key="SEEDFAST", now_mono=W2_MONO)
+
+    service = WatchService(
+        session_factory=db, now_fn=lambda: E, now_mono_fn=lambda: W2_MONO, budget=budget
+    )
+    session = db()
+    try:
+        selection = service._select_targets(
+            session, E, limit, budget=budget, now_mono=W2_MONO
+        )
+    finally:
+        session.close()
+
+    assert [target.bvid for target in selection.targets] == [normal_head]
+    assert selection.budget_skipped == 1
+    assert selection.budget_exhausted is False
+
+
+def test_w2_rotation_alternates_categories_across_rounds(db):
+    """§9.2：两类都有候选 + limit=1，连续两轮两类轮流拿到执行机会；同类内部 FIFO 稳定。"""
+    for index in range(3):
+        _seed(db, f"BVFAST{index:05d}", next_due=E - 100 + index, fast_until=E + HOUR)
+        _seed(db, f"BVNORM{index:05d}", next_due=E - 50 + index)
+
+    budget = _budget_partitioned()
+    collector = RecordingCollector()
+    service = WatchService(
+        collector_port=collector,
+        session_factory=db,
+        now_fn=lambda: E,
+        now_mono_fn=lambda: W2_MONO,
+        budget=budget,
+    )
+
+    first = asyncio.run(service.run_tick(limit=1))
+    second = asyncio.run(service.run_tick(limit=1))
+
+    # 起始类别 = fast（轮转环首位）；授予后游标轮转到 normal —— 两类轮流，不是永远同一类先。
+    assert collector.calls == ["BVFAST00000", "BVNORM00000"]
+    assert first.admitted == 1 and second.admitted == 1
+    assert first.due_count == 1 and second.due_count == 1
+    # 同类内部稳定：剩余 fast 候选仍按 (next_due, bvid) 升序，等待下一轮轮到 fast。
+    assert first.candidates_considered == 2  # 两类各读 limit=1 条
+    assert first.committed == 1 and second.committed == 1
+
+
+def test_w2_total_admitted_never_exceeds_limit(db):
+    """§9.2：两类各有 limit 个候选，合计 admitted 仍 <= limit，不因两条查询翻倍。"""
+    for index in range(3):
+        _seed(db, f"BVFAST{index:05d}", next_due=E - 100 + index, fast_until=E + HOUR)
+        _seed(db, f"BVNORM{index:05d}", next_due=E - 50 + index)
+
+    budget = _budget_partitioned()
+    collector = RecordingCollector()
+    service = WatchService(
+        collector_port=collector,
+        session_factory=db,
+        now_fn=lambda: E,
+        now_mono_fn=lambda: W2_MONO,
+        budget=budget,
+    )
+
+    result = asyncio.run(service.run_tick(limit=2))
+
+    assert result.candidates_considered == 4, "两类各读 limit=2 条候选（读取上限，不是处理上限）"
+    assert result.due_count <= 2
+    assert result.admitted == 2, "本轮 admitted 恒 <= limit"
+    assert len(collector.calls) == 2
+    assert len(collector.calls) == len(set(collector.calls)), "同一目标不得被处理两次"
+
+
+def test_w2_all_denied_no_collect_no_failure_and_wait_cancellable(db):
+    """§9.4：全部预算拒绝 → 无采集、failure_count 不增长、等待可被停止信号取消。"""
+    _seed(db, "BVFAST0001", next_due=E - 100, fast_until=E + HOUR)
+    _seed(db, "BVNORMAL001", next_due=E - 50)
+
+    # 真分桶预算：两类各自 per_minute=1，先把两类都占满 -> 两类 peek 均被拒。
+    budget = _budget_partitioned(fast=(1, 120, 1200), normal=(1, 150, 1500))
+    for kind, key in ((BUDGET_CATEGORY_FAST, "SEEDF"), (BUDGET_CATEGORY_NORMAL, "SEEDN")):
+        granted = budget.reserve(kind, W2_MONO, operation_key=key)
+        assert granted.decision.granted is True
+        budget.redeem(granted.admission, operation_key=key, now_mono=W2_MONO)
+
+    collector = RecordingCollector()
+    service = WatchService(
+        collector_port=collector,
+        session_factory=db,
+        now_fn=lambda: E,
+        now_mono_fn=lambda: W2_MONO,
+        budget=budget,
+    )
+
+    result = asyncio.run(service.run_tick(limit=5))
+
+    assert collector.calls == [], "全部被拒时不得发起任何采集"
+    assert result.admitted == 0
+    assert result.budget_deferred == 0, "选择阶段就没选出可运行目标，故无逐目标延期"
+    assert result.budget_skipped == 2, "两类各被跳过 1 次"
+    assert result.budget_exhausted is True
+    assert result.failed == 0
+    assert _failure_count(db, "BVNORMAL001") == 0, "容量延期不是平台失败，不增 failure_count"
+    # 等待口径：预算耗尽 -> 等最早 retry（>0），不是忙转。
+    assert result.retry_delay_s is not None and result.retry_delay_s > 0
+    assert WatchService._compute_wait_s(interval_s=60, result=result) == pytest.approx(
+        result.retry_delay_s
+    )
+
+    # 等待可取消：停止信号已置位时 _loop 立即返回（不真 sleep）。
+    stop_event = asyncio.Event()
+    stop_event.set()
+    asyncio.run(service._loop(interval_s=60, stop_event=stop_event, limit=5))
+    assert collector.calls == []
+
+
+class _DenyFirstReserveBudget:
+    """包一层真 ``RequestBudget``：``peek`` 透传，第一次 ``reserve`` 拒绝、之后放行。
+
+    模拟「peek 与 reserve 之间状态变化」——用于验证有界补选，**不是**拿替身冒充分桶隔离。
+    """
+
+    def __init__(self, inner: RequestBudget) -> None:
+        """绑定内层真预算。"""
+        self._inner = inner
+        self.denied_once = False
+
+    def peek(self, kind: str, now_mono: float):
+        """透传到内层真预算（类别窗与总窗仍由真实现裁决）。"""
+        return self._inner.peek(kind, now_mono)
+
+    def reserve(self, kind: str, now_mono: float, *, operation_key: str):
+        """第一次调用返回拒绝，之后透传到内层真预算。"""
+        if not self.denied_once:
+            self.denied_once = True
+            return AdmissionResult(
+                decision=BudgetDecision(
+                    granted=False, retry_at_mono=now_mono + 10.0, reason_code="rate_limited"
+                )
+            )
+        return self._inner.reserve(kind, now_mono, operation_key=operation_key)
+
+    def release_unused(self, admission) -> bool:
+        """透传到内层真预算。"""
+        return self._inner.release_unused(admission)
+
+    def clock(self) -> float:
+        """与内层真预算同源时钟。"""
+        return self._inner.clock()
+
+
+def test_w2_reserve_denied_backfills_from_bounded_pool(db):
+    """§9.2：``reserve`` 因状态变化被拒时，从**有界补选池**补选；本轮 admitted 仍 <= limit。"""
+    for index in range(3):
+        _seed(db, f"BVFAST{index:05d}", next_due=E - 100 + index, fast_until=E + HOUR)
+        _seed(db, f"BVNORM{index:05d}", next_due=E - 50 + index)
+
+    budget = _DenyFirstReserveBudget(_budget_partitioned())
+    collector = RecordingCollector()
+    service = WatchService(
+        collector_port=collector,
+        session_factory=db,
+        now_fn=lambda: E,
+        now_mono_fn=lambda: W2_MONO,
+        budget=budget,
+    )
+
+    result = asyncio.run(service.run_tick(limit=2))
+
+    assert result.budget_deferred == 1, "第 1 个候选 reserve 被拒 -> 计一次预算延期"
+    assert result.admitted == 2, "补选后本轮 admitted 仍 <= limit=2"
+    assert len(collector.calls) == 2
+    assert len(collector.calls) == len(set(collector.calls)), "补选不得重复处理同一目标"
+    assert result.candidates_considered == 4
+
+
+def test_v2_scheduling_golden_output_stable(db):
+    """W3 回归（§13-W3）：v2 调度（按类轮转 + 有界补选）在固定输入下输出确定不变（金标准）。
+
+    覆盖 07 执行案 W3 的「v2 算法回归不变」：真实分桶预算 + 真按类查询，起始类别 ``fast``，
+    首个必为更早到期的 fast 目标；授予后游标轮转到 normal。锁定 ``admitted`` / 候选数 /
+    调用顺序，防止后续接线改动悄悄改了调度输出。
+    """
+    for index in range(3):
+        _seed(db, f"BVFAST{index:05d}", next_due=E - 100 + index, fast_until=E + HOUR)
+        _seed(db, f"BVNORM{index:05d}", next_due=E - 50 + index)
+
+    budget = _budget_partitioned()
+    collector = RecordingCollector()
+    service = WatchService(
+        collector_port=collector,
+        session_factory=db,
+        now_fn=lambda: E,
+        now_mono_fn=lambda: W2_MONO,
+        budget=budget,
+    )
+
+    result = asyncio.run(service.run_tick(limit=2))
+
+    assert result.admitted == 2
+    assert collector.calls == ["BVFAST00000", "BVNORM00000"]
+    assert result.candidates_considered == 4
+    assert result.committed == 2
+    assert result.failed == 0

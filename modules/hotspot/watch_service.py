@@ -49,6 +49,7 @@ from core.database import HotspotWatch, Video, VideoStats, get_session
 from core.logger import get_logger
 
 from .algorithm import Detection, LifecycleV2, Snapshot, Stage, TrendState
+from .risk_control import BudgetWiringError
 from .watch_demand import (
     REASON_BLOCKED_BY_USER,
     REASON_NO_DEMAND,
@@ -63,6 +64,7 @@ from .watch_store import (
     DEFAULT_SAMPLE_INTERVAL_S,
     claim_revision,
     commit_state,
+    find_due_for_budget_category,
     find_due_for_eval,
     load_fast_until_map,
     reactivate_watch,
@@ -102,6 +104,10 @@ BUDGET_CATEGORY_FAST: str = "fast_watch"
 
 #: 预算类别白名单（顺序即选取优先级：先保底 normal，再 fast）。
 BUDGET_CATEGORIES: tuple = (BUDGET_CATEGORY_NORMAL, BUDGET_CATEGORY_FAST)
+
+#: 类间轮转的处理顺序（07 执行案 §9.2）：normal/fast 按类 FIFO 取候选、类间轮转。
+#: 单 watch 实例只保存「下次起始类别」``_select_rotation`` 即可，不要求持久化。
+BUDGET_ROTATION_ORDER: tuple = (BUDGET_CATEGORY_FAST, BUDGET_CATEGORY_NORMAL)
 
 #: 准入派生 reason 的稳定取值集合（供调度侧 / 测试复用，不在本层另造态名）。
 DEMAND_REASONS: frozenset = frozenset(
@@ -163,6 +169,12 @@ class TickResult:
         budget_skipped: 因所属类别预算暂不可授予而被本轮跳过的到点目标数（第二批 F）。
         retry_delay_s: 本轮若有类别因预算被跳过，最早可重试的等待秒数；否则 None。
         budget_exhausted: 是否出现「所有到点项都被预算挡住、无一项可运行」。
+        budget_deferred: 逐目标 reserve 时额度暂不可授予而被延期的目标数（07 案 W1）。
+            **不是**平台失败，不计入 ``failed``、不增 ``failure_count``。
+        candidates_considered: 选择器读取的候选目标数（07 案 §9.2；两类各按类 LIMIT 读取，
+            **不等于**本轮允许处理数）。
+        admitted: 本轮真正获准（``reserve`` 授予）并进入执行的目标数（07 案 §9.2），恒 ``<= limit``。
+        collected: 本轮完成「采集 → 评估 → 写回」而未抛异常的目标数（= ``committed + dropped``）。
     """
 
     now_epoch_s: int = 0
@@ -175,16 +187,52 @@ class TickResult:
     budget_skipped: int = 0
     retry_delay_s: float | None = None
     budget_exhausted: bool = False
+    budget_deferred: int = 0
+    candidates_considered: int = 0
+    admitted: int = 0
+    collected: int = 0
+    #: 逐目标 reserve 被延期时的**按类别**明细（07 案 §10.3 budget_deferred_by_category）：
+    #: 便于把「某类额度不足」（per-category 硬限）与「整轮 no-eligible」分开观测。
+    #: 只记容量延期，**不是**平台失败，不影响 ``failure_count``。
+    budget_deferred_by_category: dict = field(default_factory=dict)
 
 
 @dataclass
 class _Selection:
-    """一轮「捞」的结果（含预算分桶信息，第二批 F）。"""
+    """一轮「捞」的结果（含预算分桶信息，第二批 F / 07 案 W2）。
+
+    Attributes:
+        targets: 本轮锁定处理的候选（``<= limit``）。
+        overflow: 已 peek 门控、但超出 ``limit`` 的有界补选池（07 案 §9.2）；仅用于
+            ``reserve`` 因状态变化被拒时补选，**不**改变「本轮 admitted 总数 <= limit」。
+        budget_skipped: 因所属类别本类额度不可授予而被跳过的候选数。
+        retry_delay_s: 最早可重试等待秒数；无则 None。
+        budget_exhausted: 是否「读到的候选全被预算挡住、无一项可运行」。
+        candidates_considered: 两类读取的候选总数（两类各按类 LIMIT，不等于处理数）。
+    """
 
     targets: list = field(default_factory=list)
+    overflow: list = field(default_factory=list)
     budget_skipped: int = 0
     retry_delay_s: float | None = None
     budget_exhausted: bool = False
+    candidates_considered: int = 0
+
+
+@dataclass(frozen=True)
+class _TargetClaim:
+    """单目标「执行前重检」的短 session 快照（07 案 §9.3）。
+
+    由 :meth:`WatchService._claim_short` 在**独立短 session** 内读出，session 随读随关；
+    ``run_tick`` 随后以 :attr:`category` 做 ``reserve``、以 :attr:`claim_revision` 做 fenced 写回。
+
+    Attributes:
+        claim_revision: 读取时该行的 ``state_revision``（fencing 用）。
+        category: 重检后的**真实当前类别**（``normal_watch`` / ``fast_watch``）——不拿旧分类扣错窗。
+    """
+
+    claim_revision: int
+    category: str
 
 
 # --------------------------------------------------------------------- 采集端口
@@ -200,6 +248,21 @@ class SnapshotCollectorPort(Protocol):
         self, bvid: str, *, collection_tid: int | None = None, source: str = WATCH_SOURCE
     ) -> Any:
         """采集并落库一条快照，返回值由实现方定义（编排层不解释）。"""
+        ...
+
+    async def collect_admitted(
+        self,
+        bvid: str,
+        *,
+        admission: Any,
+        collection_tid: int | None = None,
+        source: str = WATCH_SOURCE,
+    ) -> Any:
+        """可选能力：带单请求准入凭证采一条快照（07 执行案 §8.2）。
+
+        实现方若要在**有预算**的 watch 路径使用，必须实现本方法（或经适配器显式声明
+        自身不另扣 L 预算）；否则编排层启动时报 ``BudgetWiringError``，不静默绕过。
+        """
         ...
 
 
@@ -245,6 +308,38 @@ class HotspotCollectorPort:
             bvid,
             collection_tid=(int(collection_tid) if collection_tid is not None else None),
             source=source,
+        )
+
+    async def collect_admitted(
+        self,
+        bvid: str,
+        *,
+        admission: Any,
+        collection_tid: int | None = None,
+        source: str = WATCH_SOURCE,
+    ) -> Any:
+        """带单请求准入凭证采一条快照（07 执行案 §8.2）。
+
+        与 :meth:`collect` 的唯一差别是把 ``admission`` 透传给底层 ``collect_one``，由
+        ``_fetch_view`` 以 ``issuer.redeem(...)`` 兑换这一份 L 层票据，**不再**二次扣费。
+
+        Args:
+            bvid: 视频 BV 号。
+            admission: 由 ``RequestBudget.reserve`` 签发的逻辑准入凭证。
+            collection_tid: 该目标的采集分区 ID。
+            source: 快照来源标签。
+
+        Returns:
+            ``_save_snapshot`` 返回的信号条数（int）。
+
+        Raises:
+            Exception: 采集 / 落库 / 凭证兑换失败时原样上抛，由编排层计失败隔离。
+        """
+        return await self._collector.collect_one(
+            bvid,
+            collection_tid=(int(collection_tid) if collection_tid is not None else None),
+            source=source,
+            logical_admission=admission,
         )
 
 
@@ -520,7 +615,7 @@ def advance_next_due(
     按 02 §0 裁定一「任何改变调度或业务状态的写入，同事务内 ``state_revision + 1``」，
     默认 ``bump_revision=True`` 时把代际 +1，fence 掉更早领取的迟到写入。
 
-    代际口径（批 3.5 · 改动一）：在 ``_process_target`` 里本函数与 ``commit_state`` 处于
+    代际口径（批 3.5 · 改动一）：在 ``_collect_evaluate_commit`` 里本函数与 ``commit_state`` 处于
     **同一事务**、都是「改变状态」的写入；若两处各 +1，一轮 tick 会净 +2，跟轮次对不上账。
     故 caller 传 ``bump_revision=False``，把这一轮的 ``state_revision + 1`` 交给
     ``commit_state`` 统一下发：一轮 tick = 一个事务 = 代际净 +1（调度列与状态列同时落）。
@@ -715,6 +810,14 @@ class WatchService:
         self._pool = pool
         self._budget = budget
         self._demand_reconcile_hook = demand_reconcile_hook
+        # 07 案 §9.2：单实例保存「下次起始类别」即可（持久化不是必需）；每次真正授予后推进游标，
+        # 被拒绝不永久霸占优先权。缺省起始类别取轮转环首位（fast_watch）。
+        self._select_rotation: str = BUDGET_ROTATION_ORDER[0]
+        # 07 案 §6：实例级 asyncio.Lock 串行**同实例**的 run_tick，避免两个 tick 并发消费同一批
+        # 逐目标 Admission（reserve/redeem 是同步非阻塞临界区，但两个 tick 交替执行仍会交错）。
+        # **边界**：跨进程 / 跨实例的严格 exactly-once 不在本批次承诺内——claim_revision 只是读取代际，
+        # 不是数据库排他领取；单 web worker 部署下本锁已覆盖生产监控层的唯一实例。
+        self._tick_lock: asyncio.Lock = asyncio.Lock()
 
     # ---- 依赖 ----
 
@@ -727,6 +830,37 @@ class WatchService:
         if self._collector_port is None:
             self._collector_port = default_collector_port(self._budget)
         return self._collector_port
+
+    def _require_admission_capable_port(self) -> None:
+        """有预算的 watch 路径要求端口实现单请求准入协议，否则显式报错。
+
+        Raises:
+            BudgetWiringError: 端口未提供 ``collect_admitted`` 时抛出（不静默绕过预算）。
+        """
+        port = self.collector_port
+        if getattr(port, "collect_admitted", None) is None:
+            raise BudgetWiringError(
+                "有预算的 watch 路径要求端口实现 collect_admitted（单请求准入协议）；"
+                f"当前端口 {type(port).__name__} 不支持，拒绝静默绕过预算。"
+            )
+
+    def _admission_now_mono(self, budget: Any | None) -> float:
+        """取本轮准入用的统一单调时刻：优先用预算自身的 clock，保持 peek / reserve /
+        redeem(issuer.clock()) 三者同一时钟（07 案 §7.5）。
+
+        Args:
+            budget: 本轮活动预算（可为 None）。
+
+        Returns:
+            float: 单调时钟读数。
+        """
+        clock = getattr(budget, "clock", None)
+        if callable(clock):
+            try:
+                return float(clock())
+            except Exception:  # noqa: BLE001 - 替身 clock 异常时回退到编排层时钟
+                pass
+        return float(self._now_mono_fn())
 
     @property
     def pool(self) -> WatchPool:
@@ -744,6 +878,54 @@ class WatchService:
     def demand_reconcile_hook(self) -> Callable[..., Any] | None:
         """每轮需求整编 hook；None 表示不接线（行为与现状一致，4e）。"""
         return self._demand_reconcile_hook
+
+    def logical_policy_snapshot(self) -> dict:
+        """返回 watch **L 层**逻辑调度策略与预算的只读观测快照（07 案 §10.3）。
+
+        口径说明：
+        - 逻辑窗口用 ``monotonic``、HTTP 窗口用 ``epoch``，**不混时间基准**；这里只报告逻辑口径；
+        - ``category_consumption``（累计）**不是** 24h 当前可用量，故只报 ``category_used``（窗口内占用）；
+        - 预算为 None（legacy / 未接线）时如实标 ``logical_mode='unconfigured'``、``category_isolation=False``；
+        - 这是**内存**逻辑账本，不冒充跨进程持久限额，也不代表 H 层 HTTP 父额度。
+
+        Returns:
+            dict: 含 ``logical_policy_version`` / ``logical_mode`` / ``category_isolation`` /
+            ``logical_global_used`` / ``logical_category_used`` / ``reserved_admissions`` 等字段。
+        """
+        budget = self._budget
+        if budget is None:
+            return {
+                "logical_policy_version": None,
+                "logical_mode": "unconfigured",
+                "category_isolation": False,
+                "logical_global_used": None,
+                "logical_category_used": None,
+                "reserved_admissions": None,
+                "http_quota_scope": "domain/category/hour_bucket",
+                "http_parent_category": "watch",
+            }
+        now_mono = self._admission_now_mono(budget)
+        try:
+            snapshot = budget.snapshot(now_mono) if hasattr(budget, "snapshot") else {}
+        except Exception:  # noqa: BLE001 - 观测快照失败绝不上抛，退化为粗粒度字段
+            snapshot = {}
+        category_limits = getattr(budget, "category_limits", None)
+        return {
+            "logical_policy_version": snapshot.get(
+                "policy_version", getattr(budget, "policy_version", None)
+            ),
+            "logical_mode": snapshot.get(
+                "mode", "partitioned" if category_limits is not None else "shared"
+            ),
+            "category_isolation": bool(
+                snapshot.get("category_isolation", category_limits is not None)
+            ),
+            "logical_global_used": snapshot.get("global_used_60s"),
+            "logical_category_used": snapshot.get("category_used"),
+            "reserved_admissions": snapshot.get("reserved"),
+            "http_quota_scope": "domain/category/hour_bucket",
+            "http_parent_category": "watch",
+        }
 
     # ---- 需求整编（04 联合前置 P3 · flush-only）----
 
@@ -1143,8 +1325,10 @@ class WatchService:
     ) -> TickResult:
         """跑一轮完整 tick（顺序：先清 → 捞 → 领 → 采 → 评 → 写 → 排）。
 
-        目标级异常在此被隔离并计入 ``TickResult.failed``；调度阶段（先清 / 捞）的
-        基础设施异常会原样上抛，由 :meth:`_loop` 兜住后继续下一轮。
+        串行（07 执行案 §6）：本方法先取**实例级** ``_tick_lock``，再执行一轮 tick。同一
+        ``WatchService`` 实例上的并发调用会被串行化，避免两个 tick 并发消费同一批逐目标
+        Admission。**边界**：跨进程 / 跨实例的严格 exactly-once **不在本批次承诺内** ——
+        ``watch_store.claim_revision`` 只是读取代际，不是数据库排他领取；本锁只在单实例内生效。
 
         Args:
             limit: 本轮最多处理多少个目标（>=1）。
@@ -1154,9 +1338,30 @@ class WatchService:
         Returns:
             TickResult: 本轮结构化结果。
         """
+        async with self._tick_lock:
+            return await self._run_tick_locked(limit=limit, budget=budget)
+
+    async def _run_tick_locked(
+        self, *, limit: int, budget: Any | None = None
+    ) -> TickResult:
+        """:meth:`run_tick` 的实际执行体（调用时已持有实例级 ``_tick_lock``）。
+
+        目标级异常在此被隔离并计入 ``TickResult.failed``；调度阶段（先清 / 捞）的
+        基础设施异常会原样上抛，由 :meth:`_loop` 兜住后继续下一轮。
+
+        Args:
+            limit: 本轮最多处理多少个目标（>=1）。
+            budget: 本轮活动预算对象；None 时回退构造注入的 ``budget``。
+
+        Returns:
+            TickResult: 本轮结构化结果。
+        """
         now_epoch_s = int(self._now_fn())
         result = TickResult(now_epoch_s=now_epoch_s)
         active_budget = budget if budget is not None else self._budget
+        # 统一准用单调时刻：selector 的 peek 与逐目标 reserve 用同一个 now，collector
+        # 端 redeem 用 issuer.clock()，三者同一时钟（07 案 §7.5）。
+        now_mono = self._admission_now_mono(active_budget)
 
         # ---- 先清 + 1. 捞：同一事务内「到期先归档、再捞该评估的」，
         #      保证本轮被释放的行不会出现在本轮调度结果里。
@@ -1168,11 +1373,14 @@ class WatchService:
             if self._demand_reconcile_hook is not None:
                 self._demand_reconcile_hook(session, now_s=now_epoch_s)
             result.released = release_expired(session, now_epoch_s)
-            selection = self._select_targets(session, now_epoch_s, limit, budget=active_budget)
+            selection = self._select_targets(
+                session, now_epoch_s, limit, budget=active_budget, now_mono=now_mono
+            )
             targets = selection.targets
             result.budget_skipped = selection.budget_skipped
             result.retry_delay_s = selection.retry_delay_s
             result.budget_exhausted = selection.budget_exhausted
+            result.candidates_considered = selection.candidates_considered
             session.commit()
         except Exception:
             session.rollback()
@@ -1191,15 +1399,58 @@ class WatchService:
             )
             return result
 
-        # 算法只构造一次：用本轮各目标的历史状态续算，避免每次冷启动。
+        # 有预算的 watch 路径要求端口实现单请求准用协议；缺能力显式报错，不静默绕过。
+        if active_budget is not None:
+            self._require_admission_capable_port()
+
+        # 算法只构造一次：用本轮各目标（含补选池）的历史状态续算，避免每次冷启动。
+        # 07 案红线：detector 构造时机与 ``detector_factory`` 签名不变（仍为两参、仍在循环前）。
+        queue = list(targets)
+        reserve_pool = list(selection.overflow)
         detector = self._detector_factory(
-            {target.bvid: target.initial_state for target in targets}, now_epoch_s
+            {target.bvid: target.initial_state for target in queue + reserve_pool}, now_epoch_s
         )
 
-        for target in targets:
+        # 逐目标 reserve，紧邻单目标执行：**绝不**预先 reserve 整批；admitted 恒 <= limit。
+        while queue and result.admitted < limit:
+            target = queue.pop(0)
+            # §9.3 第 2 步：先用**独立短 session**重检 active/ttl/next_due/fast_until 并读 claim
+            # revision，随即将 session 关闭；随后 reserve 与 redeem 之间**不夹任何** DB session / 事务。
+            claim = self._claim_short(target.bvid, now_epoch_s)
+            if claim is None:
+                # 目标本轮执行前已失效（被释放 / TTL 到期 / 未到点）：不 reserve、不发 HTTP、
+                # 不计失败也不计延期；有界补选一个候选（仍受 admitted <= limit 约束）。
+                if reserve_pool:
+                    queue.append(reserve_pool.pop(0))
+                continue
+            admission = None
+            if active_budget is not None:
+                # §9.3 第 3 步：按**真实当前类别** reserve（fast_until 期间变化时不拿旧分类扣错窗），
+                # 且不在目标内部等待（reserve 同步非阻塞；额度等待一律在事务外完成）。
+                admission_result = active_budget.reserve(
+                    claim.category, now_mono, operation_key=target.bvid
+                )
+                if not admission_result.decision.granted:
+                    # 容量延期（global / category 不足）：记 budget_deferred，**不是**平台失败
+                    # ——不增 failure_count、不触发退避、不计平台风控（07 案 §9.3 / §7.5）。
+                    result.budget_deferred += 1
+                    result.budget_deferred_by_category[claim.category] = (
+                        result.budget_deferred_by_category.get(claim.category, 0) + 1
+                    )
+                    # 有界补选（07 案 §9.2）：状态变化导致 reserve 被拒时，从补选池补一个候选；
+                    # 仍受 ``admitted <= limit`` 约束，绝不放大单轮处理量。
+                    if reserve_pool:
+                        queue.append(reserve_pool.pop(0))
+                    continue
+                admission = admission_result.admission
+            result.admitted += 1
             try:
-                outcome = await self._process_target(
-                    target, now_epoch_s=now_epoch_s, detector=detector
+                outcome = await self._collect_evaluate_commit(
+                    target,
+                    claim=claim,
+                    now_epoch_s=now_epoch_s,
+                    detector=detector,
+                    admission=admission,
                 )
             except Exception as exc:  # noqa: BLE001 - 失败隔离：单个目标炸了不进整轮
                 result.failed += 1
@@ -1211,6 +1462,11 @@ class WatchService:
                     sample_interval_s=target.sample_interval_s,
                 )
                 continue
+            finally:
+                # 未兑换的 reservation 在此释放；已兑换时 release 是 no-op（不退款）。
+                if admission is not None:
+                    active_budget.release_unused(admission)
+            result.collected += 1
             result.detections.extend(outcome.detections)
             if outcome.status == "committed":
                 result.committed += 1
@@ -1218,14 +1474,19 @@ class WatchService:
                 result.dropped += 1
 
         logger.info(
-            "watch tick: now_epoch_s=%s 释放=%s 到点=%s 写回=%s 丢弃=%s 失败=%s 预算跳过=%s",
+            "watch tick: now_epoch_s=%s 释放=%s 到点=%s 候选=%s 准入=%s 写回=%s 丢弃=%s 失败=%s "
+            "预算跳过=%s 预算延期=%s 预算延期类别=%s",
             result.now_epoch_s,
             result.released,
             result.due_count,
+            result.candidates_considered,
+            result.admitted,
             result.committed,
             result.dropped,
             result.failed,
             result.budget_skipped,
+            result.budget_deferred,
+            result.budget_deferred_by_category,
         )
         return result
 
@@ -1320,13 +1581,21 @@ class WatchService:
         budget: Any | None = None,
         now_mono: float | None = None,
     ) -> _Selection:
-        """1. 捞（预算感知版，第二批 F）：只从**当前可授予预算**的类别里选 due 项。
+        """1. 捞（预算感知版，07 案 §9.2）：**只做无消费的候选排序**，类间轮转。
 
-        选取规则（照 §6.3 L630）：
+        选取规则：
 
-        - 每个到点行先按其 ``fast_until_s`` 是否仍生效归类 ``normal_watch`` / ``fast_watch``；
-        - 调 ``RequestBudget.try_acquire(kind, now_mono)``：**granted 才入选**（同时原子记费）；
-        - 某类别配额用尽（拒绝）**立即跳过该项、继续看后面的项**，绝不死等该类别；
+        - 先**按类分别取候选**：``find_due_for_budget_category`` 两类各自最多读 ``limit`` 条
+          （``fast_until_s`` 生效期归 ``fast_watch``、否则归 ``normal_watch``），稳定排序
+          ``(next_due_epoch_s, bvid)``；大池不无界 ``all()``，也不再靠 ``limit * 8`` 假装看见全部类。
+        - 调 ``RequestBudget.peek(kind, now_mono)``：**只读不记账**，只看该类别此刻是否仍可放行；
+          某类本类额度不可授予时**跳过该类**（不再探它后续候选），继续看另一类（不互相饿死）。
+        - 按类 FIFO + 类间轮转把候选排成有序表：起始类别取实例游标 ``_select_rotation``，
+          **每次真正授予后**把游标推进到另一类（被拒绝不永久霸占优先权）。
+        - ``targets`` 只取前 ``limit`` 条；其余门控后的候选进 ``overflow`` 作有界补选池。
+          **本轮真正处理 / admitted 的目标数恒 <= limit**，绝不把两类 ``2 * limit`` 整表塞进
+          ``run_tick``；两类分别取 ``limit`` 只是「候选读取上限」，不是各自允许处理 ``limit``。
+        - **本函数不再扣费**：真正占用由 ``run_tick`` 逐目标 ``reserve`` 完成。
         - ``budget`` 为 None 时退化为不做预算门（保持既有 tick 行为）。
 
         Args:
@@ -1337,46 +1606,133 @@ class WatchService:
             now_mono: 单调时钟读数；None 时用 ``now_mono_fn``。
 
         Returns:
-            _Selection: 入选目标 + 预算跳过计数 + 最早可重试等待 + 是否预算耗尽。
+            _Selection: 入选目标 + 有界补选池 + 候选计数 + 预算跳过计数 + 最早可重试等待 + 是否耗尽。
         """
         limit = max(1, int(limit))
         if budget is None:
-            return _Selection(targets=self._load_targets(session, now_epoch_s, limit))
+            targets = self._load_targets(session, now_epoch_s, limit)
+            return _Selection(targets=targets, candidates_considered=len(targets))
 
         now_mono = float(self._now_mono_fn() if now_mono is None else now_mono)
-        # 取比 limit 更宽的一批，才能跳过被预算挡住的类别继续往后选（不饿死别的类别）。
-        rows = find_due_for_eval(session, now_epoch_s, limit=max(limit, limit * 8))
-        fast_map = load_fast_until_map(session, [str(row.bvid) for row in rows])
-        targets: list[WatchTarget] = []
-        skipped = 0
-        earliest_retry: float | None = None
-        for row in rows:
-            if len(targets) >= limit:
-                break
-            bvid = str(row.bvid)
-            fast_until = fast_map.get(bvid)
-            category = (
-                BUDGET_CATEGORY_FAST
-                if (type(fast_until) is int and fast_until > now_epoch_s)
-                else BUDGET_CATEGORY_NORMAL
+        # 按类分别取候选（无消费；每类读取上限 = limit，不靠放大扫描倍数「碰巧通过」）。
+        queues: dict[str, list] = {
+            category: self._collect_category_candidates(
+                session, now_epoch_s, category=category, limit=limit
             )
-            decision = budget.try_acquire(category, now_mono)
-            if not getattr(decision, "granted", False):
-                skipped += 1
-                retry = getattr(decision, "retry_at_mono", None)
-                if retry is not None:
-                    earliest_retry = retry if earliest_retry is None else min(earliest_retry, retry)
-                continue
-            targets.append(self._build_target(row, category))
+            for category in BUDGET_CATEGORIES
+        }
+        candidates_considered = sum(len(queue) for queue in queues.values())
+        ordered, skipped, earliest_retry = self._interleave_by_rotation(queues, budget, now_mono)
+        targets = ordered[:limit]
+        # 已 peek 门控、但超出 limit 的候选：只作 reserve 被拒时的有界补选来源。
+        overflow = ordered[limit : limit * 2]
+        # 07 案 §9.2：每次真正「授予并锁定处理」后推进游标；被拒绝（未入选）不改游标、
+        # 不永久霸占优先权。游标按**本轮最后一个入选目标**的类别取另一类。
+        if targets:
+            self._select_rotation = self._other_category(targets[-1].category)
         retry_delay_s = None
         if earliest_retry is not None:
             retry_delay_s = max(0.0, float(earliest_retry) - now_mono)
         return _Selection(
             targets=targets,
+            overflow=overflow,
             budget_skipped=skipped,
             retry_delay_s=retry_delay_s,
             budget_exhausted=(not targets) and skipped > 0,
+            candidates_considered=candidates_considered,
         )
+
+    def _collect_category_candidates(
+        self, session: Session, now_epoch_s: int, *, category: str, limit: int
+    ) -> list:
+        """按类取 due 候选（07 案 §9.1；走 ``watch_store`` 的按类查询，可被单测打桩）。
+
+        Args:
+            session: 调度会话。
+            now_epoch_s: 本轮时刻（UTC 秒）。
+            category: 预算类别（``normal_watch`` / ``fast_watch``）。
+            limit: 本类读取上限（>=1）。
+
+        Returns:
+            list: ``hotspot_watch`` 行（按 ``(next_due_epoch_s, bvid)`` 升序）。
+        """
+        return list(
+            find_due_for_budget_category(
+                session, now_epoch_s, category=category, limit=max(1, int(limit))
+            )
+        )
+
+    @staticmethod
+    def _other_category(category: str) -> str:
+        """返回轮转环里的另一类（本层只有 ``normal_watch`` / ``fast_watch`` 两类）。
+
+        Args:
+            category: 当前类别。
+
+        Returns:
+            str: 另一类别。
+        """
+        return (
+            BUDGET_CATEGORY_NORMAL
+            if category == BUDGET_CATEGORY_FAST
+            else BUDGET_CATEGORY_FAST
+        )
+
+    def _interleave_by_rotation(
+        self, queues: dict, budget: Any, now_mono: float
+    ) -> tuple[list, int, float | None]:
+        """按类 FIFO + 类间轮转把两类候选交错成有序表（``peek`` 只读门控，不占容量）。
+
+        - 起始类别取实例游标 ``_select_rotation``；**每次真正授予**后把游标推进到另一类；
+        - 某类本类额度不可授予时**跳过该类**（不再探它后续候选），继续另一类；
+        - 两类候选都取尽 / 都跳过才停。
+
+        Args:
+            queues: ``{category: [rows...]}``（各类按 ``(next_due_epoch_s, bvid)`` 升序）。
+            budget: 预算对象（提供 ``peek``）。
+            now_mono: 单调时钟读数。
+
+        Returns:
+            ``(ordered_targets, skipped, earliest_retry_mono)``。
+        """
+        pos = {category: 0 for category in BUDGET_CATEGORIES}
+        denied: set[str] = set()
+        current = (
+            self._select_rotation
+            if self._select_rotation in BUDGET_CATEGORIES
+            else BUDGET_ROTATION_ORDER[0]
+        )
+        ordered: list[WatchTarget] = []
+        skipped = 0
+        earliest_retry: float | None = None
+        # 每处理一个候选，最多再花一次「切到另一类（该类已取尽 / 已跳过）再切回」的迭代，
+        # 故上界取候选总数的 2 倍再留裕量；只用于兜底，不会真跑到这么多步。
+        guard = 2 * sum(len(queue) for queue in queues.values()) + 2
+        steps = 0
+        while steps < guard:
+            steps += 1
+            if current in denied or pos[current] >= len(queues[current]):
+                other = self._other_category(current)
+                if other in denied or pos[other] >= len(queues[other]):
+                    break
+                current = other
+                continue
+            row = queues[current][pos[current]]
+            pos[current] += 1
+            # 只做非消费视图：peek 不占容量，也不授权发请求；真正占用在 run_tick reserve。
+            decision = budget.peek(current, now_mono)
+            if not getattr(decision, "granted", False):
+                skipped += 1
+                retry = getattr(decision, "retry_at_mono", None)
+                if retry is not None:
+                    earliest_retry = retry if earliest_retry is None else min(earliest_retry, retry)
+                # 本类额度不可授予：跳过该类的其余候选，直接看另一类。
+                denied.add(current)
+                current = self._other_category(current)
+                continue
+            ordered.append(self._build_target(row, current))
+            current = self._other_category(current)
+        return ordered, skipped, earliest_retry
 
     @staticmethod
     def _build_target(row: Any, category: str = BUDGET_CATEGORY_NORMAL) -> WatchTarget:
@@ -1404,35 +1760,113 @@ class WatchService:
 
     # ---- 步骤 2..6：单目标处理 ----
 
-    async def _process_target(
-        self, target: WatchTarget, *, now_epoch_s: int, detector: LifecycleV2
-    ) -> TargetOutcome:
-        """处理单个目标：领代际 → 采 → 评 → fenced 写回 → 推进调度。
+    def _claim_short(self, bvid: str, now_epoch_s: int) -> "_TargetClaim | None":
+        """§9.3 第 2 步：用**独立短 session**重检并读 claim，返回后立即关闭。
 
-        本方法内部**只有一条事务**：任一步抛异常即 rollback 并上抛（由 :meth:`run_tick`
-        计入失败隔离）；代际过期时同样 rollback 并返回 ``dropped``，不写任何列。
+        重检内容：``active`` / ``ttl_end_epoch_s`` / ``next_due_epoch_s`` / ``fast_until_s``，
+        并读取当前 ``state_revision`` 作为 claim。返回的 ``category`` 是**真实当前类别**
+        （``fast_until_s`` 生效期为 ``fast_watch``，否则 ``normal_watch``）——``run_tick`` 用它
+        reserve，避免拿旧分类扣错窗。行已失效（不存在 / 非 active / TTL 到期 / 未到点）返回 None：
+        **不 reserve、不发 HTTP、不计失败**（07 案 §9.3 / §9.4）。
+
+        关键不变量：本方法在 ``reserve`` **之前**完成，且 session 在此关闭；因此 ``reserve`` 与
+        ``redeem`` 之间不夹任何 DB session / 事务（预算等待一律在事务外）。
+
+        Args:
+            bvid: 目标 BV 号。
+            now_epoch_s: 本轮时刻（UTC 秒）。
+
+        Returns:
+            _TargetClaim | None: 通过重检时返回其代际与真实类别；否则 None。
+        """
+        clean_bvid = str(bvid or "").strip()
+        session = self._session_factory()
+        try:
+            row = (
+                session.query(
+                    HotspotWatch.active,
+                    HotspotWatch.ttl_end_epoch_s,
+                    HotspotWatch.next_due_epoch_s,
+                    HotspotWatch.state_revision,
+                )
+                .filter(HotspotWatch.bvid == clean_bvid)
+                .first()
+            )
+            if row is None:
+                return None
+            active, ttl_end_epoch_s, next_due_epoch_s, revision = row
+            # 需求已撤销 / 手动停追：active=0，执行前拦下（不拿到 lease 也不发 HTTP）。
+            if not bool(active):
+                return None
+            # TTL 到期：先清已在调度阶段释放，这里兜住「调度选后、执行前」的空窗。
+            if int(ttl_end_epoch_s) <= int(now_epoch_s):
+                return None
+            # 未到点：需求整编等可能把 next_due 推后，执行前再判一次。
+            if int(next_due_epoch_s) > int(now_epoch_s):
+                return None
+            # 真实当前类别：用 04 迁移补的 fast_until_s（缺列时优雅降级为 None -> normal）。
+            fast_until = load_fast_until_map(session, [clean_bvid]).get(clean_bvid)
+            category = (
+                BUDGET_CATEGORY_FAST
+                if (type(fast_until) is int and fast_until > int(now_epoch_s))
+                else BUDGET_CATEGORY_NORMAL
+            )
+            return _TargetClaim(claim_revision=int(revision), category=category)
+        finally:
+            session.close()
+
+    # ---- 步骤 3..6：采 → 评 → fenced 写回 → 推进调度 ----
+
+    async def _collect_evaluate_commit(
+        self,
+        target: WatchTarget,
+        *,
+        claim: _TargetClaim,
+        now_epoch_s: int,
+        detector: LifecycleV2,
+        admission: Any | None = None,
+    ) -> TargetOutcome:
+        """处理单个目标：采 → 评 → fenced 写回 → 推进调度（07 案 §9.3）。
+
+        **无 session 跨采**：采集（``admission`` 非 None 时走 ``collect_admitted`` 兑换同一份
+        L 票据）在**未打开任何 DB session** 时发生；采集完成后才新开一条短 session 读历史、
+        评估、按 ``claim.claim_revision`` 做 fenced 写回并推进 ``next_due``。代际被抢先 / 需求
+        已撤时丢弃本次结果（不写任何列），返回 ``dropped``。
+
+        边界（07 案 §3.4 / §9.3）：本次只把新增的 L 预算等待移出 DB 事务；collector 自提交
+        快照的既有行为原样保留，**不**扩大为「全采集写入都原子回滚」的未实测承诺。
 
         Args:
             target: 本轮目标。
+            claim: :meth:`_claim_short` 读到的代际与真实类别。
             now_epoch_s: 本轮时刻（UTC 秒）。
             detector: 已注入历史状态的算法实例。
+            admission: 可选单请求准用凭证；非 None 时走 ``collect_admitted`` 兑换同一份
+                L 票据，None 时保留原 ``collect`` 行为（无预算 / legacy 路径）。
 
         Returns:
             TargetOutcome: ``committed`` 或 ``dropped``（附带该目标的契约输出）。
 
         Raises:
-            Exception: 采集 / 评估 / 写回失败时原样上抛。
+            Exception: 采集 / 评估 / 写回失败时原样上抛（由 ``run_tick`` 计入失败隔离）。
         """
-        session = self._session_factory()
-        try:
-            # ---- 2. 领：记下代际，步骤 5 必须用它做 fencing ----
-            claim = claim_revision(session, target.bvid)
-
-            # ---- 3. 采：调既有采集端口的现有入口（测试在此打桩，绝不真发请求）----
+        # ---- 3. 采：**未打开任何 DB session** 时持准用票据走 collect_admitted；无票据走 collect。
+        #      测试在此打桩，绝不真发请求。reserve→redeem 之间不夹 session / 事务。
+        if admission is not None:
+            await self.collector_port.collect_admitted(
+                target.bvid,
+                admission=admission,
+                collection_tid=target.collection_tid,
+                source=WATCH_SOURCE,
+            )
+        else:
             await self.collector_port.collect(
                 target.bvid, collection_tid=target.collection_tid, source=WATCH_SOURCE
             )
 
+        # ---- 采完才开新短 session：读历史 → 评 → fenced 写回 → 推进调度 ----
+        session = self._session_factory()
+        try:
             # ---- 4. 评：读该 bvid 的历史快照 -> 算法层 ----
             rows = self._snapshot_loader(session, target.bvid)
             detections, analysis = self._evaluate(detector, target.bvid, rows)
@@ -1440,12 +1874,12 @@ class WatchService:
             # ---- 4.5 需求围栏（第二批 C）：写入前再检查 active / 代际 ----
             # 需求撤销 / 手动停追会在采集期间把 active 置 0 并推进代际；此时**迟到结果必须丢弃**，
             # 绝不能「先写进去再判」。这里显式再查一次，步骤 5 的 UPDATE 还额外带 active 原子谓词。
-            if not self._write_fence_ok(session, target.bvid, claim):
+            if not self._write_fence_ok(session, target.bvid, claim.claim_revision):
                 session.rollback()
                 logger.info(
                     "watch 迟到写入被需求围栏拦下（需求已撤销 / 已停追） bvid=%s claim_revision=%s",
                     target.bvid,
-                    claim,
+                    claim.claim_revision,
                 )
                 return TargetOutcome(status="dropped")
 
@@ -1454,7 +1888,7 @@ class WatchService:
             committed = commit_state(
                 session,
                 target.bvid,
-                claim_revision=claim,
+                claim_revision=claim.claim_revision,
                 last_evaluation_epoch_s=analysis.state.last_evaluation_epoch_s,
                 last_confirmed_stage=_confirmed_stage(analysis),
                 state_json=state_to_json(analysis.state),
@@ -1468,7 +1902,7 @@ class WatchService:
                 logger.info(
                     "watch 写回被 fence 丢弃（代际已过期 / 已释放） bvid=%s claim_revision=%s",
                     target.bvid,
-                    claim,
+                    claim.claim_revision,
                 )
                 return TargetOutcome(status="dropped")
 
