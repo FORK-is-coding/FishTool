@@ -175,6 +175,8 @@ class DatabaseManager:
                 "collection_tid": "ALTER TABLE video_stats ADD COLUMN collection_tid INTEGER",
                 "raw_tid": "ALTER TABLE video_stats ADD COLUMN raw_tid INTEGER",
                 "metric_status": "ALTER TABLE video_stats ADD COLUMN metric_status JSON",
+                "pubdate_epoch_s": "ALTER TABLE video_stats ADD COLUMN pubdate_epoch_s INTEGER",
+                "pubdate_status": "ALTER TABLE video_stats ADD COLUMN pubdate_status VARCHAR(20)",
             }
             with self.engine.begin() as connection:
                 for column_name, statement in statements.items():

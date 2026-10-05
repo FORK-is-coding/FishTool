@@ -26,8 +26,9 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any
 
-from .base import Detection, LifecycleDetector, Snapshot
+from .base import ConfidenceKind, Detection, LifecycleDetector, Snapshot
 from .config import get_lifecycle_v2_config
+from .publication_age import resolve_publication_age
 
 # --------------------------------------------------------------------- 常量
 
@@ -98,9 +99,14 @@ class LifecycleV2Config:
     confirmation_windows: int = 2
     emerge_rate: float = 20.0
     emerge_age_days: float = 7.0
+    # ---- 08 案 §J3（B6b）：第二条「新发现老视频」通道的门槛 ----
+    # 工具首次发现（HotspotWatch.first_seen_epoch_s）距评估窗口端点 <= 该天数时，
+    # 老视频也可判为出现期（依据 discovery）。与 emerge_age_days 各自独立。
+    emerge_discovery_days: float = 2.0
     history_days: int = 30
     percentile_min_n: int = 20
-    threshold_version: str = "lifecycle_v2_defaults_1"
+    # ---- 08 案 §J5：B6b 独立升级门槛版本（不与 B6a 的 age_gate_1 合并）----
+    threshold_version: str = "lifecycle_v2_age_gate_2"
 
     def as_dict(self) -> dict[str, Any]:
         """返回可序列化配置字典，供 ``config_schema``、日志与回放消费。"""
@@ -116,6 +122,7 @@ class LifecycleV2Config:
             "confirmation_windows": self.confirmation_windows,
             "emerge_rate": self.emerge_rate,
             "emerge_age_days": self.emerge_age_days,
+            "emerge_discovery_days": self.emerge_discovery_days,
             "history_days": self.history_days,
             "percentile_min_n": self.percentile_min_n,
             "threshold_version": self.threshold_version,
@@ -156,6 +163,42 @@ def _validate_config(config: LifecycleV2Config) -> None:
         raise ValueError("invalid_positive_threshold")
     if config.relative_delta < 0:
         raise ValueError("invalid_relative_delta")
+    # ---- 08 案 §J3（B6a）：作品年龄门槛补验证（有限非负、排除 bool）----
+    if (
+        isinstance(config.emerge_age_days, bool)
+        or not isinstance(config.emerge_age_days, (int, float))
+        or not math.isfinite(config.emerge_age_days)
+        or config.emerge_age_days < 0
+    ):
+        raise ValueError("invalid_emerge_age_days")
+    # ---- 08 案 §J3（B6b）：发现时间门槛同样校验（有限非负、排除 bool）----
+    if (
+        isinstance(config.emerge_discovery_days, bool)
+        or not isinstance(config.emerge_discovery_days, (int, float))
+        or not math.isfinite(config.emerge_discovery_days)
+        or config.emerge_discovery_days < 0
+    ):
+        raise ValueError("invalid_emerge_discovery_days")
+
+
+def within_age_limit(reference_s: int, origin_s: int | None, days: float) -> bool:
+    """判断「作品在 ``reference_s`` 时点的年龄是否不超过 ``days`` 天」。
+
+    08 案 §J4：边界用**精确秒**比较，不截整天；``origin_s`` 未知（``None``）或非整数
+    一律返回 ``False`` —— 门槛拿不到证据时**不**放行出现期（未知不开口子）。
+
+    Args:
+        reference_s: 评估窗口端点（UTC 秒级 int）。
+        origin_s: 作品发布时间（UTC 秒级 int）；``None`` 表示无有效证据。
+        days: 允许的最大稿龄（天）。
+
+    Returns:
+        年龄落在 ``[0, days]`` 闭区间返回 ``True``，否则 ``False``。
+    """
+    if type(reference_s) is not int or type(origin_s) is not int:
+        return False
+    elapsed = reference_s - origin_s
+    return elapsed >= 0 and elapsed <= days * DAY_S
 
 
 # --------------------------------------------------------------------- 纯数学内核
@@ -484,7 +527,47 @@ def _snapshot_epoch_s(snapshot: Snapshot) -> int | None:
     return None
 
 
+def _first_seen_epoch_s(rows: list[Snapshot]) -> int | None:
+    """从快照序列里取该 bvid 的「工具首次发现」时刻（08 案 §J3 第 5 条 / B6b）。
+
+    ``first_seen_epoch_s`` 是行级携带、同一 bvid 一致的 watch 发现时间；任一有效整数
+    即可采信，非整数 / 缺失一律 ``None``（无 watch 即无发现时间）。**绝不**回退到
+    ``Video.created_at`` 或 ``captured`` 时间——那是另一回事，混用会让旧视频伪装成
+    「刚发现 / 刚发布」。该值晚于评估窗口时由 :func:`within_age_limit` 判不可用。
+
+    Args:
+        rows: 同一 bvid 的 Snapshot 列表。
+
+    Returns:
+        有效的首次发现 UTC 秒级 int；无证据返回 ``None``。
+    """
+    for row in rows:
+        value = getattr(row, "first_seen_epoch_s", None)
+        if type(value) is int and value >= 0:
+            return value
+    return None
+
+
 # --------------------------------------------------------------------- 分析结果
+
+
+def _confidence_kind_value(kind: ConfidenceKind | str) -> str:
+    """把 ``confidence_kind`` 归一为 wire 契约里的**小写字符串**。
+
+    枚举成员取 ``.value``；已是字符串或未知实现原样返回，兼容旧数据与外部注入值。
+    """
+    if isinstance(kind, ConfidenceKind):
+        return kind.value
+    return str(kind)
+
+
+#: ``Analysis.emergence_basis`` 取值（08 案 §J3：B6b 起 publication / discovery / none）。
+#: - publication：作品在该窗口端点的年龄 <= ``emerge_age_days``（B6a 通道）。
+#: - discovery：工具首次发现距该窗口端点 <= ``emerge_discovery_days``（B6b 新增通道）。
+#: - none：两项证据均不成立（未知 / 冲突 / 未来 / 超龄）。
+EMERGENCE_BASIS_PUBLICATION = "publication"
+EMERGENCE_BASIS_DISCOVERY = "discovery"
+EMERGENCE_BASIS_NONE = "none"
 
 
 @dataclass
@@ -512,9 +595,23 @@ class Analysis:
     # 说明：metadata 通道已落地 —— detect() 经 _metadata() 把 confidence_kind 与
     # coverage_state 一并写进 Detection.metadata，不塞进约定「仅数值」的 Detection.metrics。
     confidence: float = 0.0
-    confidence_kind: str = "not_estimated"
+    confidence_kind: str = ConfidenceKind.NOT_ESTIMATED.value
     # ---- M17：窗内长 gap 造成的部分覆盖窗只出 coverage，不推进阶段 ----
     gap_blocked_windows: int = 0
+    # ---- 08 案 §H2：评估截止与作品稿龄（B4）----
+    # as_of 是「本次评估截止」：实时路径显式传入；离线回放缺省回退最大观测点，
+    # 此时 as_of_source 必须标 max_observed_fallback，不得当墙钟时间用。
+    # age_days 仅在 age_status == 'ok' 时有值；未知一律 None，绝不填 0 或假值。
+    as_of_epoch_s: int | None = None
+    as_of_source: str = "unknown"
+    age_days: float | None = None
+    age_status: str = "unknown"
+    age_source: str = "unknown"
+    # ---- 08 案 §J3（B6b）：出现期依据（publication / discovery / none）----
+    # publication：该窗口端点作品年龄 <= emerge_age_days 的发布时间证据成立；
+    # discovery：工具首次发现距该窗口端点 <= emerge_discovery_days（新发现老视频通道）；
+    # 二者都只约束 emerging；证据缺失 / 冲突 / 未来一律 none，绝不硬写 pubdate/first_seen 过门。
+    emergence_basis: str = EMERGENCE_BASIS_NONE
 
     @property
     def rate_current(self) -> float | None:
@@ -652,8 +749,24 @@ class LifecycleV2(LifecycleDetector):
         return replace(current) if current is not None else TrendState()
 
     def analyze_one(self, bvid: str, rows: list[Snapshot]) -> Analysis:
-        """分析单个 bvid 的快照序列，输出阶段与证据度量。"""
+        """分析单个 bvid 的快照序列，输出阶段与证据度量。
+
+        H2 修复（08 案 A2/E1）：**先确定本次评估截止 ``as_of``，再据此筛选可见行**。
+        旧实现先遍历全部行选 ``latest_row``、之后才按 ``as_of`` 过滤，导致显式 ``as_of``
+        早于最新快照时，``tid`` / ``title`` / ``owner_mid`` / ``owner_name`` 取自评估时
+        尚不存在的未来快照；``tid`` 还会经 ``detect`` 的 ``rates_by_tid`` 污染同源百分位
+        分组。现在未来快照既不进 ``located``，也不参与 ``latest_row`` 竞选。
+        """
         config = self.config
+        # ---- 1. 先定 as_of：显式传入优先；缺省回退「最大观测点」（离线回放友好）----
+        as_of = self.as_of_epoch_s
+        if as_of is None:
+            as_of = max(
+                (epoch for epoch in (_snapshot_epoch_s(row) for row in rows) if epoch is not None),
+                default=None,
+            )
+
+        # ---- 2. 主循环：epoch 缺失计 unlocated；epoch > as_of 的未来快照直接跳过 ----
         located: list[Point] = []
         unlocated = 0
         latest_row: Snapshot | None = None
@@ -662,6 +775,9 @@ class LifecycleV2(LifecycleDetector):
             epoch_s = _snapshot_epoch_s(row)
             if epoch_s is None:
                 unlocated += 1
+                continue
+            if as_of is not None and epoch_s > as_of:
+                # H2：未来快照既不进 located，也不参与 latest_row 竞选；不计入 unlocated。
                 continue
             view = getattr(row, "view", None)
             view_ok = getattr(row, "view_quality", "unknown") == "ok"
@@ -675,13 +791,18 @@ class LifecycleV2(LifecycleDetector):
         title = str(getattr(latest_row, "title", "") or "") if latest_row is not None else ""
         owner_mid = int(getattr(latest_row, "owner_mid", 0) or 0) if latest_row is not None else 0
         owner_name = str(getattr(latest_row, "owner_name", "") or "") if latest_row is not None else ""
-
-        as_of = self.as_of_epoch_s
-        if as_of is None:
-            as_of = max((point.epoch_s for point in located), default=None)
-        if as_of is not None:
-            located = [point for point in located if point.epoch_s <= as_of]
         sample_count = len(located)
+
+        # ---- 3. 稿龄证据：只采信「可见且 status=ok」的发布时间（08 案 §H1）----
+        # 未来快照已被上面的主循环挡在 located 之外，但 resolve_publication_age 内部仍
+        # 按 capture <= as_of 再挡一道，保证它被单独调用时也守住同一条红线。
+        age = resolve_publication_age(rows, as_of_epoch_s=as_of)
+        if self.as_of_epoch_s is not None:
+            as_of_source = "explicit"
+        elif as_of is not None:
+            as_of_source = "max_observed_fallback"
+        else:
+            as_of_source = "unknown"
 
         if as_of is None or not located:
             return Analysis(
@@ -691,6 +812,9 @@ class LifecycleV2(LifecycleDetector):
                 observed_windows=0, sample_count=sample_count, staleness_hours=0.0,
                 data_status="insufficient", unlocated_count=unlocated,
                 threshold_version=config.threshold_version,
+                as_of_epoch_s=as_of, as_of_source=as_of_source,
+                age_days=age.days, age_status=age.status, age_source=age.source,
+                emergence_basis=EMERGENCE_BASIS_NONE,
             )
 
         # 只用「支撑截至 T 的最新段」承载窗口，不从更老段挑好窗冒充当前。
@@ -708,6 +832,9 @@ class LifecycleV2(LifecycleDetector):
         observed_windows = 0
         gap_blocked_windows = 0
         last_coverage = 0.0
+        emergence_basis = EMERGENCE_BASIS_NONE
+        # B6b：该 bvid 的工具首次发现时刻（无 watch / 无发现时间即 None）；逐窗用 end_s 比较。
+        first_seen_epoch_s = _first_seen_epoch_s(rows)
         # 观测历史起点：窗左端落在这条线右侧却没被支撑时，缺口属于「观测空洞/断档」；
         # 落在左侧只是「历史尚未开始」，两种口径不能混（R3.3 裁定三 × M17）。
         history_start_epoch_s = min(point.epoch_s for point in located)
@@ -737,7 +864,33 @@ class LifecycleV2(LifecycleDetector):
                 gap_blocked_windows += 1
                 last_coverage = coverage
                 continue
-            emerging = state.prev_rate is None and rate is not None and rate >= config.emerge_rate
+            # ---- 08 案 §J4（B6a）：作品年龄门槛进门 ----
+            # 窗口级发布时间证据：只采信「该端点当时可见（capture <= end_s）且无冲突」的
+            # 事实，不用今天才采到 / 后来纠正的元信息改写历史窗口的新旧判断。
+            publication_for_window = resolve_publication_age(
+                rows, as_of_epoch_s=end_s
+            ).published_epoch_s
+            by_publication = within_age_limit(
+                end_s, publication_for_window, config.emerge_age_days
+            )
+            # B6b：第二条「新发现老视频」通道。first_seen 与发布时间证据各自独立；
+            # 该值晚于 end_s（未来）由 within_age_limit 判不可用，不截整天、不 clamp。
+            by_discovery = within_age_limit(
+                end_s, first_seen_epoch_s, config.emerge_discovery_days
+            )
+            emerging = (
+                state.prev_rate is None
+                and rate is not None
+                and rate >= config.emerge_rate
+                and (by_publication or by_discovery)
+            )
+            if emerging:
+                # 依据优先展示 publication（作品确实新）；只有老视频靠发现时间过门时才
+                # 显式标 discovery —— 此时**不得**表述成「视频刚发布 / 事件刚发生」。
+                if by_publication:
+                    emergence_basis = EMERGENCE_BASIS_PUBLICATION
+                else:
+                    emergence_basis = EMERGENCE_BASIS_DISCOVERY
             advance(state, end_s, rate, config=config, emerging=emerging)
             if rate is not None:
                 rates.append(rate)
@@ -758,6 +911,9 @@ class LifecycleV2(LifecycleDetector):
             sample_count=sample_count, staleness_hours=staleness_hours,
             data_status=data_status, unlocated_count=unlocated,
             threshold_version=config.threshold_version,
+            as_of_epoch_s=as_of, as_of_source=as_of_source,
+            age_days=age.days, age_status=age.status, age_source=age.source,
+            emergence_basis=emergence_basis,
         )
 
     def detect(self, snapshots: list[Snapshot]) -> list[Detection]:
@@ -814,7 +970,7 @@ class LifecycleV2(LifecycleDetector):
             "relative_change": None if info.relative_change is None else round(info.relative_change, 6),
             "coverage_ratio": round(info.coverage_ratio, 4),
             "staleness_hours": info.staleness_hours,
-            "age_days": None,  # 本批 Snapshot 无 pubdate 字段，无法计算作品年龄。
+            "age_days": None if info.age_days is None else round(info.age_days, 4),
             "observed_windows": info.observed_windows,
             "sample_count": info.sample_count,
             "percentile": None if percentile is None else round(percentile, 4),
@@ -823,8 +979,16 @@ class LifecycleV2(LifecycleDetector):
     def _metadata(self, info: Analysis) -> dict[str, Any]:
         """组装非数值元数据通道；键集与仅数值的 ``metrics`` 互斥，供展示层并列消费。"""
         return {
-            "confidence_kind": info.confidence_kind,
+            "confidence_kind": _confidence_kind_value(info.confidence_kind),
             "coverage_state": info.coverage_state.value,
+            # ---- 08 案 §H2：稿龄证据走 metadata 通道（非数值项不进 metrics）----
+            "as_of_epoch_s": info.as_of_epoch_s,
+            "as_of_source": info.as_of_source,
+            "age_status": info.age_status,
+            "age_source": info.age_source,
+            "age_reference": "evaluation_as_of",
+            # ---- 08 案 §J3（B6a）：出现期依据（非数值项，不进 metrics）----
+            "emergence_basis": info.emergence_basis,
         }
 
     def _explain(self, info: Analysis, percentile: float | None) -> str:

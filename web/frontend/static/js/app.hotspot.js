@@ -222,7 +222,9 @@ function hotspotConfidenceText(item) {
     const kind = (item.metadata || {}).confidence_kind;
     const isV2 = item.algorithm_version === 'lifecycle_v2';
     if (kind === 'not_estimated' || (kind === undefined && isV2)) return '未估算';
-    return `${Math.round((Number(item.confidence) || 0) * 100)}%`;
+    const value = item.confidence;
+    if (typeof value !== 'number' || !Number.isFinite(value)) return '暂无数据';
+    return `${Math.round(value * 100)}%`;
 }
 
 // coverage 覆盖级别文案：取值来源唯一是 Detection.metadata.coverage_state（lifecycle_v2 枚举），
@@ -236,6 +238,47 @@ const HOTSPOT_COVERAGE_LABELS = {
 
 function hotspotCoverageStateText(item) {
     return HOTSPOT_COVERAGE_LABELS[(item.metadata || {}).coverage_state] || '';
+}
+
+// 稿龄状态文案：取值唯一来源是 Detection.metadata.age_status（08 案 §H3 枚举）。
+// 只有 age_status === 'ok' 才显示天数；其余一律给可读理由，
+// 绝不用 0 天冒充「刚发布」，也不把冲突/未来时间悄悄选一条当真值。
+const HOTSPOT_AGE_STATUS_LABELS = {
+    missing: '发布时间缺失',
+    invalid: '发布时间异常',
+    unknown: '稿龄未知',
+    future_publication: '发布时间在未来',
+    conflicting_publication_time: '发布时间冲突',
+    as_of_unavailable: '评估时刻缺失',
+};
+
+function hotspotAgeText(item) {
+    const metadata = item.metadata || {};
+    const status = metadata.age_status;
+    if (status === 'ok') {
+        const days = (item.metrics || {}).age_days;
+        if (typeof days !== 'number' || !Number.isFinite(days)) return '稿龄未知';
+        return `稿龄 ${days.toFixed(2)} 天`;
+    }
+    // 旧 DTO 无 age_status 通道时留空，不凭空补一个状态。
+    if (status === undefined) return '';
+    return HOTSPOT_AGE_STATUS_LABELS[status] || '稿龄未知';
+}
+
+// 评估截止文案：显式 as_of 用日期时间；离线回退口径（max_observed_fallback）如实标注，
+// 不冒充墙钟时间。epoch 非法/缺失时整行不渲染，不用本地 now 顶替。
+function hotspotAsOfText(item) {
+    const metadata = item.metadata || {};
+    const epoch = metadata.as_of_epoch_s;
+    if (typeof epoch !== 'number' || !Number.isFinite(epoch)) return '';
+    const when = new Date(epoch * 1000);
+    if (Number.isNaN(when.getTime())) return '';
+    const pad = (value) => String(value).padStart(2, '0');
+    const stamp = `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())} `
+        + `${pad(when.getHours())}:${pad(when.getMinutes())}`;
+    return metadata.as_of_source === 'max_observed_fallback'
+        ? `评估截至 ${stamp}（离线回放）`
+        : `评估截至 ${stamp}`;
 }
 
 // 卡片指标视图模型：v1 与 v2 的 metrics 键集完全不同，按 algorithm_version 分流取键，
@@ -335,6 +378,13 @@ async function loadHotspotLifecycle() {
             const vm = hotspotCardViewModel(item);
             // 覆盖级别文案来自 metadata.coverage_state；缺失时留空，不显示空括号。
             const coverageLabel = hotspotCoverageStateText(item);
+            // 稿龄 / 评估截止行：age_status 非 ok 一律给状态理由，未知值不降级成 0 天；
+            // 两项都拿不到时整行不出，不留空壳段落。
+            const ageText = hotspotAgeText(item);
+            const asOfText = hotspotAsOfText(item);
+            const ageLine = (ageText || asOfText)
+                ? `<p class="hotspot-lifecycle-meta">${escapeHtml(ageText)}${ageText && asOfText ? ' · ' : ''}${escapeHtml(asOfText)}</p>`
+                : '';
             // 指标行按算法分流：v1 的 growth/up_count/采集日 与 v2 的 relative_change/
             // coverage_ratio/观测窗 键集不同，混用会大面积退化成 0 与「数据不足」。
             const metricsLine = item.algorithm_version === 'lifecycle_v2'
@@ -350,6 +400,7 @@ async function loadHotspotLifecycle() {
                 <p class="hotspot-lifecycle-meta">${escapeHtml(item.explain)}</p>
                 <p class="hotspot-lifecycle-meta">置信度 <span class="hotspot-confidence">${hotspotConfidenceText(item)}</span> · ${vm.rateLabel} ${vm.rateText}</p>
                 ${metricsLine}
+                ${ageLine}
                 <div class="hotspot-timeline-box" data-bvid="${escapeHtml(item.bvid)}"></div>
                 <div class="hotspot-card-actions">
                     ${item.owner_mid ? `<button class="btn btn-secondary btn-sm" type="button" onclick="openHotspotAccount(${Number(item.owner_mid)}, '${escapeHtml(item.bvid)}')">查看上涨账号</button>` : ''}

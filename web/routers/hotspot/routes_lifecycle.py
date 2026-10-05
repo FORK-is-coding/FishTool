@@ -7,8 +7,8 @@ from typing import Any
 
 from fastapi import HTTPException, Query
 
-from core.data_quality import parse_count
-from core.database import Video, VideoStats, get_session
+from core.data_quality import parse_count, read_stored_pubdate, utc_now_epoch_s
+from core.database import HotspotWatch, Video, VideoStats, get_session
 from core.logger import get_logger
 from modules.hotspot.algorithm import Snapshot
 
@@ -98,6 +98,34 @@ def _resolve_read_status(stats, key: str) -> tuple[int | None, str]:
     return None, "unknown"
 
 
+def _load_watch_first_seen(session, bvids) -> dict[str, int]:
+    """按 bvid 批量读取工具首次发现时刻（08 案 §J3 第 6 条 / B6b）。
+
+    一次 ``IN`` 查询避免逐视频 N+1；只返回合法（非负 int）值，无 watch 的 bvid 不入表
+    （调用方按缺省 ``None`` 处理），**不**为读取而创建 watch。
+
+    Args:
+        session: 调用方会话。
+        bvids: 待查 bvid 集合（可为脏值，内部过滤空串）。
+
+    Returns:
+        ``{bvid: first_seen_epoch_s}``，仅含可采信值。
+    """
+    clean = {str(b) for b in bvids if b}
+    if not clean:
+        return {}
+    records = (
+        session.query(HotspotWatch.bvid, HotspotWatch.first_seen_epoch_s)
+        .filter(HotspotWatch.bvid.in_(clean))
+        .all()
+    )
+    result: dict[str, int] = {}
+    for row_bvid, first_seen in records:
+        if type(first_seen) is int and first_seen >= 0:
+            result[str(row_bvid)] = first_seen
+    return result
+
+
 def _load_snapshots(tid: int | None = None, bvid: str | None = None) -> list[Snapshot]:
     """从视频统计历史读取算法快照，附带质量 marker 与采集 epoch。
 
@@ -130,13 +158,22 @@ def _load_snapshots(tid: int | None = None, bvid: str | None = None) -> list[Sna
         query = query.filter(
             (Video.pubdate.is_(None)) | (Video.pubdate >= cutoff)
         )
+        pairs = query.order_by(VideoStats.snapshot_time.asc()).all()
+        # 08 案 §J3 第 6 条（B6b）：按 bvid 批量读同一 watch 发现时间，一次查询避免 N+1；
+        # 没有对应 watch 的 bvid 不创建新 watch，first_seen 记为 None。
+        watch_first_seen = _load_watch_first_seen(
+            session, {str(getattr(video, "bvid", "") or "") for video, _stats in pairs}
+        )
         rows: list[Snapshot] = []
-        for video, stats in query.order_by(VideoStats.snapshot_time.asc()).all():
+        for video, stats in pairs:
             # 质量感知：只有解析为 ok 的整数播放量才进入 Snapshot.view。
             view_value, view_quality = _resolve_read_status(stats, "view")
             raw_view, _ = parse_count(getattr(stats, "view", None))
             epoch = getattr(stats, "captured_epoch_s", None)
             epoch = epoch if type(epoch) is int else None
+            pubdate_epoch_s, pubdate_status = read_stored_pubdate(
+                getattr(stats, "pubdate_epoch_s", None), getattr(stats, "pubdate_status", None)
+            )
             captured_at = stats.snapshot_time
             if captured_at is None:
                 # 仅在有明确 epoch 时做本地显示兜底；不凭机器时区解释旧 naive 时间。
@@ -156,6 +193,9 @@ def _load_snapshots(tid: int | None = None, bvid: str | None = None) -> list[Sna
                 metric_status=stats.metric_status if isinstance(getattr(stats, "metric_status", None), dict) else None,
                 collection_tid=stats.collection_tid if type(getattr(stats, "collection_tid", None)) is int else None,
                 raw_tid=stats.raw_tid if type(getattr(stats, "raw_tid", None)) is int else None,
+                pubdate_epoch_s=pubdate_epoch_s,
+                pubdate_status=pubdate_status,
+                first_seen_epoch_s=watch_first_seen.get(str(video.bvid)),
             ))
         return rows
     except Exception as exc:
@@ -176,11 +216,16 @@ async def get_lifecycle(
     """返回生命周期 Detection DTO，展示层不感知算法实现。"""
     try:
         snapshots = _load_snapshots(tid=tid, bvid=bvid)
+        # 08 案 §H4：请求入口冻结一次评估截止，整次读取共用同一 as_of；
+        # 期间采样、captured_epoch_s 晚于它的快照由算法按未来点排除，评估口径不事后漂移。
+        request_as_of = utc_now_epoch_s()
         # 规格 §4.4：heuristic_v1 回放只接受整数有效快照；质量非 ok 的记录作为
         # marker 单独计数上报，不把 None 送进旧算式造成 TypeError。
         valid_snapshots = [snapshot for snapshot in snapshots if type(snapshot.view) is int]
         rejected_count = len(snapshots) - len(valid_snapshots)
-        service = HotspotService(algorithm_name=algorithm, domain=domain)
+        service = HotspotService(
+            algorithm_name=algorithm, domain=domain, as_of_epoch_s=request_as_of
+        )
         # 按算法分流输入：v2 依赖 view=None + captured_epoch_s 作为断段 marker
         # （lifecycle_v2.valid_segments），若先按 int-view 过滤会把断段信息抹掉，
         # 与 watch 链路（watch_service.load_bvid_snapshots 传全量行）行为不一致。
@@ -209,6 +254,8 @@ async def get_lifecycle(
                 "rejected_count": rejected_count,
                 # 缺失屏障不可表达时如实标注回放受限，不宣称完整可靠。
                 "history_limited": rejected_count > 0,
+                # 本次评估截止（与传入 HotspotService 的同一值），前端据此展示 as_of。
+                "as_of_epoch_s": request_as_of,
             },
         }
     except KeyError as exc:

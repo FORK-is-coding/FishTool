@@ -136,6 +136,10 @@ class VideoStats(Base):
     raw_tid = Column(Integer, nullable=True, comment='原始分区ID')
     # 各指标质量三态：{view:'ok/missing/invalid', ...}，供读端区分真实 0 与缺失。
     metric_status = Column(JSON, nullable=True, comment='各指标质量状态')
+    # 发布时间（UTC 秒级 epoch）：快照级留一份，供算法算作品年龄，不靠本地时区反推。
+    pubdate_epoch_s = Column(Integer, nullable=True, comment='发布时间(UTC epoch秒)')
+    # 发布时间质量：ok=接口明确给出；missing=未给；invalid=非法。历史行遗留 NULL。
+    pubdate_status = Column(String(20), nullable=True, comment='发布时间质量: ok/missing/invalid')
     
     video = relationship("Video", back_populates="stats_history")
 

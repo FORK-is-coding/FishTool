@@ -32,6 +32,72 @@
 - 常驻 watch 循环装配补齐默认预算门（`RequestBudget`）与事件需求整编 hook
   （`EventWatchDemandReconciler.reconcile`）；缺省采集端口复用编排层同一 `RequestBudget`。
 
+### 热点稿龄与出现期门（08 执行案 H2 + B0—B7）
+
+> 口径前置：本批有两种完成度，**必须分开看**——「字段完成」只代表数据链与消费者接通，
+> 「阶段门完成」才代表该条件真正参与阶段判定。**不许**合成一句「年龄门槛已经限制出现期」。
+
+**【字段完成】稿龄字段可用（B1—B5）**
+
+- `confidence` 语义归位：仍固定 `0.0`，并统一输出 `ConfidenceKind.NOT_ESTIMATED.value`
+  （wire 恒为小写 `not_estimated`）。这是**有意不估算**，不是未实现、不是缺陷、也不是 TODO；
+  前端按 `confidence_kind` 显示「未估算」，不展示 `0%`，无 `kind` 的旧卡片显示「暂无数据」。
+- 发布时间落库：`video_stats` 新增 `pubdate_epoch_s` / `pubdate_status`（幂等加列，旧行保持
+  NULL 不回填、不重写）；读端旧 NULL 一律判 `unknown`，不猜 UTC、不造默认 `ok`。
+- 稿龄计算：`resolve_publication_age()` 纯函数 + `age_status` 全取值（`ok` / `missing` /
+  `invalid` / `unknown` / `future_publication` / `conflicting_publication_time` /
+  `as_of_unavailable`）；`Detection.metadata` 增 `age_days` / `age_status` / `age_source` /
+  `as_of_epoch_s` / `age_reference="evaluation_as_of"`，`metrics` 仍为纯数值通道。
+- 三条 Snapshot 通路（直接构造 / watch 加载 / HTTP 入口）同数据同 `as_of` 对照一致。
+- **H2**：`analyze_one` 先定 `as_of` 再筛可见行，晚于 `as_of` 的快照不再抢占 `latest_row`
+  元信息、也不再进入 `rates`。
+- **H4**：watch 检测器改为**逐目标构造**，本轮采集写入的新快照当轮即可进入评估，不再错开一轮。
+
+**【阶段门完成】出现期门（B6a / B6b，独立行为版本）**
+
+- **B6a**：`emerge_age_days` 真正接入出现期判定——首次形成有效强度、达到 `emerge_rate`，
+  且作品在该窗口端点年龄 `<= emerge_age_days`（默认 7 日）才判出现期；
+  `emergence_basis` 取 `publication` / `none`。
+- **B6b**：新增「新发现老视频」通道 `emerge_discovery_days`（默认 2 日）——`first_seen_epoch_s`
+  落在窗口端点内同样可判出现期，`emergence_basis` 增加 `discovery`。该通道属**产品判断**，
+  会扩大出现期覆盖面（发布一年的视频可能因今天首次入池而被标为出现期）；命中时必须标依据
+  `discovery`，**不得**表述为「视频刚发布 / 事件刚发生」。
+- `threshold_version`：`lifecycle_v2_defaults_1` → `lifecycle_v2_age_gate_1`（B6a）→
+  `lifecycle_v2_age_gate_2`（B6b）；**两批各自独立版本，不合并**。
+- 旧 / 不同版本 `state_json` 不沿用 `prev` / `candidate` / `count` / `stable_count` / `stage`
+  等计数，按可用历史显式重算；旧 `last_confirmed_stage` 仅作 legacy 历史，不伪称新版本已确认。
+
+**历史时区与回放限制**
+
+- 每个窗口的出现期门使用该窗口 `end_s` 的当时证据，**不是今天年龄**；`age_days` 输出才以请求
+  `as_of` 为准。二者分别命名，不用今天的年龄改写旧窗的新旧判断。
+- 历史回放只采信 `capture <= end_s`（`as_of`）的 pubdate 证据，不把后来才采到或纠正的元信息
+  当作过去已知；该窗口没有可信发布时间的，仍可使用可信 `first_seen` 条件。
+- `pubdate` / `first_seen` **两项均未知时不输出出现期**，只保留观察 / 数据不足；也不因此永久
+  卡死——后续有足够有效窗仍可进入上升 / 成熟 / 衰退。
+- 边界一律**精确秒比较**，不截整天；负年龄与未来 `first_seen` 视为无效，不硬写
+  `pubdate=first_seen` 或 `pubdate=now` 让旧账号过门。
+
+**发布方式（§M1）**
+
+- B1 可单独发布；B2/B3 向后兼容先接好；B4/B5 发布「稿龄字段可用」；B6 独立发布并明确行为
+  版本，不隐藏在「补个字段」的提交里。
+- 不因缺历史发布时间无限暂停全部生命周期：继续输出可用强度、未知稿龄与理由。
+
+**回退（§M2）**
+
+- 两列新增后回退代码**不删列、不重写旧数据**。
+- 回退 B4/B5 时可暂 `age=None`、标 `disabled` / `unknown`，但 `confidence` 仍 `not_estimated`，
+  **不得**恢复覆盖度折算的假概率。
+- 回退 B6 必须按算法版本处理旧 / 新 state，不把新门候选计数塞回旧算法继续；原快照不删。
+- 删除 Snapshot 新字段前，先回退所有生产构造调用与序列化使用。
+
+**验证**
+
+- 全量 **2443 passed / 2 skipped / 0 failed**（282.54s）。
+- 反例与 E 系列定向（A01 / A06 / A08 / A11 / E02 / E03 / E06 / E07）→ **13 passed**。
+- 尚未验证：真实 B 站接口、live 网络、跨重启持久；前端仅 `node --check` 级检查。
+
 ### watch 预算修复（07 执行案 W1—W4）——三项状态**必须分开看**
 
 > 口径前置：本批只修 **L 层逻辑预算**（内存账本、重启清零），

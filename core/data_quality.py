@@ -12,6 +12,8 @@
 对外函数：
     parse_count(raw)              -> (int|None, 'ok'|'missing'|'invalid')
     parse_ratio(raw)              -> (float|None, 'ok'|'missing'|'invalid')
+    parse_pubdate(raw)            -> (int|None, 'ok'|'missing'|'invalid')
+    read_stored_pubdate(epoch_value, status_value) -> (int|None, status)
     utc_now_epoch_s()             -> int
     to_epoch_s(value, *, legacy_timezone=None) -> int|None
     epoch_to_utc_dt(value)        -> datetime|None（非法输入抛 ValueError）
@@ -28,6 +30,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 __all__ = [
     'parse_count',
     'parse_ratio',
+    'parse_pubdate',
+    'read_stored_pubdate',
     'utc_now_epoch_s',
     'to_epoch_s',
     'epoch_to_utc_dt',
@@ -167,3 +171,53 @@ def epoch_to_utc_dt(value):
         return datetime.fromtimestamp(value, timezone.utc)
     except (ValueError, OverflowError, OSError) as exc:
         raise ValueError('invalid_epoch') from exc
+
+
+def parse_pubdate(raw):
+    """把接口 ``pubdate`` 解析为 ``(UTC 秒级发布时间, 质量三态)``。
+
+    Args:
+        raw: 采集接口原值，可能为 int/str/None/bool/float。
+
+    Returns:
+        tuple: ``(value, status)``。
+            - 正整数（或可转正整数的字符串）-> ``(int, 'ok')``；
+            - None / 空白串 -> ``(None, 'missing')``；
+            - bool / 非正数 / 不可转数字 -> ``(None, 'invalid')``。
+
+    设计要点：``bool`` 是 ``int`` 的子类，必须先于数字判定拦截；``<= 0`` 的发布时间
+    没有意义，一律 invalid。禁止用采集时刻冒充发布时间（08 案 B2 红线）。
+    """
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None, 'missing'
+    if isinstance(raw, bool):
+        return None, 'invalid'
+    try:
+        value = int(raw)
+    except (TypeError, ValueError, OverflowError):
+        return None, 'invalid'
+    if value <= 0:
+        return None, 'invalid'
+    return value, 'ok'
+
+
+def read_stored_pubdate(epoch_value, status_value):
+    """从 ``video_stats`` 行读发布时间，把「旧行未写」与「接口缺失」区分开。
+
+    Args:
+        epoch_value: 行内 ``pubdate_epoch_s`` 原值。
+        status_value: 行内 ``pubdate_status`` 原值。
+
+    Returns:
+        tuple: ``(int|None, status)``。
+            - 行内三态为 ok/missing/invalid 时原样沿用（B2 之后写入的行）；
+            - 其余（含旧行 NULL）一律 ``unknown`` —— 旧数据当时没有这一列，
+              不能倒填成 missing；
+            - status 声称 ok 但 epoch 不可用时降级 unknown，宁可保守也不编时间。
+    """
+    epoch = epoch_value if type(epoch_value) is int and epoch_value > 0 else None
+    if status_value not in ('ok', 'missing', 'invalid'):
+        return None, 'unknown'
+    if status_value == 'ok' and epoch is None:
+        return None, 'unknown'
+    return epoch, status_value

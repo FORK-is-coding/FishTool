@@ -4,7 +4,21 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import Any
+
+
+class ConfidenceKind(str, Enum):
+    """``Detection.metadata.confidence_kind`` 的口径标记（02 案 §10.1）。
+
+    第一版只声明「未估算」——``confidence`` 固定 ``0.0``，绝不从覆盖度折算成假概率；
+    证据充分程度一律由 ``coverage_ratio`` / ``coverage_state`` / ``observed_windows`` 表达。
+
+    继承 ``str`` 便于 JSON 序列化，但**跨线传输一律取 ``.value``**（小写字符串）：
+    不同 Python 版本下 ``str(枚举成员)`` 结果不一致，直接 dumps 枚举会把口径漏成噪声。
+    """
+
+    NOT_ESTIMATED = "not_estimated"
 
 
 @dataclass(frozen=True)
@@ -39,6 +53,16 @@ class Snapshot:
     metric_status: dict[str, str] | None = None
     collection_tid: int | None = None
     raw_tid: int | None = None
+    # ---- B2 发布时间（作品年龄的唯一来源）----
+    # pubdate_epoch_s：作品 UTC 秒级发布时间；None 表示不可用（缺失/非法/旧行未写）。
+    # pubdate_status：ok / missing / invalid（本次采集写入）或 unknown（旧行 / 无据可查）。
+    pubdate_epoch_s: int | None = None
+    pubdate_status: str = "unknown"
+    # ---- B6b「新发现老视频」通道（08 案 §J3 第 5 条）----
+    # first_seen_epoch_s：工具首次把该 bvid 纳入跟踪的 UTC 秒级时刻，来源是
+    # HotspotWatch.first_seen_epoch_s（**不是** Video.created_at、**不是**发布时间）。
+    # None 表示「无 watch / 无发现时间」，此时 discovery 通道不可用。
+    first_seen_epoch_s: int | None = None
 
 
 @dataclass(frozen=True)

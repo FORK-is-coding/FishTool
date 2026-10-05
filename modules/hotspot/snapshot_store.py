@@ -18,7 +18,7 @@ from typing import Any, Dict
 
 from sqlalchemy import null
 
-from core.data_quality import parse_count
+from core.data_quality import parse_count, parse_pubdate
 from core.database import Video, VideoStats
 
 #: 需要判定质量的统计字段：播放量与六项互动量同源返回，待遇必须一致。
@@ -65,6 +65,16 @@ def _validate_run_id(run_id: Any) -> Any:
     if not isinstance(run_id, str) or not run_id.strip() or len(run_id) > 64:
         raise ValueError('invalid_run_id')
     return run_id
+
+
+def _resolve_pubdate(pubdate_raw: Any) -> tuple[int | None, str]:
+    """把接口 ``pubdate`` 解析为 ``(UTC epoch 秒, 质量三态)``。
+
+    口径唯一来源是 :func:`core.data_quality.parse_pubdate`（03 共享质量 helper）：
+    ``ok`` 时 epoch 是有效正整数；``missing`` 表示接口未给该字段；``invalid`` 表示给了
+    但不可用（负数 / 非数字 / bool）。后两者一律写 SQL NULL，**绝不**用采集时刻冒充发布时间。
+    """
+    return parse_pubdate(pubdate_raw)
 
 
 def persist_snapshot(
@@ -138,6 +148,8 @@ def persist_snapshot(
     for key, value in values.items():
         setattr(video, key, value if value is not None else null())
 
+    pubdate_epoch_s, pubdate_status = _resolve_pubdate(view_data.get("pubdate"))
+
     quality_count = sum(1 for state in status.values() if state == "ok")
     row = VideoStats(
         video_id=video.id,
@@ -155,6 +167,8 @@ def persist_snapshot(
             else "partial"
         ),
         metric_status=status,
+        pubdate_epoch_s=pubdate_epoch_s,
+        pubdate_status=pubdate_status,
     )
     session.add(row)
     session.flush()

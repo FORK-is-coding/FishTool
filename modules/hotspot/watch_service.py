@@ -44,7 +44,7 @@ from typing import Any, Callable, Protocol
 from sqlalchemy import bindparam, inspect as sa_inspect, text, update
 from sqlalchemy.orm import Session
 
-from core.data_quality import parse_count, utc_now_epoch_s
+from core.data_quality import parse_count, read_stored_pubdate, utc_now_epoch_s
 from core.database import HotspotWatch, Video, VideoStats, get_session
 from core.logger import get_logger
 
@@ -389,14 +389,29 @@ def error_code_of(exc: BaseException) -> str:
     return type(exc).__name__[:64]
 
 
-def state_to_json(state: TrendState) -> dict:
+def _default_gate_version() -> str:
+    """当前 v2 出现期门的默认 ``threshold_version``（08 案 §J5）。
+
+    延迟导入避免 ``watch_service`` 与算法层在模块加载期相互牵扯；watch 链路恒走 v2、
+    不经算法注册表，故取 dataclass 默认值。
+    """
+    from .algorithm.lifecycle_v2 import LifecycleV2Config
+
+    return LifecycleV2Config().threshold_version
+
+
+def state_to_json(state: TrendState, *, threshold_version: str | None = None) -> dict:
     """把状态机快照序列化为可落 ``state_json`` 的 JSON。
 
     刻意**不写** ``TrendState.state_revision``：那是算法在内存对象上的代际计数器，
     与 ``hotspot_watch.state_revision``（调度写回代际）不是同一个东西，混存会误导读端。
 
+    08 案 §J5（B6a）：**必须**带上产出该状态的 ``threshold_version`` —— 门槛口径变过
+    之后，旧版本状态里的 prev / candidate / count 不能再当同一套判据的续算起点。
+
     Args:
         state: 算法层 ``TrendState``。
+        threshold_version: 产出该状态的算法版本；缺省取当前默认门版本。
 
     Returns:
         dict: 仅含续算所需字段的 JSON 字典。
@@ -409,18 +424,32 @@ def state_to_json(state: TrendState) -> dict:
         "count": int(state.count),
         "stable_count": int(state.stable_count),
         "stage": state.stage,
+        "threshold_version": threshold_version or _default_gate_version(),
     }
 
 
-def state_from_json(payload: Any) -> TrendState:
-    """从 ``state_json`` 还原状态机；缺失 / 非法时返回全新状态（不猜、不伪造）。
+def state_from_json(payload: Any, *, gate_version: str | None = None) -> TrendState:
+    """从 ``state_json`` 还原状态机；缺失 / 非法 / **版本不符**时返回全新状态。
+
+    08 案 §J5（B6a）：读到的 ``threshold_version`` 与当前门版本不一致（含旧记录压根没有
+    该字段）时，**不**沿用 prev / candidate / baseline / count / stable_count / stage ——
+    那些计数是按旧门槛口径攒出来的，混用等于伪称新版本已确认。此时返回空状态，交给
+    ``analyze_one`` 用现有快照做显式重算；raw 快照不受影响，历史 ``last_confirmed_stage``
+    仍留在表列里作为 legacy 记录，本函数不删不写。
 
     Args:
         payload: ``hotspot_watch.state_json`` 读出的对象。
+        gate_version: 期望的当前门版本；缺省取 :func:`_default_gate_version`。
 
     Returns:
         TrendState: 可直接作为 ``LifecycleV2(initial_states=...)`` 的续算起点。
     """
+    if not isinstance(payload, dict):
+        return TrendState()
+    expected = gate_version or _default_gate_version()
+    if payload.get("threshold_version") != expected:
+        # 旧版本 / 无版本标记：不混用计数，从空状态显式重算。
+        return TrendState()
 
     def _num(key: str) -> float | None:
         value = payload.get(key)
@@ -433,9 +462,6 @@ def state_from_json(payload: Any) -> TrendState:
         if type(value) is not int or value < 0:
             return 0
         return value
-
-    if not isinstance(payload, dict):
-        return TrendState()
 
     last_eval = payload.get("last_evaluation_epoch_s")
     candidate = payload.get("candidate")
@@ -546,6 +572,18 @@ def _resolve_view(stats: VideoStats) -> tuple[int | None, str]:
     return value, "ok"
 
 
+def _resolve_stored_pubdate(stats: Any) -> tuple[int | None, str]:
+    """从 ``video_stats`` 行读发布时间，把「旧行未写」与「接口缺失」区分开。
+
+    口径唯一来源是 :func:`core.data_quality.read_stored_pubdate`（03 共享质量 helper）：
+    行内三态 ok/missing/invalid 原样沿用；旧行 NULL / status 声称 ok 但 epoch 不可用，
+    一律 ``unknown``，宁可保守也不编时间。
+    """
+    return read_stored_pubdate(
+        getattr(stats, "pubdate_epoch_s", None), getattr(stats, "pubdate_status", None)
+    )
+
+
 def load_bvid_snapshots(session: Session, bvid: str) -> list[Snapshot]:
     """读某个 bvid 的历史快照序列，供算法层评估（步骤 4 的取数）。
 
@@ -560,6 +598,14 @@ def load_bvid_snapshots(session: Session, bvid: str) -> list[Snapshot]:
     clean_bvid = str(bvid or "").strip()
     if not clean_bvid:
         return []
+    # 08 案 §J3 第 6 条（B6b）：同一 bvid 读同一 watch 发现时间，作为 Snapshot 的
+    # first_seen_epoch_s（**不是** Video.created_at）。无 watch 即 None，不因此创建 watch。
+    watch = session.query(HotspotWatch).filter(HotspotWatch.bvid == clean_bvid).first()
+    first_seen_epoch_s = (
+        watch.first_seen_epoch_s
+        if watch is not None and type(watch.first_seen_epoch_s) is int and watch.first_seen_epoch_s >= 0
+        else None
+    )
     query = (
         session.query(Video, VideoStats)
         .join(VideoStats, Video.id == VideoStats.video_id)
@@ -572,6 +618,7 @@ def load_bvid_snapshots(session: Session, bvid: str) -> list[Snapshot]:
         raw_view, _ = parse_count(getattr(stats, "view", None))
         epoch = getattr(stats, "captured_epoch_s", None)
         epoch = epoch if type(epoch) is int else None
+        pubdate_epoch_s, pubdate_status = _resolve_stored_pubdate(stats)
         captured_at = stats.snapshot_time
         if captured_at is None:
             # 仅在有明确 epoch 时做显示兜底；不凭机器时区解释旧 naive 时间。
@@ -596,6 +643,9 @@ def load_bvid_snapshots(session: Session, bvid: str) -> list[Snapshot]:
                     stats.collection_tid if type(getattr(stats, "collection_tid", None)) is int else None
                 ),
                 raw_tid=stats.raw_tid if type(getattr(stats, "raw_tid", None)) is int else None,
+                pubdate_epoch_s=pubdate_epoch_s,
+                pubdate_status=pubdate_status,
+                first_seen_epoch_s=first_seen_epoch_s,
             )
         )
     return rows
@@ -1403,13 +1453,13 @@ class WatchService:
         if active_budget is not None:
             self._require_admission_capable_port()
 
-        # 算法只构造一次：用本轮各目标（含补选池）的历史状态续算，避免每次冷启动。
-        # 07 案红线：detector 构造时机与 ``detector_factory`` 签名不变（仍为两参、仍在循环前）。
+        # 08 案 §H4（R2）：不再整轮构造一个 detector。detector 改在
+        # ``_collect_evaluate_commit`` 内、该目标采集完成且加载快照之后**逐目标**构造，
+        # 评估截止取那一刻的墙钟 —— 否则本轮刚采到的点 captured_epoch_s 晚于轮开始时刻
+        # 会被当未来点排掉，最新采样永远晚一轮才生效。
+        # 07 案预算 / 凭证协议（reserve/redeem、admitted <= limit、补选池）一律不动。
         queue = list(targets)
         reserve_pool = list(selection.overflow)
-        detector = self._detector_factory(
-            {target.bvid: target.initial_state for target in queue + reserve_pool}, now_epoch_s
-        )
 
         # 逐目标 reserve，紧邻单目标执行：**绝不**预先 reserve 整批；admitted 恒 <= limit。
         while queue and result.admitted < limit:
@@ -1449,7 +1499,6 @@ class WatchService:
                     target,
                     claim=claim,
                     now_epoch_s=now_epoch_s,
-                    detector=detector,
                     admission=admission,
                 )
             except Exception as exc:  # noqa: BLE001 - 失败隔离：单个目标炸了不进整轮
@@ -1823,7 +1872,6 @@ class WatchService:
         *,
         claim: _TargetClaim,
         now_epoch_s: int,
-        detector: LifecycleV2,
         admission: Any | None = None,
     ) -> TargetOutcome:
         """处理单个目标：采 → 评 → fenced 写回 → 推进调度（07 案 §9.3）。
@@ -1839,8 +1887,7 @@ class WatchService:
         Args:
             target: 本轮目标。
             claim: :meth:`_claim_short` 读到的代际与真实类别。
-            now_epoch_s: 本轮时刻（UTC 秒）。
-            detector: 已注入历史状态的算法实例。
+            now_epoch_s: 本轮时刻（UTC 秒），用于 next_due 调度与日志。
             admission: 可选单请求准用凭证；非 None 时走 ``collect_admitted`` 兑换同一份
                 L 票据，None 时保留原 ``collect`` 行为（无预算 / legacy 路径）。
 
@@ -1869,6 +1916,16 @@ class WatchService:
         try:
             # ---- 4. 评：读该 bvid 的历史快照 -> 算法层 ----
             rows = self._snapshot_loader(session, target.bvid)
+            # ---- 4.1 08 案 §H4（R2）：逐目标构造 detector，评估截止取「加载快照之后」的当前时刻 ----
+            # 两参契约不变：``(initial_states, as_of_epoch_s)``；只是 initial_states 从
+            # 「本轮全部目标」收窄为「仅当前目标」。续算起点依旧来自 ``target.initial_state``
+            # （watch 表 ``state_json`` 恢复），不依赖整轮 detector 内存，所以逐目标构造不丢状态；
+            # 写回仍走 ``commit_state(claim_revision=...)`` 的 fence。
+            # ``evaluation_as_of`` 只用于评估，**不得**拿去驱动 next_due / 预算的单调时钟。
+            evaluation_as_of = int(self._now_fn())
+            detector = self._detector_factory(
+                {target.bvid: target.initial_state}, evaluation_as_of
+            )
             detections, analysis = self._evaluate(detector, target.bvid, rows)
 
             # ---- 4.5 需求围栏（第二批 C）：写入前再检查 active / 代际 ----

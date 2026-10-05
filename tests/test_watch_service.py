@@ -37,6 +37,7 @@ from modules.hotspot.watch_service import (
     WatchService,
     advance_next_due,
     error_code_of,
+    load_bvid_snapshots,
     record_failure,
     state_from_json,
     state_to_json,
@@ -568,6 +569,39 @@ def test_state_json_roundtrip_and_invalid_payload():
     assert state_from_json(None) == TrendState()
     assert state_from_json("not-a-dict") == TrendState()
     assert state_from_json({"count": "x", "prev_rate": True, "stage": ""}) == TrendState()
+
+
+def test_load_bvid_snapshots_reads_watch_first_seen(db):
+    """B6b：load_bvid_snapshots 按 bvid 从 HotspotWatch 读同一首次发现时刻（非 created_at）。"""
+    bvid = "BV1FS00001"
+    seed_watch(db, bvid, now=NOW - 5 * DAY, next_due_epoch_s=NOW - 1)
+    seed_snapshots(db, bvid, [(NOW - DAY, 100), (NOW, 900)])
+
+    session = db()
+    try:
+        rows = load_bvid_snapshots(session, bvid)
+    finally:
+        session.close()
+
+    assert rows
+    assert all(row.first_seen_epoch_s == NOW - 5 * DAY for row in rows)
+
+
+def test_load_bvid_snapshots_first_seen_none_without_watch(db):
+    """B6b：无 watch 的 bvid，first_seen_epoch_s 保持 None，且不为读取新建 watch。"""
+    bvid = "BV1FS00002"
+    seed_snapshots(db, bvid, [(NOW - DAY, 100), (NOW, 900)])
+
+    session = db()
+    try:
+        rows = load_bvid_snapshots(session, bvid)
+        watch_count = session.query(HotspotWatch).filter_by(bvid=bvid).count()
+    finally:
+        session.close()
+
+    assert rows
+    assert all(row.first_seen_epoch_s is None for row in rows)
+    assert watch_count == 0  # 读取不为所有 GET 创建 watch
 
 
 def test_error_code_of_prefers_exception_code():

@@ -43,10 +43,12 @@ python -m pytest -q
 
 > **基线最终裁定（2026-10-03 CST，叉子拍板）：统一取口径 B（含桌面）。**
 > 理由：桌面崩点已根治为绿，A / B 分歧的前提消失，不再保留双口径。
-> **当前基线：`2359 passed / 2 skipped / 0 failed`**（07 执行案 W4 实测，2026-10-05，`QT_QPA_PLATFORM=offscreen`，285.21s）。
-> 上一基线 `2297 passed / 2 skipped / 0 failed`（R5-4e 收口实测，15:55，单跑无并发，323.11s）。
+> **当前基线：`2443 passed / 2 skipped / 0 failed`**（08 执行案 H2 + B0—B7 实测，2026-10-06，`QT_QPA_PLATFORM=offscreen`，282.54s）。
+> 上一基线 `2359 passed / 2 skipped / 0 failed`（07 执行案 W4 实测，2026-10-05，285.21s）。
+> 再上一基线 `2297 passed / 2 skipped / 0 failed`（R5-4e 收口实测，15:55，单跑无并发，323.11s）。
 > watch 预算（L 层）修复批次的回归取证与文档见 `docs/watch_budget_regression_2026-10-05.md`。
-> 基线随批次递增（4b = 2257 → 4f = 2283 → 4e = 2297），门槛取「上一批基线 + 本批新增用例数」。
+> 热点稿龄与出现期门批次（08 案）的字段口径、发布方式与回退，见 `CHANGELOG.md`「热点稿龄与出现期门」段。
+> 基线随批次递增（4b = 2257 → 4f = 2283 → 4e = 2297 → 07 W4 = 2359 → 08 H2+B0—B5 = 2388 → 08 B6a = 2418 → 08 B6b/B7 = 2443），门槛取「上一批基线 + 本批新增用例数」。
 > 2 skipped = `test_bilibili_contract_live.py`（live 默认跳）+ `test_discovery_smoke.py`（skipif），**既有开关门，与本批无关**。
 
 ---

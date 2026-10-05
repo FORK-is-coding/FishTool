@@ -44,13 +44,26 @@ E: int = int(datetime(2026, 9, 1, tzinfo=timezone.utc).timestamp())
 DAY: int = DAY_S
 HOUR: int = 3600
 CFG = LifecycleV2Config()
+# B6a（08 案 §J）起出现期要消费发布时间证据：默认给「测试时钟起点发布」，年龄恒 1 日左右，
+# 稳过 emerge_age_days=7；验证「证据缺失 / 老龄 / 未来」的用例必须显式覆盖。
+PUBDATE: int = E
 
 
 # --------------------------------------------------------------------- 构造工具
 
 
-def _snap(epoch_s: int, view, *, bvid: str = "BV1", tid: int = 4, quality: str = "ok", mid: int = 1001) -> Snapshot:
-    """构造带 UTC 秒级时间与质量位的快照。"""
+def _snap(
+    epoch_s: int,
+    view,
+    *,
+    bvid: str = "BV1",
+    tid: int = 4,
+    quality: str = "ok",
+    mid: int = 1001,
+    pubdate_epoch_s: int | None = PUBDATE,
+    pubdate_status: str = "ok",
+) -> Snapshot:
+    """构造带 UTC 秒级时间、质量位与发布时间证据的快照。"""
     return Snapshot(
         bvid=bvid,
         tid=tid,
@@ -61,6 +74,8 @@ def _snap(epoch_s: int, view, *, bvid: str = "BV1", tid: int = 4, quality: str =
         title=f"标题-{bvid}",
         owner_mid=mid,
         owner_name=f"UP-{mid}",
+        pubdate_epoch_s=pubdate_epoch_s,
+        pubdate_status=pubdate_status,
     )
 
 
@@ -98,7 +113,7 @@ def test_config_defaults() -> None:
     assert config.min_window_coverage == 0.85
     assert config.strict_full_support is False
     assert config.confirmation_windows == 2
-    assert config.threshold_version == "lifecycle_v2_defaults_1"
+    assert config.threshold_version == "lifecycle_v2_age_gate_2"
 
 
 def test_config_as_dict_covers_all_fields() -> None:
@@ -149,7 +164,7 @@ def test_version_and_config_schema() -> None:
     assert schema["version"] == "lifecycle_v2"
     assert schema["domain"] == "game"
     assert schema["min_window_coverage"] == 0.85
-    assert schema["threshold_version"] == "lifecycle_v2_defaults_1"
+    assert schema["threshold_version"] == "lifecycle_v2_age_gate_2"
 
 
 # --------------------------------------------------------------------- coverage 两级输出

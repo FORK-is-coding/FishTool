@@ -113,6 +113,30 @@ def test_snapshot_from_mapping_raises_on_non_numeric_tid() -> None:
         snapshot_from_mapping({"bvid": "BV7", "tid": "not-a-number"})
 
 
+def test_snapshot_from_mapping_passes_explicit_first_seen() -> None:
+    """B6b：显式 first_seen_epoch_s 原样透传为工具首次发现时刻。"""
+    snapshot = snapshot_from_mapping({"bvid": "BV8", "first_seen_epoch_s": 1750000000})
+
+    assert snapshot.first_seen_epoch_s == 1750000000
+
+
+def test_snapshot_from_mapping_never_guesses_first_seen() -> None:
+    """B6b：无 first_seen 时不拿 pubdate / captured_at / now 顶替，保持 None。"""
+    snapshot = snapshot_from_mapping(
+        {"bvid": "BV9", "pubdate_epoch_s": 1700000000, "captured_at": datetime(2026, 1, 1)}
+    )
+
+    assert snapshot.first_seen_epoch_s is None
+
+
+@pytest.mark.parametrize("bad", [None, "1700000000", 1.5, True, -5])
+def test_snapshot_from_mapping_rejects_non_int_first_seen(bad) -> None:
+    """B6b：非「非负 int」的 first_seen 一律降为 None（不收字符串/浮点/bool/负数）。"""
+    snapshot = snapshot_from_mapping({"bvid": "BV10", "first_seen_epoch_s": bad})
+
+    assert snapshot.first_seen_epoch_s is None
+
+
 def test_detection_to_dto_exports_all_keys() -> None:
     """DTO 应包含展示层依赖的全部字段。"""
     detection = Detection(

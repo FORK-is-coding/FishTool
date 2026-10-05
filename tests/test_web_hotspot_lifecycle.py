@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient
 
 from sqlalchemy import null
 
-from core.database import DatabaseManager, Video, VideoStats
+from core.database import DatabaseManager, HotspotWatch, Video, VideoStats
 from modules.hotspot.algorithm import registry as _algorithm_registry
 from modules.hotspot.algorithm.lifecycle_v2 import LifecycleV2
 from web.routers.hotspot import routes_lifecycle
@@ -422,6 +422,34 @@ def test_load_snapshots_flags_inconsistent_quality(db, monkeypatch):
     assert snapshots[0].view_quality == "inconsistent_quality"
 
 
+def test_load_snapshots_reads_watch_first_seen_per_bvid(db, monkeypatch):
+    """B6b：_load_snapshots 一次查询按 bvid 读同一 watch 首次发现时间；无 watch 记 None。"""
+    monkeypatch.setattr(routes_lifecycle, "get_session", db.get_session)
+    session = db.get_session()
+    try:
+        watched = Video(bvid="BV1FS00011", title="有watch", tid=4)
+        plain = Video(bvid="BV1FS00012", title="无watch", tid=4)
+        session.add_all([watched, plain])
+        session.commit()
+        for video in (watched, plain):
+            session.add(VideoStats(
+                video_id=video.id, view=100, view_status="ok", stat_status="ok",
+                metric_status={"view": "ok"}, snapshot_time=datetime.now(),
+                captured_epoch_s=3000, collection_tid=4,
+            ))
+        session.add(HotspotWatch(
+            bvid="BV1FS00011", first_seen_epoch_s=1750000000,
+            ttl_end_epoch_s=1750100000, next_due_epoch_s=1750000000,
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+    by_bvid = {s.bvid: s.first_seen_epoch_s for s in routes_lifecycle._load_snapshots(tid=4)}
+    assert by_bvid["BV1FS00011"] == 1750000000
+    assert by_bvid["BV1FS00012"] is None
+
+
 def test_lifecycle_excludes_quality_markers(client, db, monkeypatch):
     """生命周期回放只吃整数有效快照，坏点计入 rejected，不送进旧算式（§4.4）。"""
     monkeypatch.setattr(routes_lifecycle, "get_session", db.get_session)
@@ -540,3 +568,115 @@ def test_lifecycle_v2_keeps_quality_marker_as_segment_break(client, db, monkeypa
     item = response.json()["data"]["items"][0]
     assert item["metrics"]["observed_windows"] == 0
     assert item["stage"] == "数据不足"
+
+
+# ---------------------------------------------------------------------------
+# 08 案 §H2 / §H4 / §B4：请求级 as_of 与稿龄通道（B5 集成验收）
+# ---------------------------------------------------------------------------
+
+
+def _seed_pubdate_rows(db, bvid: str = "BV1AGE00001", mid: int = 12345) -> None:
+    """写入三条带**有效发布时间**的快照（captured 与 pubdate 均为秒级 epoch）。
+
+    发布时间统一取「三天前」，因此稿龄应稳定落在 3 天附近，便于断言小数天数。
+    """
+    session = db.get_session()
+    try:
+        video = Video(bvid=bvid, title="稿龄视频", tid=4, mid=mid, author="UP主")
+        session.add(video)
+        session.commit()
+        now_epoch = int(datetime.now(timezone.utc).timestamp())
+        published = now_epoch - 3 * 86400
+        for index in range(3):
+            epoch_s = now_epoch - (2 - index) * 3600
+            session.add(VideoStats(
+                video_id=video.id,
+                view=1000 + index * 100,
+                snapshot_time=datetime.fromtimestamp(epoch_s),
+                captured_epoch_s=epoch_s,
+                collection_tid=4,
+                raw_tid=4,
+                view_status="ok",
+                stat_status="ok",
+                metric_status={"view": "ok"},
+                pubdate_epoch_s=published,
+                pubdate_status="ok",
+            ))
+        session.commit()
+    finally:
+        session.close()
+
+
+def _stub_up_metrics(monkeypatch):
+    """置空 UP 主指标补采，避免测试触网。"""
+
+    async def fake_metrics(api, mids):
+        """UP 主轻量指标替身。"""
+        return {}
+
+    monkeypatch.setattr(routes_lifecycle, "get_up_light_metrics", fake_metrics)
+
+
+def test_lifecycle_exposes_single_request_level_as_of(client, db, monkeypatch):
+    """整次读取只冻结一次评估截止，且下发给每个 item 的 metadata（H4 / B4）。"""
+    monkeypatch.setattr(routes_lifecycle, "get_session", db.get_session)
+    _stub_up_metrics(monkeypatch)
+    _seed_pubdate_rows(db)
+
+    response = client.get("/api/hotspot/lifecycle", params={"tid": 4})
+    assert response.status_code == 200
+    data = response.json()["data"]
+
+    as_of = data["as_of_epoch_s"]
+    assert isinstance(as_of, int) and as_of > 0
+    items = data["items"]
+    assert items
+    for item in items:
+        assert item["metadata"]["as_of_epoch_s"] == as_of
+        assert item["metadata"]["as_of_source"] == "explicit"
+        assert item["metadata"]["age_reference"] == "evaluation_as_of"
+
+
+def test_lifecycle_item_carries_age_days_and_status(client, db, monkeypatch):
+    """稿龄相对请求级 as_of 计算：天数进 metrics，状态 / 来源进 metadata。"""
+    monkeypatch.setattr(routes_lifecycle, "get_session", db.get_session)
+    _stub_up_metrics(monkeypatch)
+    _seed_pubdate_rows(db, bvid="BV1AGE00002")
+
+    response = client.get("/api/hotspot/lifecycle", params={"tid": 4})
+    assert response.status_code == 200
+    item = response.json()["data"]["items"][0]
+
+    assert item["metadata"]["age_status"] == "ok"
+    assert item["metadata"]["age_source"] == "pubdate_epoch_s"
+    days = item["metrics"]["age_days"]
+    assert isinstance(days, float)
+    # 发布时间固定在三天前，分钟级读取偏差不会把它推出这个区间。
+    assert 2.5 < days < 3.5
+
+
+def test_lifecycle_age_status_is_explicit_when_pubdate_missing(client, db, monkeypatch):
+    """旧行 / 无证据时如实报 missing，绝不返回 0 天冒充「刚发布」。"""
+    monkeypatch.setattr(routes_lifecycle, "get_session", db.get_session)
+    _stub_up_metrics(monkeypatch)
+    _seed_quality_rows(db, bvid="BV1AGE00003")
+
+    response = client.get("/api/hotspot/lifecycle", params={"tid": 4})
+    assert response.status_code == 200
+    item = response.json()["data"]["items"][0]
+
+    assert item["metadata"]["age_status"] in {"missing", "unknown"}
+    assert item["metrics"]["age_days"] is None
+
+
+def test_lifecycle_v1_path_does_not_receive_as_of(client, db, monkeypatch):
+    """v1 工厂不认 ``as_of_epoch_s``：路由只对 v2 透传，否则 registry 直接炸。"""
+    monkeypatch.setattr(routes_lifecycle, "get_session", db.get_session)
+    _stub_up_metrics(monkeypatch)
+    _seed_pubdate_rows(db, bvid="BV1AGE00004")
+
+    response = client.get(
+        "/api/hotspot/lifecycle", params={"tid": 4, "algorithm": "heuristic_v1"}
+    )
+    assert response.status_code == 200
+    assert response.json()["data"]["algorithm_version"] == "heuristic_v1"
