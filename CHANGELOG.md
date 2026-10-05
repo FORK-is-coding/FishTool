@@ -32,6 +32,50 @@
 - 常驻 watch 循环装配补齐默认预算门（`RequestBudget`）与事件需求整编 hook
   （`EventWatchDemandReconciler.reconcile`）；缺省采集端口复用编排层同一 `RequestBudget`。
 
+### watch 预算修复（07 执行案 W1—W4）——三项状态**必须分开看**
+
+> 口径前置：本批只修 **L 层逻辑预算**（内存账本、重启清零），
+> **H 层 HTTP 配额数字与语义一律未动**（1800 与五类 480 / 1000 / 150 / 72 / 98 逐字不变）。
+> **不许**把下面三条合成一句「配额已修复」。
+
+**【已实现】单请求单扣（L 层）**
+
+- 一次逻辑采集只消费**一份** L 层额度：watch 调度 `reserve` 一次，采集以 `redeem` 兑换**同一份**票据，
+  不再走第二次 `acquire`。
+- 凭证只兑换一次（issuer + operation_key + reserved 状态三项校验）；未兑换的在 `finally` 里
+  `release_unused` 释放；已兑换不退款（逻辑尝试，不等同实际发送数）。
+- 预留带硬超时（`reserve_deadline_mono`），超时清扫兜底，超时后 `redeem` 返回 `admission_expired`。
+
+**【已启用】类别策略（L 层，`mode: partitioned`）**
+
+- `config/budget.yaml` 新增 `watch_scheduler` 段（**纯追加，不改 quota 任何数字**）：
+  `normal_watch` / `fast_watch` / `general` 类别窗 + 类间轮转 + 按类查询候选；`partitioned` 已启用。
+- 分配数值：10/8/2、150/120/30、1500/1200/300，为 §10.1 提案值，**维护者 2026-10-05 批准照该组走**
+  （`approved_maintainer_2026-10-05`；原 `pending_maintainer_approval` 字样保留供追溯）。
+  三类各窗口合计恰等于 total（20 / 300 / 3000），自洽无超额；**非仓库既有常量、非实盘最优值**。
+- `mode: shared_only` 为兼容模式，**必须显式 `category_isolation=false`**，不默认静默降级。
+
+**【未实施】HTTP 子额度（H 层）**
+
+- H 层 watch 父额度（1000）仍由 normal / fast 两类**共享**；跨重启 / 跨进程的实际 HTTP 子预算
+  **本阶段没做**（对应执行案 §12 第二阶段，无独立审批与迁移验收则不执行）。
+- **不得**表述为「已修复」或「HTTP 已分桶」。
+
+**观测口径变化（W2 引入）**
+
+- `budget_skipped` 语义变更：从「扫描窗内目标数」改为「**被跳过的类别队首数**」
+  （因每类读取上限 = `limit`）。
+
+**验证**
+
+- 全量 **2359 passed / 2 skipped / 0 failed**（285.21s，口径 B 含桌面）；
+  H 层聚焦 **76 passed**；W1—W3 聚焦 **116 passed**。
+- 详见 `docs/watch_budget_regression_2026-10-05.md`。
+
+**尚未验证**
+
+- live 网络、真实 B 站、H 层真实发包计数、跨进程 / 跨重启持久；桌面 Qt 交互单跑未做。
+
 ## [0.2.4] - 2026-10-02
 
 **主题：02 单视频时序跟踪上线；06 发现通道接通常驻调度与 watch 候选入池。**
