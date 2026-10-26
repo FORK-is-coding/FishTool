@@ -20,6 +20,9 @@ from sqlalchemy import null
 
 from core.data_quality import parse_count, parse_pubdate
 from core.database import Video, VideoStats
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 #: 需要判定质量的统计字段：播放量与六项互动量同源返回，待遇必须一致。
 STAT_KEYS = ("view", "danmaku", "reply", "favorite", "coin", "share", "like")
@@ -141,8 +144,8 @@ def persist_snapshot(
     if pubdate_raw:
         try:
             video.pubdate = datetime.fromtimestamp(int(pubdate_raw))
-        except (ValueError, TypeError, OSError):
-            pass
+        except (ValueError, TypeError, OSError) as exc:
+            logger.debug("视频发布时间解析失败，保持原值: %r (%s)", pubdate_raw, exc)
 
     # 统计字段：缺失/非法写 SQL NULL，真实 0 才写 0。
     for key, value in values.items():

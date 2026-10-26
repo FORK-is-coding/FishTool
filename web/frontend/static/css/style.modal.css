@@ -171,6 +171,112 @@
     margin-top: 20px;
 }
 
+/* ===== 高优先级错误 Toast =====
+   后端 core.toast 通过 /ws 推送；右上角堆叠、自动消失，不阻塞用户操作。
+   注意：QtWebEngine (Chromium 87) 不识别 inset，这里显式写 top/right。 */
+.app-toast-stack {
+    position: fixed;
+    z-index: 1100;
+    top: 18px;
+    right: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: min(380px, calc(100vw - 36px));
+    pointer-events: none;
+}
+
+.app-toast {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+        "title close"
+        "message message";
+    gap: 4px 12px;
+    padding: 14px 14px 14px 16px;
+    pointer-events: auto;
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-left: 4px solid var(--primary-color);
+    border-radius: 14px;
+    background: var(--bg-elevated);
+    box-shadow: 0 16px 40px rgba(81, 74, 69, 0.18);
+    animation: app-toast-in 180ms ease-out;
+    transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.app-toast.is-warning {
+    border-left-color: var(--warning-color);
+}
+
+.app-toast.is-error {
+    border-left-color: var(--danger-color);
+}
+
+.app-toast.is-leaving {
+    opacity: 0;
+    transform: translateX(12px);
+}
+
+.app-toast-title {
+    grid-area: title;
+    font-size: 14px;
+    line-height: 1.4;
+    color: var(--text-primary);
+}
+
+.app-toast.is-error .app-toast-title {
+    color: var(--danger-color);
+}
+
+.app-toast-message {
+    grid-area: message;
+    overflow-wrap: anywhere;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+}
+
+.app-toast-close {
+    grid-area: close;
+    align-self: start;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    font-size: 18px;
+    line-height: 1;
+    color: var(--text-muted);
+    cursor: pointer;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+}
+
+.app-toast-close:hover {
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+}
+
+@keyframes app-toast-in {
+    from {
+        opacity: 0;
+        transform: translateX(16px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@media (max-width: 600px) {
+    .app-toast-stack {
+        top: 12px;
+        right: 12px;
+        left: 12px;
+        width: auto;
+    }
+}
+
 @media (prefers-reduced-motion: reduce) {
     :is(
         .card,
@@ -206,6 +312,13 @@
         .diagnosis-score,
         .diagnosis-detail-card
     )::before {
+        transition: none;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .app-toast {
+        animation: none;
         transition: none;
     }
 }

@@ -686,8 +686,8 @@ class BenchmarkService:
                 await task
             except asyncio.CancelledError:
                 pass
-            except Exception:  # noqa: BLE001 - 取消失败不掩盖终态读取
-                logger.warning("[排名] 取消 run=%s 时任务抛错", run_id)
+            except Exception as exc:  # noqa: BLE001 - 取消失败不掩盖终态读取
+                logger.warning("[排名] 取消 run=%s 时任务抛错: %s", run_id, exc, exc_info=True)
 
         token = self._lease_tokens.get(run_id)
         if not token:

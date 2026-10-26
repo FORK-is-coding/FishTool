@@ -17,7 +17,10 @@ from bilibili.cookie_pool import get_cookie_pool
 from llm.client import LLMClient
 from core.config import ConfigManager
 from core.exceptions import ValidationError
+from core.logger import get_logger
 from modules.hotspot import TagCloudGenerator, ActivityTracker, TopicGenerator
+
+logger = get_logger(__name__)
 
 # ============ 全局实例（延迟初始化模式） ============
 # 采用单例模式管理API和LLM客户端，避免重复初始化
@@ -54,6 +57,7 @@ async def _run_tag_cloud_task(task_id: str, request: "TagCloudRequest") -> None:
             message="词云生成完成", estimated_seconds=0, result=result,
         )
     except Exception as exc:
+        logger.exception("词云后台任务失败 task=%s", task_id)
         _tag_cloud_tasks[task_id].update(
             status="failed", message=f"生成词云失败: {exc}", estimated_seconds=0
         )
@@ -107,8 +111,8 @@ def get_llm_client() -> Optional[LLMClient]:
         try:
             # 尝试初始化LLM客户端
             _llm_client = LLMClient()
-        except Exception:
-            # 初始化失败（如API Key未配置），设为None
-            # 此处不抛出异常，允许系统继续运行
+        except Exception as exc:
+            # 初始化失败（如API Key未配置），设为None；记录原因便于排查配置问题。
+            logger.debug("LLM 初始化失败，按未配置处理: %s", exc, exc_info=True)
             _llm_client = None
     return _llm_client

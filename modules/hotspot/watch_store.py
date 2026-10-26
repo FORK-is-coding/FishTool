@@ -21,8 +21,11 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from core.database import HotspotWatch
+from core.logger import get_logger
 
 from .algorithm.lifecycle_v2 import CoverageState
+
+logger = get_logger(__name__)
 
 #: 逻辑预算类别标签（与 ``watch_service.BUDGET_CATEGORY_*`` 同值；本模块不反向上层 import，
 #: 用字面量避免循环依赖）。
@@ -378,7 +381,8 @@ def load_fast_until_map(session: Session, bvids: list) -> dict:
             "SELECT bvid, fast_until_s FROM hotspot_watch WHERE bvid IN :bvids"
         ).bindparams(bindparam("bvids", expanding=True))
         rows = session.execute(stmt, {"bvids": wanted}).all()
-    except Exception:  # noqa: BLE001 - 缺列 / 旧库一律降级为「无快采」，不炸整轮
+    except Exception as exc:  # noqa: BLE001 - 缺列 / 旧库一律降级为「无快采」，不炸整轮
+        logger.debug("读取快采截止时间失败，按无快采降级: %s", exc, exc_info=True)
         return {}
     return {str(row[0]): (int(row[1]) if row[1] is not None else None) for row in rows}
 
@@ -427,7 +431,8 @@ def _normalize_due_cursor(cursor: Any) -> tuple[int, str] | None:
     try:
         due, bvid = cursor
         return int(due), str(bvid)
-    except Exception:  # noqa: BLE001 - 游标形状不对不抛错，按无游标处理
+    except Exception as exc:  # noqa: BLE001 - 游标形状不对不抛错，按无游标处理
+        logger.debug("调度游标形状非法，按无游标处理: %r (%s)", cursor, exc, exc_info=True)
         return None
 
 
@@ -445,7 +450,8 @@ def _hotspot_watch_columns(session: Session) -> set | None:
         if not inspector.has_table("hotspot_watch"):
             return None
         return {col["name"] for col in inspector.get_columns("hotspot_watch")}
-    except Exception:  # noqa: BLE001 - 旧库 / 缺表一律降级，不炸整轮
+    except Exception as exc:  # noqa: BLE001 - 旧库 / 缺表一律降级，不炸整轮
+        logger.debug("读取 hotspot_watch 列名失败，按旧库降级: %s", exc, exc_info=True)
         return None
 
 
@@ -556,7 +562,8 @@ def find_due_for_budget_category(
     sql_parts.append("ORDER BY next_due_epoch_s ASC, bvid ASC LIMIT :limit")
     try:
         ordered = [str(row[0]) for row in session.execute(text(" ".join(sql_parts)), params).all()]
-    except Exception:  # noqa: BLE001 - 缺列 / 旧库：降级为普通节奏，不炸整轮
+    except Exception as exc:  # noqa: BLE001 - 缺列 / 旧库：降级为普通节奏，不炸整轮
+        logger.debug("按预算类别取候选失败，降级为普通节奏: %s", exc, exc_info=True)
         if category == BUDGET_CATEGORY_FAST:
             return []
         return _query_due_normal_fallback(session, now_epoch_s, limit, normalized_cursor)

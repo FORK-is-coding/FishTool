@@ -129,6 +129,7 @@ class CommentIncrementalMixin:
         """
         # 断点优先级：Task.checkpoint > 评论表最新 rpid
         # 无断点且无评论时返回 None，走全量采集
+        session = None
         try:
             session = get_session()
             
@@ -166,7 +167,9 @@ class CommentIncrementalMixin:
         # 查询失败返回 None，调用方按无断点处理
         # finally 保证会话无论如何都关闭，避免连接泄漏
         except Exception as e:
-            logger.error(f"查询最新评论失败: {e}")
+            logger.error(f"查询最新评论失败: {e}", exc_info=True)
             return None
         finally:
-            session.close()
+            # 会话可能因 get_session 失败而未创建，关闭前必须判空。
+            if session is not None:
+                session.close()

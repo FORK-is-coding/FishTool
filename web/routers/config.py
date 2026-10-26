@@ -44,6 +44,7 @@ from urllib.parse import urljoin
 
 # 从 core.config 导入符号
 from core.config import ConfigManager
+from core.logger import get_logger
 # 从 core.database 导入符号
 from core.database import get_session, LLMUsage
 # 从 sqlalchemy 导入符号
@@ -51,6 +52,7 @@ from sqlalchemy import func
 
 # 独立的路由实例，由 web/main.py 挂载到 /api/config 前缀
 router = APIRouter()
+logger = get_logger(__name__)
 
 
 # ============ 请求/响应模型 ============
@@ -245,14 +247,18 @@ async def get_llm_models(request: LLMModelsRequest):
         if not models:
             return {"success": False, "models": [], "message": "接口返回为空或格式不兼容"}
         return {"success": True, "models": models, "message": f"已获取 {len(models)} 个模型"}
-    except httpx.TimeoutException:
+    except httpx.TimeoutException as exc:
+        logger.warning("获取模型列表超时: %s", exc, exc_info=True)
         return {"success": False, "models": [], "message": "获取模型列表超时，请检查 Base URL"}
     except httpx.RequestError as exc:
+        logger.warning("连接模型服务失败: %s", exc, exc_info=True)
         return {"success": False, "models": [], "message": f"无法连接模型服务：{exc}"}
-    except ValueError:
+    except ValueError as exc:
+        logger.warning("模型服务返回非法 JSON: %s", exc, exc_info=True)
         return {"success": False, "models": [], "message": "模型服务返回的不是有效 JSON"}
     except Exception as exc:
         # 兜底保护路由稳定性，同时保留足够的错误上下文帮助排查。
+        logger.error("获取模型列表失败: %s", exc, exc_info=True)
         return {"success": False, "models": [], "message": f"获取模型列表失败：{exc}"}
 
 

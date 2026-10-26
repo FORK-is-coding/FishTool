@@ -153,7 +153,7 @@ class ConfigManager:
                 self._config['secrets'] = secrets
             except Exception as e:
                 # 解密失败（可能是密钥错误或文件损坏），记录错误日志
-                logger.error(f"解密敏感配置失败: {e}")
+                logger.error(f"解密敏感配置失败: {e}", exc_info=True)
                 # 初始化为空字典，避免后续访问出错
                 self._config['secrets'] = {}
     

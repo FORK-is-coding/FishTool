@@ -1,6 +1,9 @@
 // ===== app.up.js —— 拆分自 app.js（UP主拆解 & 账号自诊），原始行 L1021-L1438 =====
 // ============ 头部UP主拆解 & 账号自诊模块 ============
 
+// 最近一次成功的自诊结果；导出报告只使用这份快照，不再重新抓取账号数据。
+let diagnosisState = null;
+
 // 加载分析分区列表（头部UP拆解 + 账号自诊共用）
 async function loadAnalysisZones() {
     try {
@@ -134,7 +137,6 @@ async function analyzeUp() {
     }
 
     showLoading('analysis-result', {
-        progress: 0,
         message: '正在创建UP主拆解任务',
     });
 
@@ -313,6 +315,227 @@ function renderDiagnosisCharts(videoStats, engagement, benchmark) {
     renderDiagnosisBenchmarkChart(getDiagnosisChart('diagnosis-benchmark-chart'), benchmark, theme);
 }
 
+// 把 ECharts 图表截成 PNG data URI；导出 PDF 时保持页面上的暖色主题。
+function captureDiagnosisChartImage(elementId) {
+    try {
+        const element = document.getElementById(elementId);
+        if (!element || typeof window.echarts === 'undefined') return null;
+        const chart = diagnosisCharts[elementId] || window.echarts.getInstanceByDom(element);
+        if (!chart) return null;
+        return chart.getDataURL({
+            type: 'png',
+            pixelRatio: 1.5,
+            backgroundColor: '#fffdf9',
+            excludeComponents: ['toolbox'],
+        });
+    } catch (error) {
+        console.warn('[自诊报告] 图表截图失败:', elementId, error);
+        return null;
+    }
+}
+
+// 用 Canvas 重绘账号 Tag 词云，颜色/字号与页面保持同一套暖色规则。
+function buildDiagnosisTagCloudImage(tagCloud) {
+    const entries = Object.entries(tagCloud?.word_frequency || {}).slice(0, 40);
+    if (!entries.length) return null;
+
+    const width = 1000;
+    const height = 520;
+    const padding = 36;
+    const gap = 18;
+    const colors = ['#b47b50', '#718d7b', '#9b6f73', '#667f8c', '#8c765d'];
+    const scale = 1.5;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(width * scale);
+    canvas.height = Math.round(height * scale);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    ctx.scale(scale, scale);
+    ctx.fillStyle = '#fffdf9';
+    ctx.fillRect(0, 0, width, height);
+    ctx.strokeStyle = '#ece2d7';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
+
+    const maxFrequency = Math.max(...entries.map(([, count]) => diagnosisNumber(count, 1)), 1);
+    const fontFamily = '"Microsoft YaHei", "SimHei", sans-serif';
+    const items = entries.map(([tag, count], index) => {
+        const weight = diagnosisNumber(count, 1) / maxFrequency;
+        let size = Math.max(14, Math.round(14 + weight * 20));
+        let font = `${weight >= 0.55 ? 600 : 500} ${size}px ${fontFamily}`;
+        ctx.font = font;
+        let textWidth = ctx.measureText(tag).width;
+        // 超长 Tag 降低字号，保证不越过内边距。
+        while (textWidth > width - padding * 2 && size > 12) {
+            size -= 1;
+            font = `600 ${size}px ${fontFamily}`;
+            ctx.font = font;
+            textWidth = ctx.measureText(tag).width;
+        }
+        return { tag, size, font, textWidth, color: colors[index % colors.length] };
+    });
+
+    // 按行居中排布，稳定的确定性布局便于报告复现。
+    const lines = [];
+    let line = [];
+    let lineWidth = 0;
+    items.forEach(item => {
+        const nextWidth = line.length ? lineWidth + gap + item.textWidth : item.textWidth;
+        if (line.length && nextWidth > width - padding * 2) {
+            lines.push(line);
+            line = [];
+            lineWidth = 0;
+        }
+        lineWidth = line.length ? lineWidth + gap + item.textWidth : item.textWidth;
+        line.push(item);
+    });
+    if (line.length) lines.push(line);
+
+    const lineHeights = lines.map(lineItems => Math.max(...lineItems.map(item => item.size * 1.35)));
+    const totalHeight = lineHeights.reduce((sum, value) => sum + value, 0)
+        + Math.max(0, lines.length - 1) * 8;
+    let y = Math.max(padding, (height - totalHeight) / 2);
+    lines.forEach((lineItems, lineIndex) => {
+        const rowHeight = lineHeights[lineIndex];
+        const rowWidth = lineItems.reduce((sum, item) => sum + item.textWidth, 0)
+            + gap * Math.max(0, lineItems.length - 1);
+        let x = (width - rowWidth) / 2;
+        lineItems.forEach(item => {
+            ctx.font = item.font;
+            ctx.fillStyle = item.color;
+            ctx.textBaseline = 'middle';
+            ctx.fillText(item.tag, x, y + rowHeight / 2);
+            x += item.textWidth + gap;
+        });
+        y += rowHeight + 8;
+    });
+
+    return canvas.toDataURL('image/png');
+}
+
+// 汇总柱状图、雷达图、可选基准图和词云，合并成一张报告仪表盘图片。
+function loadReportImage(source) {
+    return new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error('图表图片加载失败'));
+        image.src = source;
+    });
+}
+
+// Canvas 圆角矩形路径：兼容不支持 ctx.roundRect 的旧 WebEngine。
+function traceRoundedRect(ctx, x, y, width, height, radius) {
+    const r = Math.min(radius, width / 2, height / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + width - r, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+    ctx.lineTo(x + width, y + height - r);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+    ctx.lineTo(x + r, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+}
+
+function drawReportChartPanel(ctx, image, label, x, y, width, height) {
+    ctx.save();
+    ctx.fillStyle = '#fffdf9';
+    ctx.strokeStyle = '#e8ddd1';
+    ctx.lineWidth = 1;
+    traceRoundedRect(ctx, x, y, width, height, 14);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#8a5a43';
+    ctx.font = '600 18px "Microsoft YaHei", "SimHei", sans-serif';
+    ctx.textBaseline = 'top';
+    ctx.fillText(label, x + 18, y + 14);
+
+    const box = { x: x + 14, y: y + 44, width: width - 28, height: height - 58 };
+    const ratio = Math.min(box.width / image.width, box.height / image.height);
+    const drawWidth = image.width * ratio;
+    const drawHeight = image.height * ratio;
+    ctx.drawImage(
+        image,
+        box.x + (box.width - drawWidth) / 2,
+        box.y + (box.height - drawHeight) / 2,
+        drawWidth,
+        drawHeight,
+    );
+    ctx.restore();
+}
+
+async function buildDiagnosisChartsImage() {
+    const volume = captureDiagnosisChartImage('diagnosis-volume-chart');
+    const engagement = captureDiagnosisChartImage('diagnosis-engagement-chart');
+    const benchmark = captureDiagnosisChartImage('diagnosis-benchmark-chart');
+    const tagCloud = buildDiagnosisTagCloudImage(diagnosisState?.result?.self_data?.tag_cloud);
+    const sources = [];
+    if (volume) sources.push({ key: 'volume', source: volume, label: '内容互动总量' });
+    if (engagement) sources.push({ key: 'engagement', source: engagement, label: '互动效率 · 三角维度' });
+    if (benchmark) sources.push({ key: 'benchmark', source: benchmark, label: '分区播放基准' });
+    if (tagCloud) sources.push({ key: 'tag_cloud', source: tagCloud, label: '总体视频 Tag 词云' });
+    if (!sources.length) return null;
+
+    let loaded;
+    try {
+        loaded = await Promise.all(sources.map(item => loadReportImage(item.source)));
+    } catch (error) {
+        console.warn('[自诊报告] 图表组合失败:', error);
+        return null;
+    }
+    const images = {};
+    sources.forEach((item, index) => { images[item.key] = loaded[index]; });
+
+    const width = 1000;
+    const padding = 20;
+    const gap = 16;
+    const halfWidth = (width - padding * 2 - gap) / 2;
+    const topItems = [];
+    if (images.volume) topItems.push({ image: images.volume, label: '内容互动总量' });
+    if (images.engagement) topItems.push({ image: images.engagement, label: '互动效率 · 三角维度' });
+    const benchmarkCategory = diagnosisState?.result?.benchmark?.category;
+    const benchmarkLabel = benchmarkCategory ? `${benchmarkCategory}分区播放基准` : '分区播放基准';
+
+    let height = padding * 2;
+    if (topItems.length) height += 320 + gap;
+    if (images.benchmark) height += 300 + gap;
+    if (images.tag_cloud) height += 400 + gap;
+    height -= gap;
+
+    const scale = 1.5;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(width * scale);
+    canvas.height = Math.round(height * scale);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.scale(scale, scale);
+    ctx.fillStyle = '#fffdf9';
+    ctx.fillRect(0, 0, width, height);
+
+    let y = padding;
+    if (topItems.length === 2) {
+        drawReportChartPanel(ctx, topItems[0].image, topItems[0].label, padding, y, halfWidth, 320);
+        drawReportChartPanel(ctx, topItems[1].image, topItems[1].label, padding + halfWidth + gap, y, halfWidth, 320);
+        y += 320 + gap;
+    } else if (topItems.length === 1) {
+        drawReportChartPanel(ctx, topItems[0].image, topItems[0].label, padding, y, width - padding * 2, 320);
+        y += 320 + gap;
+    }
+    if (images.benchmark) {
+        drawReportChartPanel(ctx, images.benchmark, benchmarkLabel, padding, y, width - padding * 2, 300);
+        y += 300 + gap;
+    }
+    if (images.tag_cloud) {
+        drawReportChartPanel(ctx, images.tag_cloud, '总体视频 Tag 词云', padding, y, width - padding * 2, 400);
+    }
+
+    return canvas.toDataURL('image/png');
+}
+
 // 渲染内容互动总量柱状图。
 function renderDiagnosisVolumeChart(volumeChart, videoStats, theme) {
     if (!volumeChart) return;
@@ -388,6 +611,8 @@ async function runSelfDiagnosis() {
         return;
     }
 
+    // 每次重新自诊都清掉旧快照；失败时不允许导出上一次的数据。
+    diagnosisState = null;
     showLoading('diagnosis-result');
     try {
         const payload = { uid, category };
@@ -398,6 +623,12 @@ async function runSelfDiagnosis() {
         const result = response.data || {};
         renderSelfDiagnosisResult(uid, result);
         attachRankingToDiagnosis(uid, result);
+        diagnosisState = {
+            uid,
+            category,
+            benchmarkRunId: payload.benchmark_run_id || null,
+            result,
+        };
     } catch (error) {
         document.getElementById('diagnosis-result').innerHTML = `<p class="analysis-error">自诊失败: ${escapeHtml(error.message)}</p>`;
     }
@@ -457,29 +688,139 @@ function renderSelfDiagnosisResult(uid, result) {
     renderDiagnosisCharts(videos, engagement, benchmark);
 }
 
+// 判断当前页面是否由桌面壳加载（由 QWebEngineScript 在文档创建阶段注入）。
+function isDesktopShell() {
+    return window.__FISHTOOL_DESKTOP__ === true;
+}
+
+// 通过 console 桥把打印 HTML 分片交给桌面壳：桌面壳弹 Windows 保存框并渲染 PDF。
+function requestDesktopSavePdf(html, filename) {
+    return new Promise((resolve, reject) => {
+        const token = `report-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const chunkSize = 4000;
+        // 按 Unicode 码点切分，避免把 emoji 的 UTF-16 代理对截断在两个分片里。
+        const chars = Array.from(html);
+        const total = Math.max(1, Math.ceil(chars.length / chunkSize));
+        let settled = false;
+        const timer = window.setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            delete window.__fishToolSavePdfResult;
+            reject(new Error('保存超时，请重试'));
+        }, 600000);
+
+        const finish = (ok, detail) => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(timer);
+            delete window.__fishToolSavePdfResult;
+            if (ok) {
+                resolve(detail);
+            } else if (detail === 'cancelled') {
+                reject({ cancelled: true });
+            } else {
+                reject(new Error(detail || '保存失败'));
+            }
+        };
+
+        window.__fishToolSavePdfResult = (id, ok, detail) => {
+            if (id !== token) return;
+            finish(ok, detail);
+        };
+
+        try {
+            for (let index = 0; index < total; index += 1) {
+                console.log('FISHTOOL_SAVE_PDF_CHUNK:' + JSON.stringify({
+                    token,
+                    filename,
+                    index,
+                    total,
+                    chunk: chars.slice(index * chunkSize, (index + 1) * chunkSize).join(''),
+                }));
+            }
+        } catch (error) {
+            finish(false, String(error));
+        }
+    });
+}
+
+// 浏览器兜底：打开打印预览，由用户选择“另存为 PDF”。
+function printReportHtml(html) {
+    const frame = document.createElement('iframe');
+    frame.setAttribute('aria-hidden', 'true');
+    // 打印兜底只允许同源读取和弹窗，脚本保持禁用，避免报告内容反向操作主页面。
+    frame.setAttribute('sandbox', 'allow-same-origin allow-modals');
+    frame.style.position = 'fixed';
+    frame.style.right = '0';
+    frame.style.bottom = '0';
+    frame.style.width = '0';
+    frame.style.height = '0';
+    frame.style.border = '0';
+    frame.srcdoc = html;
+    frame.onload = () => {
+        try {
+            frame.contentWindow.focus();
+            frame.contentWindow.print();
+        } catch (error) {
+            showToast(`打开打印预览失败: ${error.message}`, { level: 'error', title: '导出失败' });
+        }
+        window.setTimeout(() => frame.remove(), 60000);
+    };
+    document.body.appendChild(frame);
+}
+
 async function exportDiagnosisReport() {
-    const uid = parseInt(document.getElementById('diagnosis-uid').value);
-    const category = document.getElementById('diagnosis-zone-select').value || null;
-    
-    if (!uid) {
-        showAppAlert('请先输入B站UID');
+    const uid = parseInt(document.getElementById('diagnosis-uid').value, 10);
+    if (!diagnosisState || diagnosisState.uid !== uid || !diagnosisState.result?.self_data) {
+        showToast('请先进行自诊', { level: 'warning', title: '提示' });
         return;
     }
-    
+
+    const button = document.getElementById('diagnosis-export-button');
+    if (button) button.disabled = true;
     try {
-        const payload = { uid, format: 'markdown', category };
-        // 导出携带已绑定的冻结排名 run_id（后端拒绝跨 UID）
-        const boundRunId = rankingRunIdFor(uid);
-        if (boundRunId) payload.benchmark_run_id = boundRunId;
-        const data = await apiRequest('/analysis/export-report', {
+        // 图表组合失败不应阻断文字报告导出。
+        let dashboardImage = null;
+        try {
+            dashboardImage = await buildDiagnosisChartsImage();
+        } catch (error) {
+            console.warn('[自诊报告] 图表导出失败，改为仅导出文字报告:', error);
+        }
+        const payload = {
+            uid,
+            category: diagnosisState.category,
+            benchmark_run_id: diagnosisState.benchmarkRunId,
+            // 直接复用本次自诊的同一份数据，保证报告与屏幕结果一致。
+            self_data: diagnosisState.result.self_data,
+            benchmark_data: diagnosisState.result.benchmark,
+            creator_ranking: diagnosisState.result.creator_ranking,
+            benchmark_status: diagnosisState.result.benchmark_status,
+            // 图形在浏览器里合成同一主题的仪表盘图片，PDF 中不再丢失柱状图/雷达图/词云。
+            charts: dashboardImage ? { dashboard: dashboardImage } : {},
+        };
+        const response = await apiRequest('/analysis/report-html', {
             method: 'POST',
-            body: JSON.stringify(payload)
-        });
-        
-        const result = data.data;
-        showAppAlert(`报告已生成: ${result.filepath}`);
+            body: JSON.stringify(payload),
+        }, false);
+        const data = response.data || {};
+        if (!data.html) throw new Error('报告内容为空');
+
+        if (isDesktopShell()) {
+            await requestDesktopSavePdf(data.html, data.filename || `diagnosis_report_${uid}.pdf`);
+            showToast('报告已保存', { level: 'info', title: '导出完成' });
+        } else {
+            // 普通浏览器无法直接调 Windows 保存框，提供打印预览兜底。
+            printReportHtml(data.html);
+            showToast('已打开打印预览，请选择“另存为 PDF”', { level: 'info', title: '导出报告' });
+        }
     } catch (error) {
-        showAppAlert(`导出失败: ${error.message}`);
+        if (error && error.cancelled) {
+            showToast('已取消保存', { level: 'info', title: '提示' });
+        } else {
+            showToast(`导出失败: ${error.message}`, { level: 'error', title: '导出失败' });
+        }
+    } finally {
+        if (button) button.disabled = false;
     }
 }
 

@@ -86,7 +86,8 @@ def _resolve_discovery_service() -> Optional[Any]:
     # 1) 常驻监控服务（``web.main`` 全局，lifespan 启动时创建）。运行时惰性导入，避免循环依赖。
     try:
         from ...main import monitor_service  # noqa: WPS433
-    except Exception:  # noqa: BLE001 - 拿不到主应用时降级到兜底实例
+    except Exception as exc:  # noqa: BLE001 - 拿不到主应用时降级到兜底实例
+        logger.debug("读取常驻监控服务失败，使用兜底发现实例: %s", exc, exc_info=True)
         monitor_service = None
     if monitor_service is not None:
         try:
@@ -102,7 +103,7 @@ def _resolve_discovery_service() -> Optional[Any]:
 
             _fallback_service = build_discovery_service()
         except Exception as exc:  # noqa: BLE001
-            logger.error("装配兜底发现服务失败: %r", exc)
+            logger.error("装配兜底发现服务失败: %r", exc, exc_info=True)
             return None
     return _fallback_service
 
@@ -283,7 +284,7 @@ async def create_research_draft(payload: ResearchDraftRequest):
             count=int(payload.count),
         )
     except Exception as exc:  # noqa: BLE001 - 统一转 500，便于前端提示
-        logger.error("生成低成本研究草案失败: %r", exc)
+        logger.error("生成低成本研究草案失败: %r", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"生成研究草案失败: {exc}") from exc
 
     return {

@@ -242,7 +242,7 @@ async def discover_candidate_authors(request: CandidateDiscoveryRequest) -> Dict
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
-        logger.error("[排名] 候选发现失败: %s", exc)
+        logger.error("[排名] 候选发现失败: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
 
 
@@ -298,7 +298,7 @@ async def create_benchmark_task(request: BenchmarkRequest) -> Dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:  # noqa: BLE001 - 数据库不可用统一 503
-        logger.error("[排名] 创建 run 失败: %s", exc)
+        logger.error("[排名] 创建 run 失败: %s", exc, exc_info=True)
         raise HTTPException(status_code=503, detail='database_unavailable')
 
     run_id = row.get('id')
@@ -309,7 +309,7 @@ async def create_benchmark_task(request: BenchmarkRequest) -> Dict[str, Any]:
         task.add_done_callback(lambda _finished: _active_targets.discard(target_uid))
     except Exception as exc:  # noqa: BLE001
         _active_targets.discard(target_uid)
-        logger.error("[排名] 启动 run 失败: %s", exc)
+        logger.error("[排名] 启动 run 失败: %s", exc, exc_info=True)
         raise HTTPException(status_code=503, detail='benchmark_start_failed')
 
     return {
@@ -367,7 +367,7 @@ async def cancel_benchmark_task(run_id: str) -> Dict[str, Any]:
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
-        logger.error("[排名] 取消失败: %s", exc)
+        logger.error("[排名] 取消失败: %s", exc, exc_info=True)
         raise HTTPException(status_code=503, detail='database_unavailable')
     if row is None:
         raise HTTPException(status_code=404, detail='run_not_found')
@@ -429,7 +429,7 @@ async def retry_benchmark_run(run_id: str) -> Dict[str, Any]:
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
-        logger.error("[排名] 重试失败: %s", exc)
+        logger.error("[排名] 重试失败: %s", exc, exc_info=True)
         raise HTTPException(status_code=503, detail='database_unavailable')
 
     run_id_new = row.get('id')

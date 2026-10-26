@@ -49,6 +49,8 @@ class PetWindowBase:
         self._menu_hide_timer.timeout.connect(self.hide_menu)
         self._hover_animation = None
         self._drag_start_position = QPoint()
+        # 是否已真正进入拖拽态；按下时先置 False，移动超过阈值后才置 True。
+        self._is_dragging = False
         # 监听应用级鼠标按下事件，用于点击其他区域收起菜单。
         QApplication.instance().installEventFilter(self)
 
@@ -199,7 +201,7 @@ class PetWindowBase:
                 else:
                     logger.warning(f"[桌宠] 素材不存在，使用占位图: {path}")
             except Exception as exc:
-                logger.error(f"[桌宠] 加载素材失败 {path}: {exc}")
+                logger.error(f"[桌宠] 加载素材失败 {path}: {exc}", exc_info=True)
 
     def set_state(self, state: int):
         """切换桌宠状态

@@ -4,16 +4,28 @@
 
 ## 1. WebUI 无法打开
 
-1. 运行 `python start_web.py --host 127.0.0.1 --port 8000`。
+1. 运行 `python app.py web --host 127.0.0.1 --port 8000`。
 2. 请求 `http://127.0.0.1:8000/health`；失败则看启动终端和 `data/logs/error.log`。
 3. 检查 8000 是否被占用；改端口时同步 CORS 白名单，否则前后端跨域可能失败。
 4. `/health` 正常但页面空白：检查 `/static/js/app.js`、模板目录和浏览器控制台；exe 中确认 spec 已包含 frontend。
+
+### 1.1 桌面版页面能打开，但之后所有网络请求超时
+
+症状：桌面窗口和页面都正常显示，刚开始几个请求可能成功，随后所有按钮无响应、API 请求全部超时，但 Web 子进程仍然存活。
+
+根因：源码模式下 `MainWindow` 用 `subprocess.Popen` 通过统一入口 `app.py web` 启动 Web 子进程，旧实现把子进程 `stdout/stderr` 接到 `PIPE` 却从不读取；uvicorn/应用日志写满管道缓冲区后，子进程阻塞在写日志上，Web 服务不再处理请求。
+
+排查：
+
+- 看 `data/logs/web_subprocess.log`（Web 子进程控制台日志）和 `data/logs/app.log`。
+- 若 `web_subprocess.log` 停在某条访问日志，且 `/health` 开始超时，基本可确认。
+- 修复后子进程输出应重定向到文件而不是 `PIPE`；启动失败时主窗口会直接展示退出码和日志末尾。
 
 ## 2. 配置修改不生效
 
 加载优先级是 config.yaml → user_config.yaml → secrets。检查是否被 `user_config.yaml` 覆盖，并通过 `/api/config/reload` 或重启加载。
 
-启动端口以 `start_web.py --port` 为准，不一定采用 config.yaml 的 `server.port`。exe 环境配置在 exe 旁，不是 PyInstaller 临时目录。
+启动端口以 `app.py` CLI 为准，不一定采用 config.yaml 的 `server.port`。exe 环境配置在 exe 旁，不是 PyInstaller 临时目录。
 
 ## 3. 登录态无效或频繁掉线
 

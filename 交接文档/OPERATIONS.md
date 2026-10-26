@@ -20,7 +20,7 @@ PDF 导出还依赖系统安装 `wkhtmltopdf`；没有它时 Markdown 导出仍�
 
 主要配置：
 
-- `server.host/port/reload`：配置默认 127.0.0.1:8080，但 `start_web.py` CLI 默认 0.0.0.0:8000；命令参数优先影响实际启动。
+- `server.host/port/reload`：配置默认 127.0.0.1:8080，但 `app.py` CLI 默认 0.0.0.0:8000；命令参数优先影响实际启动。
 - `database.path`：默认 `data/bili_ops.db`。
 - `bilibili.rate_limit.normal/comment/dynamic`：默认 2/4/2.5 秒间隔。
 - `bilibili.cookie_check_interval`：默认 1800 秒。
@@ -36,19 +36,19 @@ PDF 导出还依赖系统安装 `wkhtmltopdf`；没有它时 Markdown 导出仍�
 初始化：
 
 ```powershell
-python start_web.py --init-only
+python app.py init
 ```
 
-本机运行：
+本机运行（仅 Web）：
 
 ```powershell
-python start_web.py --host 127.0.0.1 --port 8000
+python app.py web --host 127.0.0.1 --port 8000
 ```
 
 开发热重载：
 
 ```powershell
-python start_web.py --host 127.0.0.1 --port 8000 --reload
+python app.py web --host 127.0.0.1 --port 8000 --reload
 ```
 
 验证：
@@ -62,10 +62,11 @@ Invoke-RestMethod http://127.0.0.1:8000/health
 ## 4. 桌面运行
 
 ```powershell
-python start_desktop.py
+python app.py
 ```
 
-首次启动向导可扫码登录并配置 LLM。exe/冻结环境下，ConfigManager 把持久化根目录设为 `sys.executable` 所在目录，因此分发时必须让 exe 旁的 `config/`、`data/` 可写。
+桌面版会同时启动主窗口、桌宠和本地 Web 服务，浏览器访问 `http://localhost:8000`
+也可以使用同一套界面/API。首次启动向导可扫码登录并配置 LLM。exe/冻结环境下，ConfigManager 把持久化根目录设为 `sys.executable` 所在目录，因此分发时必须让 exe 旁的 `config/`、`data/` 可写。
 
 ## 5. PyInstaller 打包
 
@@ -84,7 +85,7 @@ pyinstaller --clean --noconfirm build.spec
 
 - `build.spec` 使用桌面图标 `C:\Users\27418\Desktop\图标.png`，当前文件已确认存在；打包环境若缺失该文件则回退为无自定义图标。
 - `.key/.secrets` 不在 datas 中，这是正确的安全默认；不要把个人密钥打进通用 exe。
-- spec 的 Analysis 同时列出 `start_desktop.py` 和 `start_web.py`，发布前必须实际启动验证主入口行为。
+- spec 的 Analysis 只列出 `app.py`，发布前必须实际启动验证桌面入口与 `app.py web` 两种模式。
 - `build/` 是中间产物，`dist/` 是发布候选；不要以旧 `backups/*.exe` 作为最新版。
 
 打包验收：

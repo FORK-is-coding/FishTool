@@ -231,7 +231,7 @@ class HotspotCollector:
             }
         except Exception as exc:
             _set_progress("failed", 0, f"采集失败：{exc}")
-            logger.error("热点采集异常: %s", exc)
+            logger.error("热点采集异常: %s", exc, exc_info=True)
             raise
 
     async def collect_one(

@@ -671,8 +671,11 @@ class LoggerManager:
                                     continue
                                 if end_date and log_time > end_date:
                                     continue
-                            except Exception:
-                                pass  # 解析失败，保留该行
+                            except Exception as exc:
+                                # 单行时间戳格式不标准时保留该行，不中断整个导出。
+                                logging.getLogger(__name__).debug(
+                                    "导出日志时解析时间戳失败，保留该行: %s", exc, exc_info=True
+                                )
         
                         outfile.write(line)
         

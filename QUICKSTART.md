@@ -3,24 +3,32 @@
 ## 第一次使用
 
 ### 1. 安装Python环境
-确保已安装 Python 3.8+
+确保已安装 Python 3.9+
 
 ### 2. 安装依赖
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. 初始化项目
+### 3. 启动（默认桌面版）
 ```bash
-python start_web.py --init-only
+python app.py
 ```
 
-### 4. 启动服务
+运行后会自动打开桌面主窗口与桌宠，同时在后台启动 Web 服务；浏览器访问
+`http://localhost:8000` 也可以使用同一套界面。
+
+### 4. 仅使用 Web 版（不打开桌面窗口）
 ```bash
-python start_web.py
+python app.py web
 ```
 
 访问：http://localhost:8000
+
+### 5. 仅初始化
+```bash
+python app.py init
+```
 
 ## 基本使用流程
 
@@ -107,14 +115,19 @@ A:
 ## 命令行参数
 
 ```bash
-# 指定端口
-python start_web.py --port 9000
+# 桌面版换 Web 端口（浏览器也使用 9000）
+python app.py desktop --port 9000
 
-# 开发模式（热重载）
-python start_web.py --reload
+# 仅 Web 版指定端口
+python app.py web --port 9000
+
+# 开发模式（热重载，仅 Web 版）
+python app.py web --reload
 
 # 仅初始化不启动
-python start_web.py --init-only
+python app.py init
+# 或
+python app.py web --init-only
 ```
 
 ## 目录说明

@@ -908,8 +908,8 @@ class WatchService:
         if callable(clock):
             try:
                 return float(clock())
-            except Exception:  # noqa: BLE001 - 替身 clock 异常时回退到编排层时钟
-                pass
+            except Exception as exc:  # noqa: BLE001 - 替身 clock 异常时回退到编排层时钟
+                logger.debug("预算 clock 读取失败，回退编排层时钟: %s", exc, exc_info=True)
         return float(self._now_mono_fn())
 
     @property
@@ -957,7 +957,8 @@ class WatchService:
         now_mono = self._admission_now_mono(budget)
         try:
             snapshot = budget.snapshot(now_mono) if hasattr(budget, "snapshot") else {}
-        except Exception:  # noqa: BLE001 - 观测快照失败绝不上抛，退化为粗粒度字段
+        except Exception as exc:  # noqa: BLE001 - 观测快照失败绝不上抛，退化为粗粒度字段
+            logger.debug("预算快照读取失败，退化为粗粒度字段: %s", exc, exc_info=True)
             snapshot = {}
         category_limits = getattr(budget, "category_limits", None)
         return {

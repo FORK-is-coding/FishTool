@@ -20,7 +20,7 @@ class LifecycleMixin:
                     return
             logger.warning("[桌宠] 未找到主窗口，无法执行退出逻辑")
         except Exception as exc:
-            logger.error(f"[桌宠] 请求退出失败: {exc}")
+            logger.error(f"[桌宠] 请求退出失败: {exc}", exc_info=True)
 
     def closeEvent(self, event):
         """窗口关闭事件

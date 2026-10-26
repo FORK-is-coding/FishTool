@@ -56,6 +56,23 @@
     font-weight: 700;
 }
 
+/* 未知进度：只保留转圈与文案，不显示停在 0% 的假进度条。 */
+.loading-state--indeterminate .loading-spinner {
+    grid-row: 1 / span 2;
+}
+
+.loading-status {
+    flex: 0 0 auto;
+    align-self: center;
+    padding: 2px 10px;
+    color: var(--primary-color);
+    font-size: 13px;
+    font-weight: 600;
+    border: 1px solid var(--primary-soft);
+    border-radius: 999px;
+    background: var(--primary-soft);
+}
+
 .loading-track {
     height: 9px;
     overflow: hidden;

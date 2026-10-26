@@ -3,6 +3,42 @@
 .hotspot-algorithm-badge { padding:6px 12px; border-radius:999px; color:var(--text-secondary); background:var(--primary-soft); border:1px solid var(--border-color); font-size:12px; }
 .hotspot-notice { color:var(--text-secondary); font-size:13px; margin:10px 0 16px; }
 .hotspot-notice-sub { margin:-8px 0 16px; color:var(--text-secondary); font-size:12px; opacity:.85; }
+/* 热点页表单行：标签独占一行，输入框/下拉框/按钮之间统一留 20px 间距。
+   只作用于 #hotspot-page，避免影响评论、抽奖、配置等其它页面。 */
+#hotspot-page .form-group {
+    display:flex;
+    flex-wrap:wrap;
+    align-items:center;
+    gap:20px;
+    margin-bottom:24px;
+}
+#hotspot-page .form-group > label {
+    flex:0 0 100%;
+    margin-bottom:0;
+}
+#hotspot-page .form-group > .form-control {
+    width:auto;
+    min-width:0;
+    flex:1 1 240px;
+    max-width:440px;
+}
+#hotspot-page .form-group > .btn {
+    flex:0 0 auto;
+}
+/* 热门 Tag 的按钮容器与标签列表各占整行，避免和输入控件挤在同一行。 */
+#hotspot-page .event-workbench .form-group > div,
+#hotspot-page .form-group > .event-hot-tags {
+    flex:1 1 100%;
+}
+/* CreatorBrief 折叠区的输入框按网格列宽铺满，不再被全局 500px 上限挤压。 */
+#hotspot-page .event-brief-grid .form-control {
+    width:100%;
+    max-width:none;
+}
+#hotspot-page .event-workbench .form-group > .form-control {
+    flex:1 1 100%;
+    max-width:none;
+}
 .hotspot-lifecycle-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
 .hotspot-lifecycle-card { background:var(--bg-elevated); border:1px solid var(--border-color); border-radius:var(--card-radius); padding:18px; box-shadow:var(--shadow); transition:box-shadow .2s, transform .2s; }
 .hotspot-lifecycle-card:hover { box-shadow:var(--shadow-hover); transform:translateY(-2px); }
@@ -10,9 +46,44 @@
 .hotspot-lifecycle-meta { color:var(--text-secondary); font-size:13px; }
 .hotspot-confidence { color:var(--success-color); font-weight:600; }
 .hotspot-progress-row { display:flex; align-items:center; gap:12px; margin-top:16px; color:var(--text-secondary); font-size:13px; flex-wrap:wrap; }
-.hotspot-progress-row progress { flex:1; min-width:120px; accent-color:var(--primary-color); }
+/* 生命周期进度条：与全局 loading-track 同一套高度、圆角和主题渐变。 */
+.hotspot-progress-row progress {
+    flex:1;
+    min-width:160px;
+    height:10px;
+    margin:0;
+    overflow:hidden;
+    vertical-align:middle;
+    appearance:none;
+    -webkit-appearance:none;
+    border:1px solid var(--border-color);
+    border-radius:999px;
+    background:var(--bg-tertiary);
+}
+.hotspot-progress-row progress::-webkit-progress-bar {
+    border-radius:999px;
+    background:var(--bg-tertiary);
+}
+.hotspot-progress-row progress::-webkit-progress-value {
+    border-radius:999px;
+    background:linear-gradient(90deg, var(--primary-color), var(--accent-color));
+    transition:width .3s ease;
+}
+.hotspot-progress-row progress::-moz-progress-bar {
+    border-radius:999px;
+    background:linear-gradient(90deg, var(--primary-color), var(--accent-color));
+}
 .hotspot-progress-row .btn { flex-shrink:0; }
-.hotspot-collect-select { padding:4px 8px; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-elevated); color:var(--text-primary); font-size:12px; flex-shrink:0; }
+/* 生命周期/采集参数下拉：复用 .form-control 的尺寸与配色，只额外限制间距。 */
+.hotspot-collect-select {
+    width:auto;
+    max-width:none;
+    min-width:132px;
+    flex:0 1 auto;
+    padding:9px 12px;
+    font-size:14px;
+    cursor:pointer;
+}
 /* 阶段标签与卡片操作行 */
 .hotspot-stage-pill { padding:2px 10px; border-radius:999px; font-size:12px; color:var(--text-secondary); background:var(--primary-soft); border:1px solid var(--border-color); }
 /* 卡片每千粉转化伪徽标：圆角背景小标签，与阶段 pill 同族样式但用强调色区分 */
@@ -80,10 +151,61 @@
    约束仍为：不依赖颜色唯一表达（状态同时给文字 + 边框样式）。 */
 .event-hot-tags { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
 .event-tag-chip { border:1px solid var(--border-color); background:var(--primary-soft); color:var(--text-primary); }
-.event-attribution { margin:12px 0; padding:10px 12px; border:1px solid var(--border-color); border-radius:8px; }
-.event-attribution legend { padding:0 6px; color:var(--text-secondary); font-size:12px; }
-.event-attribution label { margin-right:16px; font-size:13px; }
-.event-attribution-preview { margin-top:8px; }
+.event-attribution {
+    margin:12px 0;
+    padding:14px 16px;
+    border:1px solid var(--border-color);
+    border-radius:var(--inner-radius);
+    background:var(--bg-primary);
+}
+.event-attribution legend {
+    padding:0 8px;
+    color:var(--text-primary);
+    font-size:13px;
+    font-weight:600;
+}
+.event-attribution label {
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    margin:4px 12px 4px 0;
+    padding:8px 12px;
+    color:var(--text-secondary);
+    font-size:13px;
+    line-height:1.4;
+    cursor:pointer;
+    border:1px solid var(--border-color);
+    border-radius:999px;
+    background:var(--bg-elevated);
+    transition:color .2s, border-color .2s, background-color .2s;
+}
+.event-attribution label:hover {
+    color:var(--text-primary);
+    border-color:var(--primary-color);
+    background:var(--primary-soft);
+}
+.event-attribution input[type="radio"] {
+    appearance:none;
+    -webkit-appearance:none;
+    flex:0 0 auto;
+    width:16px;
+    height:16px;
+    margin:0;
+    border:2px solid var(--border-color);
+    border-radius:50%;
+    background:var(--bg-elevated);
+    cursor:pointer;
+    transition:border-color .2s, background .2s;
+}
+.event-attribution input[type="radio"]:checked {
+    border-color:var(--primary-color);
+    background:radial-gradient(circle, var(--primary-color) 0 3px, var(--bg-elevated) 3.5px);
+}
+.event-attribution input[type="radio"]:focus-visible {
+    outline:2px solid var(--primary-color);
+    outline-offset:2px;
+}
+.event-attribution-preview { margin-top:10px; }
 .event-brief { margin:12px 0; }
 .event-brief-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:8px; }
 .event-brief-grid label { display:flex; flex-direction:column; font-size:12px; color:var(--text-secondary); gap:4px; }

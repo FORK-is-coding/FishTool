@@ -540,7 +540,7 @@ class BilibiliAPICore:
             # 预算耗尽必须保留原类型，不能被包装成 NetworkError。
             raise
         except Exception as exc:
-            logger.error(f"扫码轮询请求失败: {exc}")
+            logger.error(f"扫码轮询请求失败: {exc}", exc_info=True)
             if isinstance(exc, BilibiliAPIError):
                 raise
             raise NetworkError(f"扫码轮询请求失败: {exc}") from exc

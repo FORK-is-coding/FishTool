@@ -68,7 +68,7 @@ async function startRealUserFilter() {
     const button = document.getElementById('lottery-filter-button');
     if (!target) return showAppAlert('请先输入视频 BV 号或动态完整链接');
     button.disabled = true;
-    showLoading('lottery-filter-result', { progress: 0, message: '正在建立筛选任务，随后将优先检查本地评论数据' });
+    showLoading('lottery-filter-result', { message: '正在建立筛选任务，随后将优先检查本地评论数据' });
     try {
         const started = await apiRequest('/lottery/filter/tasks', {
             method: 'POST',
@@ -106,7 +106,6 @@ async function quickFilterUser() {
     if (!Number.isInteger(uid) || uid <= 0) return showAppAlert('请输入有效的用户 UID');
     button.disabled = true;
     showLoading('lottery-quick-result', {
-        progress: 18,
         message: '正在核验该 UID 的等级、公开活动和抽奖转发特征，随后交给 AI 受限判定',
     });
     try {
@@ -127,15 +126,16 @@ async function quickFilterUser() {
 
 /** 一键校验当前中奖名单，并路由到随机抽奖中奖名单区域。 */
 async function verifyLotteryWinners() {
+    // 先校验是否有中奖名单，再切换页面：
+    // 桌面端启动探针会点击该按钮，若先 navigateTo('lottery') 会把默认页带到抽奖工具。
+    if (!currentLotteryWinners.length) return showAppAlert('请先进行抽奖！');
     navigateTo('lottery');
     const resultHost = document.getElementById('lottery-winner-verification-result');
     const drawCard = document.querySelector('.lottery-draw-card');
     const button = document.getElementById('lottery-verify-winners-button');
     drawCard?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    if (!currentLotteryWinners.length) return showAppAlert('请先进行抽奖！');
     button.disabled = true;
     showLoading('lottery-winner-verification-result', {
-        progress: 25,
         message: '正在优先检索本地画像，缺失用户将通过低频 B 站请求补齐后交给 AI 校验',
     });
     try {
@@ -297,7 +297,6 @@ async function previewLotteryDraw() {
 /** 创建随机抽奖任务并渲染中奖名单。 */
 async function runLotteryDraw(target, winnerCount, uniqueUsers, filters) {
     showLoading('lottery-draw-result', {
-        progress: 0,
         message: '正在检索工具箱本地目录与数据库，找不到可复用评论后才会启动爬虫',
     });
     const started = await apiRequest('/lottery/draw/tasks', {

@@ -265,7 +265,8 @@ def load_generation_config(config_manager: Any = None) -> dict:
     if config_manager is not None:
         try:
             raw = config_manager.get("hotspot.events", None)
-        except Exception:  # noqa: BLE001 - 配置读取失败按缺省处理更稳，但绝不静默改阈值
+        except Exception as exc:  # noqa: BLE001 - 配置读取失败按缺省处理更稳，但绝不静默改阈值
+            logger.warning("读取热点事件配置失败，按缺省配置处理: %s", exc, exc_info=True)
             raw = None
     if raw is None:
         raw = {}
@@ -778,8 +779,8 @@ class TopicGenerationStore:
         """吞掉查询异常的是否完成判定（用于 COMMIT 异常后的探测）。"""
         try:
             return self.is_completed(request_id)
-        except Exception:  # noqa: BLE001 - 探测失败按“未知”处理，由上层返 503
-            logger.warning("生成账本完成状态探测失败（查询不可用）")
+        except Exception as exc:  # noqa: BLE001 - 探测失败按“未知”处理，由上层返 503
+            logger.warning("生成账本完成状态探测失败（查询不可用）: %s", exc, exc_info=True)
             return False
 
     def read_completed_response(self, request_id: str) -> dict:

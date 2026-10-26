@@ -42,6 +42,19 @@ class NotifyMixin:
             self._notification_timer.timeout.connect(self.hide_notification)
         self._notification_timer.start(5000)
 
+    def show_toast(self, toast_data: dict):
+        """展示后端推送的高优先级错误 toast。
+
+        Args:
+            toast_data: ``{title, message, level, error_code}``。
+        """
+        title = str(toast_data.get('title') or '操作失败')
+        message = str(toast_data.get('message') or '')
+        if not message:
+            return
+        logger.warning("[桌宠] 错误通知: %s - %s", title, message)
+        self.show_notification({'title': title, 'message': message})
+
     def hide_notification(self):
         """隐藏通知气泡
         

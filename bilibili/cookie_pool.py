@@ -35,6 +35,7 @@ import logging
 
 from core.database import get_session, Account, CookiePool as CookiePoolModel
 from core.exceptions import CookieExpiredError, AuthenticationError
+from core.toast import emit_toast
 from core.logger import get_logger
 from bilibili.api import BilibiliAPI
 
@@ -171,7 +172,7 @@ class CookiePool:
                         db.commit()
                         logger.info(f"Cookie ID={c.id} 已完成加密迁移")
                     except Exception as migrate_error:
-                        logger.error(f"Cookie ID={c.id} 加密迁移失败: {migrate_error}")
+                        logger.error(f"Cookie ID={c.id} 加密迁移失败: {migrate_error}", exc_info=True)
                         # 回滚事务
                         db.rollback()
                 
@@ -189,7 +190,7 @@ class CookiePool:
                 cookie.last_used = c.last_used
                 self.cookies.append(cookie)
             except Exception as e:
-                logger.error(f"加载 Cookie ID={c.id} 失败: {e}")
+                logger.error(f"加载 Cookie ID={c.id} 失败: {e}", exc_info=True)
                 # 跳过本轮继续循环
                 continue
         
@@ -431,13 +432,22 @@ class CookiePool:
                     db.commit()
                 
             except Exception as e:
-                logger.error(f"检查Cookie失败: ID={cookie.id}, 错误={e}")
+                logger.error(f"检查Cookie失败: ID={cookie.id}, 错误={e}", exc_info=True)
         
         self.last_check_time = datetime.now()
         
         # 统计
         valid_count = sum(1 for c in self.cookies if c.is_valid)
         logger.info(f"Cookie有效性检查完成: {valid_count}/{len(self.cookies)} 有效")
+        # 所有 Cookie 都失效时用户无法继续采集/登录，属于必须让用户知道的高优先级错误。
+        if self.cookies and valid_count == 0:
+            emit_toast(
+                "登录态失效",
+                "所有 Cookie 均已失效，请重新扫码登录后再继续。",
+                level="error",
+                source="auth",
+                error_code="all_cookies_invalid",
+            )
     
     def _parse_cookie(self, cookie_str: str) -> Dict[str, str]:
         """解析Cookie字符串
@@ -531,7 +541,7 @@ def get_cookie_pool() -> CookiePool:
             db = get_session()
             _global_cookie_pool.load_from_db(db)
         except Exception as e:
-            logger.error(f"从数据库加载Cookie失败: {e}")
+            logger.error(f"从数据库加载Cookie失败: {e}", exc_info=True)
         finally:
             if 'db' in locals():
                 db.close()

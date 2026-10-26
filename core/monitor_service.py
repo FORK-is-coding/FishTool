@@ -11,6 +11,7 @@ from core.config import ConfigManager
 from core.database import MonitorState, get_session
 from core.logger import get_logger
 from core.request_budget import log_quota_usage
+from core.toast import emit_toast
 
 logger = get_logger(__name__)
 
@@ -66,8 +67,8 @@ def _run_startup_reconcile_once(
         if session is not None:
             try:
                 session.close()
-            except Exception:  # noqa: BLE001 - 关闭失败也不能再抛
-                pass
+            except Exception as exc:  # noqa: BLE001 - 关闭失败也不能再抛
+                logger.debug("关闭启动整编会话失败: %s", exc, exc_info=True)
 
 
 def build_watch_service(**kwargs: Any) -> Any:
@@ -549,6 +550,16 @@ class ResidentCommentMonitor:
                         delay = min(1800, int(self.config.get("monitor.check_interval", 300)) * (2 ** min(failures, 4)))
                         self._update(status="running", consecutive_failures=failures, last_error=str(exc))
                         logger.exception("评论常驻采集失败，将在 %s 秒后退避重试", delay)
+                        # 连续失败达到 3 次说明监控已实质中断，高优先级提示用户；
+                        # 只在该阈值触发一次，避免每轮失败都弹。
+                        if failures == 3:
+                            emit_toast(
+                                "评论监控异常",
+                                "评论常驻采集已连续失败 3 次，正在自动退避重试，请检查网络或登录态。",
+                                level="error",
+                                source="monitor",
+                                error_code="comment_monitor_consecutive_failures",
+                            )
                         await asyncio.sleep(delay + random.uniform(0, min(30, delay * 0.1)))
                         continue
                 # 正常轮询间隔取配置值，并叠加 10% 内的随机抖动，降低被风控识别的概率。

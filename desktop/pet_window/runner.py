@@ -20,8 +20,3 @@ def run_pet_window():
     pet.show()
     
     sys.exit(app.exec_())
-
-
-# 边界/有效性检查
-if __name__ == "__main__":
-    run_pet_window()

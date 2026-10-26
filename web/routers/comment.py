@@ -40,9 +40,11 @@ from bilibili.cookie_pool import get_cookie_pool
 from llm.client import LLMClient
 from core.config import ConfigManager
 from core.database import Comment, Video, get_session
+from core.logger import get_logger
 from modules.comment import CommentCollector, CommentMonitor
 
 router = APIRouter()
+logger = get_logger(__name__)
 
 # ============ 全局实例（延迟初始化模式） ============
 # 采用单例模式管理API、LLM、监控器实例，避免重复初始化
@@ -112,9 +114,9 @@ def get_monitor() -> CommentMonitor:
         # 尝试初始化LLM客户端（用于AI情感分析）
         try:
             _llm_client = LLMClient()
-        except Exception:
-            # LLM初始化失败（如API Key未配置），设为None
-            # 监控器仍可使用规则引擎进行基础分析
+        except Exception as exc:
+            # LLM初始化失败（如API Key未配置），设为None；规则引擎仍可工作。
+            logger.debug("LLM 初始化失败，评论监控降级为规则引擎: %s", exc, exc_info=True)
             _llm_client = None
         
         # 延迟导入避免循环依赖

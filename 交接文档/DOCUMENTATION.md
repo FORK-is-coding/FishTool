@@ -9,6 +9,7 @@
 5. [OPERATIONS.md](OPERATIONS.md)：环境、配置、Web/桌面运行、PyInstaller 打包和升级。
 6. [SCHEDULE.md](SCHEDULE.md)：asyncio 常驻任务、状态、周期、退避和新增任务规则。
 7. [TROUBLESHOOTING.md](TROUBLESHOOTING.md)：按症状排障。
+8. [EXCEPTION_HANDLING.md](../docs/EXCEPTION_HANDLING.md)：异常分级、日志与 toast 规范、静态检查方式。
 
 已有 `README.md`、`QUICKSTART.md`、`STRUCTURE.md` 和 `docs/` 中的历史验收材料可作为背景，但若与上述交接包或当前源码冲突，以当前源码、实际 SQLite schema 和本交接包的明确勘误为准。
 

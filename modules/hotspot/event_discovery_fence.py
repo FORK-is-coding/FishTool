@@ -25,6 +25,9 @@ from core.database.event_discovery_repository import (
     EventDiscoveryRepository,
     InvalidateOutcome,
 )
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 __all__ = [
     "DiscoveryFenceError",
@@ -328,6 +331,9 @@ class EventDiscoveryFence:
             self._finish_error(run_id, token, event_id, "deadline_exceeded")
             return
         except Exception as exc:  # noqa: BLE001 - 外部来源失败：记错误、释放自己的 lease
+            logger.warning(
+                "事件发现外部来源失败 run=%s event=%s: %s", run_id, event_id, exc, exc_info=True
+            )
             self._finish_error(run_id, token, event_id, f"fetch_error:{type(exc).__name__}")
             return
 
@@ -338,6 +344,9 @@ class EventDiscoveryFence:
             # D02/D03/D04：已失去所有权或规则/策略已变 → 不写成员、不覆盖别人的 lease。
             return
         except Exception as exc:  # noqa: BLE001 - 存储失败：整事务已回滚，不宣称成功
+            logger.error(
+                "事件发现提交失败 run=%s event=%s: %s", run_id, event_id, exc, exc_info=True
+            )
             self._finish_error(run_id, token, event_id, f"commit_error:{type(exc).__name__}")
 
     @staticmethod
@@ -412,7 +421,10 @@ class EventDiscoveryFence:
                 retry_backoff_s=self._manual_cooldown_seconds,
             )
             session.commit()
-        except Exception:  # noqa: BLE001 - 收尾失败不应再抛进事件循环
+        except Exception as exc:  # noqa: BLE001 - 收尾失败不应再抛进事件循环
+            logger.warning(
+                "事件发现错误收尾失败 run=%s event=%s: %s", run_id, event_id, exc, exc_info=True
+            )
             session.rollback()
         finally:
             session.close()

@@ -117,6 +117,13 @@ class _FakeReportGenerator:
             raise type(self).result_error
         return "/tmp/report.md"
 
+    def generate_html_report(self, self_data, benchmark, *, creator_ranking=None, charts=None):
+        """记录打印 HTML 的调用并返回预置文档。"""
+        type(self).calls.append(("html", benchmark))
+        if type(self).result_error is not None:
+            raise type(self).result_error
+        return "<html><body>诊断报告</body></html>"
+
 
 class _FakeAIReporter:
     """契约级假 AI 调研报告器。"""
@@ -365,6 +372,21 @@ def test_export_report_failure_returns_500(client):
     _FakeReportGenerator.result_error = RuntimeError("写盘失败")
     response = client.post("/api/analysis/export-report", json={"uid": 7})
     assert response.status_code == 500
+
+
+def test_report_html_reuses_supplied_snapshot(client):
+    """前端携带自诊快照时，HTML 报告直接复用，不再重新抓取账号数据。"""
+    response = client.post("/api/analysis/report-html", json={
+        "uid": 7,
+        "self_data": {"uid": 7, "fan_stats": {"follower": 100}},
+        "benchmark_status": "not_requested",
+    })
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"]["html"].startswith("<html>")
+    assert body["data"]["filename"].endswith(".pdf")
+    assert _FakeReportGenerator.calls[-1][0] == "html"
 
 
 # ---------------------------------------------------------------------------

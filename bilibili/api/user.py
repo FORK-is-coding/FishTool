@@ -138,6 +138,7 @@ class UserAPIMixin:
                 uid,
                 primary_error,
                 fallback_error,
+                exc_info=True,
             )
             raise BilibiliAPIError(
                 f"获取用户信息失败: 主接口 {primary_error}; 回退接口 {fallback_error}"
@@ -171,7 +172,7 @@ class UserAPIMixin:
             return {'data': data}
             
         except Exception as e:
-            logger.error(f"获取用户关系统计失败 (uid={uid}): {e}")
+            logger.error(f"获取用户关系统计失败 (uid={uid}): {e}", exc_info=True)
             raise BilibiliAPIError(f"获取用户关系统计失败: {e}")
 
     async def get_user_upstat(self, uid: int) -> Dict[str, Any]:
@@ -190,7 +191,7 @@ class UserAPIMixin:
             data = await self.get(url, params={'mid': uid}, need_sign=False)
             return {'data': data}
         except Exception as e:
-            logger.error(f"获取用户累计播放失败 (uid={uid}): {e}")
+            logger.error(f"获取用户累计播放失败 (uid={uid}): {e}", exc_info=True)
             raise BilibiliAPIError(f"获取用户累计播放失败: {e}")
 
     @staticmethod
@@ -248,7 +249,7 @@ class UserAPIMixin:
                 last_code = getattr(exc, 'code', None)
                 logger.warning("充电接口%s不可用(uid=%s): %s", source, uid, exc)
             except Exception as exc:
-                logger.error("获取充电人数失败(%s, uid=%s): %s", source, uid, exc)
+                logger.error("获取充电人数失败(%s, uid=%s): %s", source, uid, exc, exc_info=True)
         return {'charge_count': 0, 'source': 'unavailable', 'raw_code': last_code}
 
     async def get_user_videos(self, uid: int, page: int = 1, page_size: int = 30) -> Dict[str, Any]:
@@ -302,7 +303,7 @@ class UserAPIMixin:
             return {'data': data}
             
         except Exception as e:
-            logger.error(f"获取用户视频失败 (uid={uid}, page={page}): {e}")
+            logger.error(f"获取用户视频失败 (uid={uid}, page={page}): {e}", exc_info=True)
             raise BilibiliAPIError(f"获取用户视频失败: {e}")
 
     async def get_ranking(self, rid: int, day: int = 7, original: int = 0, page: int = 1) -> Dict[str, Any]:
@@ -353,7 +354,7 @@ class UserAPIMixin:
             return {'data': data}
 
         except Exception as e:
-            logger.error(f"获取排行榜失败 (rid={rid}, day={day}, page={page}): {e}")
+            logger.error(f"获取排行榜失败 (rid={rid}, day={day}, page={page}): {e}", exc_info=True)
             raise BilibiliAPIError(f"获取排行榜失败: {e}")
 
     async def get_room_base_info(self, uids: List[int]) -> Dict[str, Any]:
@@ -415,5 +416,5 @@ class UserAPIMixin:
             )
             return {'data': data}
         except Exception as e:
-            logger.error(f"获取大航海列表失败 (room={room_id}, ruid={ruid}): {e}")
+            logger.error(f"获取大航海列表失败 (room={room_id}, ruid={ruid}): {e}", exc_info=True)
             raise BilibiliAPIError(f"获取大航海列表失败: {e}")

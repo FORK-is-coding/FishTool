@@ -2,12 +2,12 @@
 
 ## 1. 运行入口
 
-- `python start_web.py`：先 `init_project()` 初始化配置、数据库、目录，再由 uvicorn 加载 `web.main:app`。
-- `python start_desktop.py`：PyQt 桌面入口；主窗口内嵌 WebUI，首次运行由向导写入加密配置。
-- `web/main.py` lifespan：再次确保 ConfigManager 和数据库全局单例可用，创建 `ResidentCommentMonitor`，启动后台循环，关闭时取消任务。
-- `main.py`：源码级初始化/入口逻辑；维护 Web 服务优先看 `start_web.py` 与 `web/main.py`。
+- `python app.py`：唯一启动入口，默认启动 PyQt 桌面版（主窗口 + 桌宠）；`MainWindow` 会自动通过 `app.py web` 子进程启动本地 Web 服务，因此浏览器访问 `http://localhost:8000` 同样可用。
+- `python app.py web`：仅启动 Web 版；先初始化配置、数据库、目录，再由 uvicorn 加载 `web.main:app`。
+- `python app.py init`：只初始化配置、数据库和目录。
+- `web/main.py` 只是 FastAPI 应用模块（lifespan、路由、静态页、WebSocket），不再作为独立入口；启动统一走 `app.py web`。
 
-注意：`config/config.yaml` 的 server 默认端口是 8080，但 `start_web.py` CLI 默认端口为 8000；实际以启动参数为准。CORS 当前白名单同时覆盖 8000/8080 本机地址。
+注意：`config/config.yaml` 的 server 默认端口是 8080，但 `app.py` 的 CLI 默认端口为 8000；实际以启动参数为准。CORS 当前白名单同时覆盖 8000/8080 本机地址。
 
 ## 2. 分层依赖
 

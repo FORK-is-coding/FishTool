@@ -125,7 +125,7 @@ async def get_auth_status():
             "cookie_masked": _mask_cookie(cookie),
         }
     except Exception as e:
-        logger.error(f"[auth] 查询登录态失败: {e}")
+        logger.error(f"[auth] 查询登录态失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"查询登录态失败: {str(e)}")
 
 
@@ -152,7 +152,7 @@ async def get_qrcode():
             "qrcode_base64": qr.get_qrcode_image_base64(qr_img),
         }
     except Exception as e:
-        logger.error(f"[auth] 生成二维码失败: {e}")
+        logger.error(f"[auth] 生成二维码失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"生成二维码失败: {str(e)}")
 
 
@@ -242,7 +242,7 @@ async def poll_login(request: QrPollRequest):
 
     except Exception as e:
         # 网络抖动等异常不抛 500，返回 error 让前端继续/重试
-        logger.error(f"[auth] 查询登录状态失败: {e}")
+        logger.error(f"[auth] 查询登录状态失败: {e}", exc_info=True)
         return {"success": True, "status": "error",
                 "message": f"查询失败: {str(e)}", "user": None}
 
@@ -260,5 +260,5 @@ async def logout():
         logger.info("[auth] 已清除登录态")
         return {"success": True, "message": "已清除登录态"}
     except Exception as e:
-        logger.error(f"[auth] 清除登录态失败: {e}")
+        logger.error(f"[auth] 清除登录态失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"清除登录态失败: {str(e)}")

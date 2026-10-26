@@ -463,7 +463,7 @@ class SelfAnalyzer:
             return result
             
         except Exception as e:
-            logger.error(f"[自诊] 数据采集失败: {e}")
+            logger.error(f"[自诊] 数据采集失败: {e}", exc_info=True)
             # 抛出异常中断流程
             raise
     

@@ -141,6 +141,158 @@ function showAppAlert(message) {
     closeButton.focus();
 }
 
+// ============ 高优先级错误 Toast ============
+// 后端 core.toast 通过 /ws 推送 type=toast；这里只负责展示，不反向影响业务流程。
+const APP_TOAST_TITLES = { info: '提示', warning: '注意', error: '操作失败' };
+const APP_TOAST_MAX = 4;
+let appToastSocket = null;
+let appToastReconnectTimer = 0;
+
+/**
+ * 懒创建 toast 容器，固定右上角并限制最大宽度。
+ * @returns {HTMLElement} toast 容器。
+ */
+function ensureToastStack() {
+    let stack = document.getElementById('app-toast-stack');
+    if (stack) return stack;
+    stack = document.createElement('div');
+    stack.id = 'app-toast-stack';
+    stack.className = 'app-toast-stack';
+    // aria-live 让读屏软件在错误出现时播报，但不抢占当前焦点。
+    stack.setAttribute('aria-live', 'polite');
+    stack.setAttribute('aria-atomic', 'false');
+    document.body.append(stack);
+    return stack;
+}
+
+/**
+ * 展示一条自动消失的 toast；错误按高优先级停留更久。
+ * @param {unknown} message 正文。
+ * @param {{title?: string, level?: string, duration?: number}} options 展示选项。
+ * @returns {void}
+ */
+function showToast(message, options = {}) {
+    const toastOptions = options || {};
+    const text = String(message ?? '').trim();
+    if (!text) return;
+
+    const level = Object.prototype.hasOwnProperty.call(APP_TOAST_TITLES, toastOptions.level)
+        ? toastOptions.level
+        : 'error';
+    const title = String(toastOptions.title || APP_TOAST_TITLES[level]);
+    const stack = ensureToastStack();
+
+    // 同一正文在短时间内重复推送时只保留最新一条，避免轮询失败刷屏。
+    Array.from(stack.children).forEach(item => {
+        if (item.dataset.message === text) item.remove();
+    });
+    while (stack.children.length >= APP_TOAST_MAX) {
+        stack.firstElementChild?.remove();
+    }
+
+    const toast = document.createElement('div');
+    toast.className = `app-toast is-${level}`;
+    toast.dataset.message = text;
+    toast.setAttribute('role', level === 'error' ? 'alert' : 'status');
+
+    const titleElement = document.createElement('strong');
+    titleElement.className = 'app-toast-title';
+    titleElement.textContent = title;
+
+    const contentElement = document.createElement('span');
+    contentElement.className = 'app-toast-message';
+    contentElement.textContent = text;
+
+    const closeButton = document.createElement('button');
+    closeButton.type = 'button';
+    closeButton.className = 'app-toast-close';
+    closeButton.setAttribute('aria-label', '关闭提示');
+    closeButton.textContent = '×';
+
+    const removeToast = () => {
+        if (!toast.isConnected) return;
+        toast.classList.add('is-leaving');
+        window.setTimeout(() => toast.remove(), 180);
+    };
+    closeButton.addEventListener('click', removeToast);
+
+    toast.append(titleElement, contentElement, closeButton);
+    stack.append(toast);
+
+    // 错误停留 8 秒，警告 6 秒，普通提示 4 秒；调用方可显式覆盖。
+    const fallbackDuration = level === 'error' ? 8000 : (level === 'warning' ? 6000 : 4000);
+    const duration = Number.isFinite(toastOptions.duration) && toastOptions.duration > 0
+        ? toastOptions.duration
+        : fallbackDuration;
+    window.setTimeout(removeToast, duration);
+}
+
+/**
+ * 连接后端 /ws，接收高优先级错误 toast；断线后按 1s→30s 退避重连。
+ * @returns {void}
+ */
+function initToastSocket() {
+    if (appToastSocket || typeof window.WebSocket !== 'function') return;
+
+    let retryDelay = 1000;
+    const scheduleReconnect = () => {
+        if (appToastReconnectTimer) return;
+        appToastReconnectTimer = window.setTimeout(() => {
+            appToastReconnectTimer = 0;
+            connectToastSocket();
+        }, retryDelay);
+        retryDelay = Math.min(retryDelay * 2, 30000);
+    };
+
+    const connectToastSocket = () => {
+        if (appToastSocket || !window.location.host) return;
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        let socket;
+        try {
+            socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+        } catch (error) {
+            console.warn('Toast WebSocket 创建失败:', error);
+            scheduleReconnect();
+            return;
+        }
+        appToastSocket = socket;
+
+        socket.addEventListener('open', () => {
+            retryDelay = 1000;
+        });
+        socket.addEventListener('message', event => {
+            let payload;
+            try {
+                payload = JSON.parse(event.data);
+            } catch (error) {
+                console.warn('Toast WebSocket 消息不是有效 JSON:', error);
+                return;
+            }
+            if (!payload || payload.type !== 'toast') return;
+            const data = payload.data || {};
+            showToast(data.message, {
+                title: data.title,
+                level: data.level,
+                duration: data.duration,
+            });
+        });
+        socket.addEventListener('close', () => {
+            if (appToastSocket === socket) appToastSocket = null;
+            scheduleReconnect();
+        });
+        socket.addEventListener('error', () => {
+            // 关闭动作交给 close 事件统一重连，避免同一次故障排两次队。
+            try {
+                socket.close();
+            } catch (error) {
+                console.warn('Toast WebSocket 关闭失败:', error);
+            }
+        });
+    };
+
+    connectToastSocket();
+}
+
 
 
 // ============ 评论区常驻监控控制 ============
@@ -212,11 +364,14 @@ window.addEventListener('DOMContentLoaded', () => {
     // 加载评论区常驻监控状态卡片。
     loadResidentMonitorStatus();
     loadAuthStatus();
+    // 订阅后端高优先级错误 toast（断线自动重连，不阻塞页面其它初始化）。
+    initToastSocket();
 });
 
 // 显式导出弹窗入口，兼容模板 onclick、内嵌浏览器和普通浏览器三种调用方式。
 Object.assign(window, {
     showGroupQrModal,
     showAppAlert,
+    showToast,
     verifyLotteryWinners,
 });

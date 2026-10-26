@@ -108,7 +108,7 @@ class UPDataFetcher:
             logger.warning(f"无法从链接提取UID: {url}")
             return None
         except Exception as e:
-            logger.error(f"解析UID失败: {e}")
+            logger.error(f"解析UID失败: {e}", exc_info=True)
             return None
     
     async def fetch_from_zeroroku(self, uid: int) -> Optional[Dict[str, Any]]:
@@ -297,7 +297,7 @@ class UPDataFetcher:
         except Exception as exc:
             if session is not None:
                 session.rollback()
-            logger.error("UP主增量快照落库失败: %s", exc)
+            logger.error("UP主增量快照落库失败: %s", exc, exc_info=True)
         finally:
             if session is not None:
                 session.close()
@@ -358,7 +358,7 @@ class UPDataFetcher:
                        f"互动率: {metrics['engagement_rate']}%")
             
         except Exception as e:
-            logger.error(f"[本地估算] 计算失败: {e}")
+            logger.error(f"[本地估算] 计算失败: {e}", exc_info=True)
         
         return metrics
 
@@ -631,5 +631,5 @@ class UPDataFetcher:
         except Exception as e:
             # 记录完整失败原因，交给路由转成明确错误
             message = f"获取{category}分区榜单失败：{e}（B站 ranking/v2 的 type 参数只接受 all/origin 字符串，请检查请求参数）"
-            logger.error(f"[分区榜单] {message}")
+            logger.error(f"[分区榜单] {message}", exc_info=True)
             raise BilibiliAPIError(message) from e

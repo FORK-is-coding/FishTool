@@ -16,8 +16,9 @@
 8. 改进建议：基于数据自动生成 4 类建议
 9. 结束语
 
-二、PDF 报告（generate_pdf_report）
-- markdown2 转 HTML + pdfkit 转 PDF
+二、HTML/PDF 报告（generate_html_report / generate_pdf_report）
+- HTML 使用同一份诊断数据与打印 CSS，桌面端可另存为 PDF
+- PDF 走 markdown2 转 HTML + pdfkit 转 PDF
 - 依赖缺失时自动降级为 Markdown
 - 内置 B 站主题 CSS（蓝粉配色）
 
@@ -39,11 +40,108 @@ from datetime import datetime
 from pathlib import Path
 # 导入模块
 import logging
+# HTML 转义：Markdown 依赖缺失时仍能安全输出纯文本报告
+import html
+# 正则：把数据可视化章节插到标题元信息后的第一根分隔线之后
+import re
 
 # 从 core.logger 导入符号
 from core.logger import get_logger
 
 logger = get_logger(__name__)
+
+#: 打印/PDF 报告样式：暖白底、B 站粉棕强调色、表格与分页友好。
+_REPORT_PRINT_CSS = """
+@page { size: A4; margin: 14mm 14mm 16mm; }
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: #ffffff; }
+body {
+    font-family: "Microsoft YaHei", "SimHei", "PingFang SC", sans-serif;
+    color: #3f3a36;
+    font-size: 11pt;
+    line-height: 1.72;
+}
+.report { width: 100%; max-width: none; margin: 0; padding: 4px 2px; }
+h1 {
+    margin: 0 0 14px;
+    padding-bottom: 10px;
+    font-size: 22pt;
+    font-weight: 700;
+    color: #b46f69;
+    border-bottom: 3px solid #d4a373;
+    letter-spacing: 1px;
+}
+h2 {
+    margin: 24px 0 10px;
+    padding: 4px 0 4px 10px;
+    font-size: 15pt;
+    color: #8a5a43;
+    border-left: 5px solid #d4a373;
+    page-break-after: avoid;
+}
+h3 { margin: 16px 0 8px; font-size: 12.5pt; color: #514a45; page-break-after: avoid; }
+p { margin: 6px 0; }
+strong { color: #514a45; }
+ul, ol { margin: 6px 0 10px; padding-left: 22px; }
+li { margin: 3px 0; }
+hr { border: none; border-top: 1px solid #e6d9cc; margin: 18px 0; }
+table {
+    width: 100%;
+    margin: 10px 0 16px;
+    border-collapse: collapse;
+    font-size: 10pt;
+    page-break-inside: avoid;
+}
+th, td {
+    padding: 7px 9px;
+    border: 1px solid #e3d8cc;
+    text-align: left;
+    vertical-align: top;
+    word-break: break-word;
+}
+th { background: #faf7f2; color: #514a45; font-weight: 600; }
+tr:nth-child(even) td { background: #fffdf9; }
+blockquote {
+    margin: 10px 0;
+    padding: 8px 12px;
+    color: #6b625a;
+    background: #faf7f2;
+    border-left: 4px solid #d4a373;
+}
+code {
+    padding: 1px 4px;
+    color: #8a5a43;
+    background: #f5efe8;
+    border-radius: 4px;
+    font-family: Consolas, "Courier New", monospace;
+}
+pre { padding: 10px; background: #faf7f2; border: 1px solid #e3d8cc; white-space: pre-wrap; }
+a { color: #b46f69; text-decoration: none; }
+.report-charts { margin: 18px 0 8px; }
+.report-chart {
+    margin: 0 0 18px;
+    text-align: center;
+    page-break-inside: avoid;
+}
+.report-chart img {
+    width: 100%;
+    max-width: 620px;
+    height: auto;
+    border: 1px solid #ece2d7;
+    border-radius: 8px;
+}
+.report-chart figcaption,
+.report-chart-caption {
+    margin: 6px 0 0;
+    color: #6b625a;
+    font-size: 10pt;
+    text-align: center;
+}
+@media print {
+    body { font-size: 10.5pt; }
+    h2, h3, table, blockquote { page-break-inside: avoid; }
+}
+"""
 
 
 def _format_metric(value: Any, *, suffix: str = "") -> str:
@@ -659,10 +757,122 @@ class ReportGenerator:
             return str(filepath)
             
         except Exception as e:
-            logger.error(f"[报告生成] 保存Markdown报告失败: {e}")
+            logger.error(f"[报告生成] 保存Markdown报告失败: {e}", exc_info=True)
             # 抛出异常中断流程
             raise
     
+    def generate_html_report(self,
+                             self_data: Dict[str, Any],
+                             benchmark_data: Optional[Dict[str, Any]] = None,
+                             *,
+                             creator_ranking: Optional[Dict[str, Any]] = None,
+                             charts: Optional[Dict[str, str]] = None) -> str:
+        """生成可直接打印/另存为 PDF 的 HTML 报告。
+
+        与 Markdown/PDF 使用同一份诊断数据，避免导出时重新抓取账号数据；
+        桌面端通过 Qt 渲染该 HTML 并由用户选择保存路径。
+
+        Args:
+            self_data: 账号数据。
+            benchmark_data: benchmark 对比数据（可选）。
+            creator_ranking: 冻结的同行排名结果（仅 keyword-only）。
+            charts: 前端捕获的图表 PNG/JPEG data URI，键为
+                ``volume`` / ``engagement`` / ``benchmark`` / ``tag_cloud``。
+
+        Returns:
+            str: 完整 HTML 文档。
+        """
+        md_content = self.generate_markdown_report(
+            self_data, benchmark_data, creator_ranking=creator_ranking
+        )
+        try:
+            import markdown2
+            body_html = markdown2.markdown(
+                md_content,
+                extras=['tables', 'fenced-code-blocks', 'break-on-newline'],
+            )
+        except ImportError:
+            # 依赖缺失时至少保留可读的纯文本，不让导出直接失败。
+            body_html = f"<pre>{html.escape(md_content)}</pre>"
+
+        charts_html = self._build_charts_html(charts, benchmark_data)
+        if charts_html:
+            body_html = self._insert_after_first_hr(body_html, charts_html)
+
+        return (
+            "<!DOCTYPE html>\n"
+            "<html lang=\"zh-CN\">\n<head>\n"
+            "<meta charset=\"UTF-8\">\n"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
+            "<title>B站账号诊断报告</title>\n"
+            f"<style>{_REPORT_PRINT_CSS}</style>\n"
+            "</head>\n<body>\n"
+            f"<main class=\"report\">{body_html}</main>\n"
+            "</body>\n</html>"
+        )
+
+    @staticmethod
+    def _valid_chart_data(value: Any) -> bool:
+        """校验前端图表 data URI，避免把任意字符串塞进 img src。"""
+        if not isinstance(value, str):
+            return False
+        if len(value) > 8_000_000:
+            return False
+        if not value.startswith(("data:image/png;base64,", "data:image/jpeg;base64,")):
+            return False
+        payload = value.split(",", 1)[1]
+        # 只接受标准 base64，防止通过引号/事件属性注入 HTML。
+        return re.fullmatch(r"[A-Za-z0-9+/=\s]+", payload) is not None
+
+    @classmethod
+    def _build_charts_html(cls, charts: Optional[Dict[str, str]],
+                           benchmark_data: Optional[Dict[str, Any]]) -> str:
+        """构建“数据可视化”章节；没有有效图片时返回空字符串。"""
+        if not charts:
+            return ""
+        benchmark_label = "分区播放基准"
+        if benchmark_data and benchmark_data.get("category"):
+            benchmark_label = f"{benchmark_data['category']}分区播放基准"
+        if cls._valid_chart_data(charts.get("dashboard")):
+            # 前端优先把柱状图/雷达图/词云合成一张仪表盘图，避免 PDF 分页拆散。
+            labels = [("dashboard", "账号数据可视化")]
+        else:
+            labels = [
+                ("volume", "内容互动总量"),
+                ("engagement", "互动效率 · 三角维度"),
+                ("benchmark", benchmark_label),
+                ("tag_cloud", "总体视频 Tag 词云"),
+            ]
+        figures = []
+        for key, label in labels:
+            data = charts.get(key)
+            if not cls._valid_chart_data(data):
+                continue
+            alt = html.escape(label, quote=True)
+            caption = ""
+            if key != "dashboard":
+                caption = f'<p class="report-chart-caption">{html.escape(label)}</p>'
+            figures.append(
+                f'<div class="report-chart">'
+                f'<img src="{data}" width="620" alt="{alt}">'
+                f'{caption}'
+                f'</div>'
+            )
+        if not figures:
+            return ""
+        if cls._valid_chart_data(charts.get("dashboard")):
+            # 合成图自带各面板标题；不再加独立 h2，避免标题和图片被分页拆开。
+            return '<section class="report-charts">' + "".join(figures) + "</section>"
+        return '<section class="report-charts"><h2>数据可视化</h2>' + "".join(figures) + "</section>"
+
+    @staticmethod
+    def _insert_after_first_hr(body_html: str, insert_html: str) -> str:
+        """把图表章节插到标题元信息后的第一根分隔线之后。"""
+        match = re.search(r"<hr\b[^>]*>", body_html, flags=re.IGNORECASE)
+        if match is None:
+            return body_html + insert_html
+        return body_html[:match.end()] + insert_html + body_html[match.end():]
+
     def _save_markdown_fallback(self,
                                 self_data: Dict[str, Any],
                                 benchmark_data: Optional[Dict[str, Any]],
@@ -710,77 +920,18 @@ class ReportGenerator:
         
         # 异常保护：局部失败不影响主流程
         try:
-            # 先生成Markdown
-            md_content = self.generate_markdown_report(self_data, benchmark_data, creator_ranking=creator_ranking)
-            
-            # 使用markdown2转HTML，再用pdfkit转PDF
-            # 需要安装: pip install markdown2 pdfkit
-            # 以及wkhtmltopdf: https://wkhtmltopdf.org/downloads.html
+            # 生成与桌面端保存 PDF 使用同一套 HTML/CSS。
+            styled_html = self.generate_html_report(
+                self_data, benchmark_data, creator_ranking=creator_ranking
+            )
+
             try:
-                # 导入模块
-                import markdown2
-                # 导入模块
+                # PDF 仍走可选 pdfkit；桌面端另存 PDF 不依赖它。
                 import pdfkit
             except ImportError:
-                logger.warning("[报告生成] 缺少PDF依赖（markdown2/pdfkit），降级为Markdown")
+                logger.warning("[报告生成] 缺少PDF依赖（pdfkit），降级为Markdown")
                 return self._save_markdown_fallback(self_data, benchmark_data, filename,
                                                     creator_ranking=creator_ranking)
-            
-            # Markdown转HTML
-            html_content = markdown2.markdown(md_content, extras=['tables', 'fenced-code-blocks'])
-            
-            # 添加CSS样式（B站主题蓝粉配色）
-            # 将元素加入容器/布局
-            styled_html = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="UTF-8">
-                <style>
-                    body {{
-                        font-family: "SimHei", "Microsoft YaHei", sans-serif;
-                        line-height: 1.6;
-                        max-width: 900px;
-                        margin: 40px auto;
-                        padding: 20px;
-                        color: #333;
-                    }}
-                    h1 {{
-                        color: #00a1d6;
-                        border-bottom: 2px solid #00a1d6;
-                        padding-bottom: 10px;
-                    }}
-                    h2 {{
-                        color: #fb7299;
-                        margin-top: 30px;
-                        border-left: 4px solid #fb7299;
-                        padding-left: 10px;
-                    }}
-                    h3 {{
-                        color: #666;
-                    }}
-                    code {{
-                        background: #f5f5f5;
-                        padding: 2px 6px;
-                        border-radius: 3px;
-                    }}
-                    blockquote {{
-                        border-left: 4px solid #ddd;
-                        padding-left: 15px;
-                        color: #666;
-                    }}
-                    hr {{
-                        border: none;
-                        border-top: 1px solid #ddd;
-                        margin: 30px 0;
-                    }}
-                </style>
-            </head>
-            <body>
-                {html_content}
-            </body>
-            </html>
-            """
             
             # 确定文件名
             if not filename:
@@ -804,7 +955,7 @@ class ReportGenerator:
             return str(filepath)
             
         except Exception as e:
-            logger.error(f"[报告生成] PDF生成失败: {e}，降级为Markdown")
+            logger.error(f"[报告生成] PDF生成失败: {e}，降级为Markdown", exc_info=True)
             # 降级为 Markdown，返回 .md 路径而非伪装成 PDF。
             return self._save_markdown_fallback(self_data, benchmark_data, filename,
                                                 creator_ranking=creator_ranking)

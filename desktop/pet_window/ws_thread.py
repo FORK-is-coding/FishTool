@@ -70,7 +70,7 @@ class WebSocketThread(QThread):
             self.ws.run_forever()
             
         except Exception as e:
-            logger.error(f"[WebSocket] 线程异常: {e}")
+            logger.error(f"[WebSocket] 线程异常: {e}", exc_info=True)
             # 发射 Qt 信号
             self.error.emit(str(e))
     
@@ -99,8 +99,9 @@ class WebSocketThread(QThread):
                     # 等待一段时间
                     # 阻塞直到条件满足或超时
                     threading.Event().wait(30)  # 30秒心跳
-                except Exception:
-                    # 退出循环
+                except Exception as exc:
+                    # 连接已不可用，心跳线程退出；由 WebSocket 线程负责重连。
+                    logger.warning("[WebSocket] 心跳发送失败，停止心跳线程: %s", exc, exc_info=True)
                     break
         
         # 启动线程/进程/服务
@@ -124,7 +125,7 @@ class WebSocketThread(QThread):
             # 通过信号发送到主线程
             self.message_received.emit(data)
         except Exception as e:
-            logger.error(f"[WebSocket] 消息解析失败: {e}")
+            logger.error(f"[WebSocket] 消息解析失败: {e}", exc_info=True)
     
     def on_error(self, ws, error):
         """WebSocket错误

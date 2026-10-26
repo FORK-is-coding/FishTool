@@ -242,6 +242,7 @@ class MonitorAlertsMixin:
         """
         # 预警入库链路：CommentAlert 表 + 可选回调推送
         # 事务失败回滚，保证预警不丢失
+        session = None
         try:
             # 赋值并准备后续使用
             session = get_session()
@@ -292,21 +293,22 @@ class MonitorAlertsMixin:
                         await self.alert_callback(alert_data)
                     # 异常处理
                     except Exception as e:
-                        logger.error(f"调用预警回调失败: {e}")
+                        logger.error(f"调用预警回调失败: {e}", exc_info=True)
             
             # 提交事务
             session.commit()
             logger.info(f"保存了 {len(alerts)} 条预警记录")
             
         except Exception as e:
-            logger.error(f"保存监控记录失败: {e}")
-            # 回滚事务
-            session.rollback()
+            logger.error(f"保存监控记录失败: {e}", exc_info=True)
+            # 回滚事务；get_session 失败时 session 仍未创建，不能盲目回滚。
+            if session is not None:
+                session.rollback()
         # 异常处理
         finally:
             # 关闭连接释放资源
-            # 释放连接/窗口资源
-            session.close()
+            if session is not None:
+                session.close()
 
     async def get_alerts(self, 
                         # 赋值并准备后续使用
@@ -338,6 +340,7 @@ class MonitorAlertsMixin:
         # 查询链路：多条件叠加过滤，无条件的查询全量
         # 返回最近 limit 条，按时间倒序排列
         # 将结果交回调用方
+        session = None
         try:
             # 赋值并准备后续使用
             session = get_session()
@@ -392,13 +395,13 @@ class MonitorAlertsMixin:
             return result
             
         except Exception as e:
-            logger.error(f"查询预警失败: {e}")
+            logger.error(f"查询预警失败: {e}", exc_info=True)
             return []
         # 异常处理
         finally:
             # 关闭连接释放资源
-            # 释放连接/窗口资源
-            session.close()
+            if session is not None:
+                session.close()
 
     async def mark_alert_read(self, alert_id: int) -> bool:
         """标记预警为已读
@@ -412,6 +415,7 @@ class MonitorAlertsMixin:
         # 幂等操作：重复标记已读不报错
         # 返回布尔值供调用方判断是否找到记录
         # 根据条件走向不同处理分支
+        session = None
         try:
             # 赋值并准备后续使用
             session = get_session()
@@ -431,12 +435,13 @@ class MonitorAlertsMixin:
             return True
             
         except Exception as e:
-            logger.error(f"标记预警失败: {e}")
-            # 回滚事务
-            session.rollback()
+            logger.error(f"标记预警失败: {e}", exc_info=True)
+            # 回滚事务；get_session 失败时 session 仍未创建。
+            if session is not None:
+                session.rollback()
             return False
         # 异常处理
         finally:
             # 关闭连接释放资源
-            # 释放连接/窗口资源
-            session.close()
+            if session is not None:
+                session.close()

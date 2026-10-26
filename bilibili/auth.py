@@ -242,7 +242,7 @@ class QRCodeLogin:
                     raise
                 except Exception as e:
                     # 网络抖动等异常，记录后继续下一轮
-                    logger.error(f"查询登录状态时出错: {e}")
+                    logger.error(f"查询登录状态时出错: {e}", exc_info=True)
                     if callback:
                         callback(QRLoginStatus.ERROR, str(e))
                 
@@ -312,7 +312,7 @@ class QRCodeLogin:
                 return cookie
                 
         except Exception as e:
-            logger.error(f"解析Cookie失败: {e}")
+            logger.error(f"解析Cookie失败: {e}", exc_info=True)
             return ""
 
     @staticmethod
@@ -342,8 +342,9 @@ class QRCodeLogin:
                 if '=' in first:
                     key, value = first.split('=', 1)
                     cookie_values[key.strip()] = value.strip()
-            except Exception:
-                # 单条头解析失败不影响其他
+            except Exception as exc:
+                # 单条头解析失败不影响其他；不记录 header 内容，避免 Cookie 泄漏。
+                logger.debug("解析 Set-Cookie 头失败，已跳过该条: %s", exc, exc_info=True)
                 continue
         
         # 只提取登录态必需的三项
@@ -433,10 +434,11 @@ class CookieLoginHelper:
                 is_login = data.get('isLogin', False)
                 return is_login
                 
-        except CookieExpiredError:
+        except CookieExpiredError as exc:
+            logger.debug("Cookie 已过期，验证结果为无效: %s", exc)
             return False
         except Exception as e:
-            logger.error(f"验证Cookie失败: {e}")
+            logger.error(f"验证Cookie失败: {e}", exc_info=True)
             return False
     
     @staticmethod
@@ -552,6 +554,7 @@ async def example_qr_login():
         )
         print(f"登录结果: {result}")
     except Exception as e:
+        logger.error("二维码登录失败: %s", e, exc_info=True)
         print(f"登录失败: {e}")
 
 

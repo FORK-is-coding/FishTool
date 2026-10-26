@@ -196,6 +196,7 @@ class RankingProfileCollector:
         except RequestBudgetExceeded:
             raise
         except Exception as exc:  # noqa: BLE001 - 单账号失败记录后继续，最终由 status 表达
+            logger.warning("排名采集：读取账号资料失败 uid=%s: %s", uid, exc, exc_info=True)
             errors.append({'stage': 'profile', 'message': str(exc)})
             payload = None
 
@@ -228,6 +229,7 @@ class RankingProfileCollector:
         except RequestBudgetExceeded:
             raise
         except Exception as exc:  # noqa: BLE001
+            logger.warning("排名采集：读取账号关系失败 uid=%s: %s", uid, exc, exc_info=True)
             errors.append({'stage': 'relation', 'message': str(exc)})
             relation = None
 
@@ -293,6 +295,9 @@ class RankingProfileCollector:
             except RequestBudgetExceeded:
                 raise
             except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "排名采集：读取投稿列表失败 uid=%s page=%s: %s", uid, page, exc, exc_info=True
+                )
                 errors.append({'stage': 'list_page', 'page': page, 'message': str(exc)})
                 page_failed = collected_count == 0
                 stop_reason = 'page_error'
@@ -502,6 +507,7 @@ class RankingProfileCollector:
         except RequestBudgetExceeded:
             raise
         except Exception as exc:  # noqa: BLE001 - 单稿失败不影响已入选稿件事实，但会标记选稿不完整
+            logger.warning("排名采集：读取稿件详情失败 bvid=%s: %s", bvid, exc, exc_info=True)
             errors.append({'stage': 'detail', 'bvid': bvid, 'message': str(exc)})
             return None, 'detail_error'
         if not isinstance(data, dict):
@@ -594,6 +600,7 @@ async def discover_candidates(
         except RequestBudgetExceeded:
             raise
         except Exception as exc:  # noqa: BLE001 - 单页失败记录后停止，不循环换账号绕限流
+            logger.warning("排名采集：读取排行榜失败 page=%s: %s", page, exc, exc_info=True)
             failures.append({'page': page, 'message': str(exc)})
             break
 

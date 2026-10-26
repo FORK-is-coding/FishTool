@@ -10,6 +10,94 @@
 
 ## [未发布]
 
+### 账号自诊报告导出
+
+- “导出报告”改为 PDF：未自诊时 toast 提示“请先进行自诊”；自诊成功后复用当前结果，
+  不再重复抓取账号数据。
+- 桌面端点击导出弹出原生 Windows 保存对话框，选择路径后由 Qt 直接渲染 PDF；
+  普通浏览器无原生桥接时降级为打印预览，可选“另存为 PDF”。
+- 新增 `/api/analysis/report-html`，用 Markdown/HTML 打印样式生成报告；
+  修复原有 PDF 依赖 `wkhtmltopdf` 缺失时降级成 Markdown 的问题。
+- 桌面端新增报告保存桥与 `desktop/report_export.py`，PDF 使用 A4 页面与中文字体。
+- 报告新增“数据可视化”：导出时把柱状图、互动雷达图、可选分区基准图和 Tag 词云
+  用 Canvas/ECharts 合成同一主题的仪表盘图片，随 HTML 一起嵌入 PDF，避免图表丢失。
+
+### 启动默认页修复
+
+- 修复桌面端启动后默认落到“抽奖工具”页：启动自检会点击“中奖名单校验”按钮，
+  而 `verifyLotteryWinners()` 原先先 `navigateTo('lottery')` 再校验中奖名单。
+  现在先检查名单，空名单只提示不跳转；桌面自检结束后也会显式恢复欢迎页。
+- `app.lottery.js` 版本号更新为 `welcomefix-20261026`。
+
+### 桌宠单击/拖拽判定修复
+
+- 桌宠鼠标按下时不再立刻切到 `STATE_DRAGGING`；左键按住超过 100ms 即进入拖拽态
+  （即使没有位移也有明确的拖拽形态反馈）；快速拖动仍以 6px/系统拖拽距离作为兜底。
+- 释放时按“长按或拖动过”分流：拖拽才保存位置；快速单击触发 `toggle_menu()`。
+- 桌宠快捷菜单重做视觉：暖白圆角卡片、主操作/普通/危险三级按钮、hover/pressed/focus 状态，
+  面板尺寸调整为 236x176。
+- 更新 `tests/test_desktop_pet_ui.py`，覆盖长按计时、阈值内抖动、拖拽释放不弹菜单、单击展开菜单。
+
+### 热点发现页 UI 统一
+
+- 热点生命周期：算法口径/采集分区/数量/播放量下限下拉框统一使用 `.form-control` 设计令牌，
+  进度条改为与全局 loading 一致的主题渐变、10px 圆角轨道样式。
+- 事件工作台：通用 `.btn` 增加统一的中性描边/悬停/禁用/键盘焦点样式；归属方式单选框改为
+  主题色自定义圆形控件；事件工作台由 `.card` 改为 `.section`，去掉误继承的居中文本和悬停上浮，
+  输入框改为整行铺满。
+- 热点页表单组改为 flex 行布局：标签独占一行，输入框/下拉框/按钮统一 20px 间距；
+  CreatorBrief 网格内输入框铺满列宽，解决控件贴在一起的问题。
+- 同步更新 `style.pages.css`、`style.hotspot.css` 版本号，避免旧样式缓存。
+
+### 进度反馈修复（假进度条 → 真实进度 / 转圈 loading）
+
+- 通用 `showLoading`：`progress` 为 `null` / `undefined` / `0`（尚无真实进度）时不再画 0% 假进度条，
+  改为统一转圈 loading + 文案；只有拿到大于 0 的真实进度才显示百分比与进度条。
+- 评论采集：快速模式保留 `已采集/上限` 真实进度条；全面采集没有总量，改为转圈 + 已采集条数，
+  采集结束/失败后自动隐藏进度区。
+- 标签云：移除结果区固定 100% 的假 `<progress>`，完成状态改为文字汇总。
+- 抽奖快速筛选、中奖名单校验：静态 18%/25% 改为转圈 loading；筛选/抽奖任务仍使用后端真实回调进度。
+- 热点词云、UP 拆解、排名、活动、选题、LLM 用量等入口：无真实进度的加载态统一显示转圈，不再停在 0%。
+- 前端静态资源版本号更新为 `progress-20261026`，避免旧 JS/CSS 缓存。
+
+### 统一启动入口
+
+- 新增根目录 `app.py` 作为唯一启动入口：
+  - `python app.py`：默认桌面版，同时自动启动 `http://localhost:8000` 的 Web 服务；
+  - `python app.py web`：仅启动 Web 版，支持 `--host/--port/--reload/--init-only`；
+  - `python app.py init`：只初始化配置、数据库和运行目录。
+- 删除根目录 `main.py`、`start_web.py`、`start_desktop.py`；桌面源码模式改为通过
+  `app.py web --port <port>` 启动 Web 子进程，仍保持日志落盘与子进程退出检测。
+- `web/main.py` 仅保留为 FastAPI 应用模块，移除其 `__main__` 直接启动入口；
+  `desktop/main_window.py`、`desktop/pet_window/runner.py` 也移除重复入口。
+- `build.spec` 改为只打包 `app.py`，并补充 `web.main` hidden import；README、QUICKSTART、
+  STRUCTURE、交接文档同步更新。
+
+### 异常处理统一（低优先级 logger / 高优先级 toast）
+
+- 新增 `core/error_policy.py`：统一的 `report_exception` / `log_low_priority` /
+  `report_high_priority`，按异常类型或显式参数分级；HIGH 级别写 ERROR 日志并投递 toast。
+- 新增 `core/toast.py`：进程内 toast 总线（注册/注销 sink、短窗口去重、sink 故障隔离）；
+  无 UI 环境只记日志，不抛异常。
+- Web 侧 `web/main.py`：lifespan 注册 `/ws` 广播 sink；`HTTPException` 5xx 与未处理异常
+  统一写 ERROR 日志并推送 toast；WebSocket 广播失败会记录堆栈并移除坏连接。
+- 前端 `app.ui.js` / `style.modal.css`：新增右上角 `showToast()` 与 `/ws` 自动重连订阅；
+  桌宠新增 `type=toast` 通知气泡，主窗口新增非阻塞 `show_toast()` 托盘提示。
+- 前端 `apiRequest`：5xx 改走 toast（与后端 `/ws` 同文案去重），4xx 保留既有模态提示；
+  FastAPI 结构化 `detail` 不再被拼成 `[object Object]`。
+- 清理全部生产代码中的静默宽泛捕获：54 处宽泛 silent except 降为 0（测试/工具目录除外），
+  89 处 ERROR 级日志补齐 `exc_info=True`；解析类兜底、旧库缺列降级等补 `debug` 日志。
+- 修复 `ConfigNotFoundError` / `RecordNotFoundError` 构造时父类不接受 `code` 参数导致的
+  `TypeError`；`ConfigError` / `DatabaseError` 现允许子类传入更具体的错误码。
+- 修复评论预警入库/查询、标签云落库、增量断点查询在 `get_session()` 失败时
+  `session` 未绑定、`except/finally` 二次抛 `UnboundLocalError` 的问题。
+- 修复桌面版源码模式启动 Web 子进程时 `stdout/stderr=subprocess.PIPE` 且从不读取，
+  日志写满管道后 Web 服务阻塞、表现为「页面能打开但所有网络请求超时」；子进程输出
+  改为落盘 `data/logs/web_subprocess.log`，并在子进程退出时把退出码与日志末尾展示出来。
+- 新增 `tools/check_exception_handling.py` 与 `tests/test_error_policy.py`：静态拦截裸
+  except / 静默宽泛捕获 / 只写 pass，并覆盖 toast 去重与分级行为。
+- 规范文档：`docs/EXCEPTION_HANDLING.md`。
+
 **口径：热点生命周期双轨 —— 默认 `lifecycle_v2`，可切回 `heuristic_v1`；单视频持续追踪链（watch）固定走 v2。**
 
 - `GET /api/hotspot/lifecycle` 与 `HotspotService` 门面的默认 `algorithm` 由 `heuristic_v1`

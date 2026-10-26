@@ -204,6 +204,7 @@ class DiscoverySnapshotStore:
         except Exception:
             try:
                 os.unlink(temp_path)
-            except OSError:
-                pass
+            except OSError as exc:
+                # 清理临时文件失败不应掩盖原始写入异常，记录后继续抛出原异常。
+                logger.debug("清理快照临时文件失败: %s (%s)", temp_path, exc, exc_info=True)
             raise

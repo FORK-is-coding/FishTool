@@ -56,10 +56,8 @@ bili_ops_toolbox/
 ├─ tools/                    # 当前测试脚本；archive 为历史归档
 ├─ dist/                     # 已构建 exe 和运行时数据样例
 ├─ build/                    # PyInstaller 中间产物，不是源码
-├─ build.spec                # PyInstaller 配置
-├─ start_web.py              # Web 初始化及 uvicorn 启动
-├─ start_desktop.py          # 桌面启动
-└─ main.py                   # 源码主入口/初始化逻辑
+├─ build.spec                # PyInstaller 配置（入口为 app.py）
+└─ app.py                    # 唯一启动入口：默认桌面版；app.py web 为纯 Web
 ```
 
 ## 4. 数据流
@@ -85,9 +83,9 @@ WebUI/桌面操作或常驻任务
 
 1. 复制并保护 `config/`、`data/bili_ops.db`，确认不要把 `.key/.secrets` 发到群或提交到公共仓库。
 2. 建立 Python 虚拟环境并安装 `requirements.txt`。
-3. 运行 `python start_web.py --init-only`，确认配置、数据库、`logs/data/backups` 可创建。
-4. 运行 `python start_web.py --host 127.0.0.1 --port 8000`，打开 `http://127.0.0.1:8000/`；健康检查为 `/health`，OpenAPI 为 `/docs`。
-5. 桌面模式运行 `python start_desktop.py`；桌面端会通过 Web 服务提供业务能力。
+3. 运行 `python app.py init`，确认配置、数据库、`logs/data/backups` 可创建。
+4. 运行 `python app.py web --host 127.0.0.1 --port 8000`，打开 `http://127.0.0.1:8000/`；健康检查为 `/health`，OpenAPI 为 `/docs`。
+5. 桌面模式直接运行 `python app.py`；主窗口与桌宠会自动启动，同时后台 Web 服务也可通过 `http://localhost:8000` 访问。
 6. 先验证 `/health`、登录态、Cookie 池，再进行真实采集；从小 limit 开始。
 
 ## 6. 修改规则
