@@ -189,3 +189,60 @@ def test_save_markdown_report_accepts_creator_ranking(tmp_path) -> None:
     content = Path(path).read_text(encoding='utf-8')
     assert '同行排名' in content
     assert Path(path).name == 'rank_report.md'
+
+
+def test_generate_html_report_uses_print_styles(tmp_path) -> None:
+    """导出 HTML 必须是完整文档，并包含标题、账号信息和打印 CSS。"""
+    generator = ReportGenerator(output_dir=str(tmp_path))
+    html = generator.generate_html_report(SELF_DATA, None)
+
+    assert html.startswith('<!DOCTYPE html>')
+    assert 'B站账号诊断报告' in html
+    assert '测试账号' in html
+    assert '@page' in html
+    assert 'font-family' in html
+    assert '<table' in html or '账号概览' in html
+
+
+def test_generate_html_report_embeds_frontend_charts(tmp_path) -> None:
+    """前端捕获的柱状/雷达/词云图应作为图片嵌入报告，并放在正文前。"""
+    generator = ReportGenerator(output_dir=str(tmp_path))
+    chart = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lK3Q6wAAAABJRU5ErkJggg=='
+    html = generator.generate_html_report(
+        SELF_DATA,
+        None,
+        charts={'volume': chart, 'engagement': chart, 'tag_cloud': chart},
+    )
+
+    assert '数据可视化' in html
+    assert '内容互动总量' in html
+    assert '互动效率 · 三角维度' in html
+    assert '总体视频 Tag 词云' in html
+    assert html.index('数据可视化') < html.index('数据可得性清单')
+    assert html.count('data:image/png;base64,') == 3
+
+
+def test_generate_html_report_ignores_invalid_chart_data(tmp_path) -> None:
+    """非 data URI 的图表值不能进入 img src。"""
+    generator = ReportGenerator(output_dir=str(tmp_path))
+    html = generator.generate_html_report(
+        SELF_DATA,
+        None,
+        charts={'volume': '"><script>alert(1)</script>'},
+    )
+    assert '数据可视化' not in html
+    assert 'alert(1)' not in html
+
+
+def test_generate_html_report_prefers_composite_dashboard(tmp_path) -> None:
+    """有合成仪表盘时只嵌入一张图，避免逐图分页把报告拆散。"""
+    generator = ReportGenerator(output_dir=str(tmp_path))
+    chart = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lK3Q6wAAAABJRU5ErkJggg=='
+    html = generator.generate_html_report(
+        SELF_DATA,
+        None,
+        charts={'dashboard': chart, 'volume': chart, 'tag_cloud': chart},
+    )
+
+    assert '账号数据可视化' in html
+    assert html.count('data:image/png;base64,') == 1

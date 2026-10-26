@@ -37,7 +37,7 @@ from pathlib import Path
 # 从 PyQt5.QtWidgets 导入符号
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget,
-    QSystemTrayIcon, QMenu, QAction, QMessageBox
+    QSystemTrayIcon, QMenu, QAction, QMessageBox, QFileDialog
 )
 # 从 PyQt5.QtCore 导入符号
 from PyQt5.QtCore import QUrl, Qt, QTimer, pyqtSignal
@@ -45,10 +45,12 @@ from PyQt5.QtCore import QUrl, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QIcon
 # 从 PyQt5.QtWebEngineWidgets 导入符号
 from PyQt5.QtWebEngineWidgets import (
-    QWebEngineView, QWebEngineSettings, QWebEnginePage, QWebEngineProfile
+    QWebEngineView, QWebEngineSettings, QWebEnginePage, QWebEngineProfile, QWebEngineScript
 )
 # 导入模块
 import logging
+# 导入模块
+import json
 # 导入模块
 import os
 # 导入模块
@@ -61,15 +63,50 @@ import requests
 # 从 core.logger 导入符号
 from core.logger import get_logger
 from desktop.icon_utils import load_app_icon
+from desktop.report_export import save_html_as_pdf
 
 logger = get_logger(__name__)
 
+#: 前端通过 console 消息把打印 HTML 分片交给桌面壳（保持浏览器端无副作用）。
+SAVE_PDF_CHUNK_PREFIX = "FISHTOOL_SAVE_PDF_CHUNK:"
+
 
 class DesktopWebPage(QWebEnginePage):
-    """桌面端 WebEngine 页面，记录 frozen 客户端的 JS 错误和调试信息。"""
+    """桌面端 WebEngine 页面，记录 JS 错误并接收报告保存请求。"""
+
+    #: 前端通过 console 发送保存 PDF 请求；参数为 token/html/默认文件名。
+    savePdfRequested = pyqtSignal(str, str, str)
+
+    def __init__(self, parent=None):
+        """初始化分片缓存，避免大报告触发控制台消息长度限制。"""
+        super().__init__(parent)
+        self._pdf_chunks = {}
 
     def javaScriptConsoleMessage(self, level, message, line_number, source_id):
-        """记录网页控制台消息，避免 windowed exe 静默吞掉 JS 运行错误。"""
+        """记录网页控制台消息，或转发报告保存请求。"""
+        if message.startswith(SAVE_PDF_CHUNK_PREFIX):
+            try:
+                payload = json.loads(message[len(SAVE_PDF_CHUNK_PREFIX):])
+                token = str(payload.get("token") or "")
+                index = int(payload.get("index", -1))
+                total = int(payload.get("total", 0))
+                chunk = str(payload.get("chunk") or "")
+                filename = str(payload.get("filename") or "")
+                if not token or total <= 0 or total > 10000 or not 0 <= index < total:
+                    return
+                entry = self._pdf_chunks.setdefault(
+                    token, {"total": total, "parts": {}, "filename": filename}
+                )
+                entry["parts"][index] = chunk
+                if len(entry["parts"]) >= total:
+                    html_content = "".join(entry["parts"][i] for i in range(total))
+                    self._pdf_chunks.pop(token, None)
+                    if html_content:
+                        self.savePdfRequested.emit(token, html_content, entry["filename"])
+            except Exception as exc:  # noqa: BLE001 - 桥接消息异常不能打断页面
+                logger.warning("[桌面Web] 报告保存桥接消息解析失败: %s", exc)
+            return
+
         logger.warning(
             "[桌面Web] JS控制台 level=%s line=%s source=%s message=%s",
             level,
@@ -169,6 +206,18 @@ class MainWindow(QMainWindow):
         self.web_view = QWebEngineView()
         self.web_view.setPage(DesktopWebPage(self.web_view))
         self.web_view.loadFinished.connect(self._on_web_load_finished)
+        page = self.web_view.page()
+        # 报告导出桥：页面把打印 HTML 分片发回桌面壳，由这里弹保存对话框。
+        # 用 QueuedConnection 避免在 WebEngine 控制台回调里直接开模态对话框。
+        page.savePdfRequested.connect(self._on_save_pdf_requested, Qt.QueuedConnection)
+        # 在页面脚本执行前标记桌面环境，前端据此决定使用原生保存还是浏览器打印兜底。
+        desktop_flag = QWebEngineScript()
+        desktop_flag.setName("fishtool-desktop-flag")
+        desktop_flag.setSourceCode("window.__FISHTOOL_DESKTOP__ = true;")
+        desktop_flag.setInjectionPoint(QWebEngineScript.DocumentCreation)
+        desktop_flag.setWorldId(QWebEngineScript.MainWorld)
+        desktop_flag.setRunsOnSubFrames(False)
+        page.scripts().insert(desktop_flag)
 
         # frozen 客户端的 WebEngine 缓存位于用户目录，会跨 exe 版本保留旧 app.js。
         # 桌面壳禁用 HTTP 缓存，确保每次启动都读取当前 exe 内置的 JS/CSS；
@@ -617,6 +666,9 @@ class MainWindow(QMainWindow):
             # init_ui 的内嵌加载页也会触发 loadFinished；只验收真实 HTTP 业务页。
             return
 
+        # 双保险：DocumentCreation 脚本之外，页面加载完成后再标记一次桌面环境。
+        self.web_view.page().runJavaScript("window.__FISHTOOL_DESKTOP__ = true;")
+
         # 通过实际按钮 click() 创建两类弹窗，再检查布局尺寸和 z-index。
         # 这比直接调用函数更接近用户操作，可捕获 onclick 未导出、遮罩不可见等问题。
         probe_script = """
@@ -690,6 +742,62 @@ class MainWindow(QMainWindow):
         # 服务就绪后通知外部观察者，保持原有 Qt 信号契约。
         self.web_ready.emit()
     
+    def _on_save_pdf_requested(self, token: str, html_content: str, filename: str) -> None:
+        """处理前端报告保存请求：弹 Windows 保存对话框并渲染 PDF。
+
+        Args:
+            token: 前端回调令牌。
+            html_content: 后端生成的打印 HTML。
+            filename: 后端建议的 PDF 文件名。
+        """
+        if not token:
+            return
+        safe_name = Path(str(filename or "diagnosis_report.pdf")).name
+        if not safe_name.lower().endswith(".pdf"):
+            safe_name += ".pdf"
+        downloads = Path.home() / "Downloads"
+        initial_path = str(downloads / safe_name) if downloads.is_dir() else safe_name
+
+        try:
+            selected, _ = QFileDialog.getSaveFileName(
+                self,
+                "保存诊断报告",
+                initial_path,
+                "PDF 文件 (*.pdf);;所有文件 (*.*)",
+            )
+        except Exception as exc:  # noqa: BLE001 - 对话框异常回传前端，不崩溃
+            logger.exception("[报告导出] 打开保存对话框失败: %s", exc)
+            self._send_save_pdf_result(token, False, f"打开保存对话框失败: {exc}")
+            return
+
+        if not selected:
+            self._send_save_pdf_result(token, False, "cancelled")
+            return
+        if not selected.lower().endswith(".pdf"):
+            selected += ".pdf"
+
+        ok, detail = save_html_as_pdf(html_content, selected)
+        self._send_save_pdf_result(token, ok, detail)
+
+    def _send_save_pdf_result(self, token: str, ok: bool, detail: str) -> None:
+        """把保存结果回传前端 Promise。
+
+        Args:
+            token: 前端回调令牌。
+            ok: 是否成功。
+            detail: 成功路径 / 取消标记 / 错误信息。
+        """
+        try:
+            script = (
+                "if (window.__fishToolSavePdfResult) {"
+                f"window.__fishToolSavePdfResult({json.dumps(token)}, "
+                f"{'true' if ok else 'false'}, {json.dumps(detail)});"
+                "}"
+            )
+            self.web_view.page().runJavaScript(script)
+        except Exception as exc:  # noqa: BLE001 - 页面已关闭时忽略回调
+            logger.warning("[报告导出] 回传保存结果失败: %s", exc)
+
     def show_toast(self, title: str, message: str, duration: int = 6000):
         """显示非阻塞托盘提示（高优先级错误用，不打断用户操作）。
 

@@ -45,6 +45,7 @@ import time
 import uuid
 # 导入模块
 import logging
+from datetime import datetime
 
 # 从 core.logger 导入符号
 from core.logger import get_logger
@@ -201,6 +202,12 @@ class ReportExportRequest(BaseModel):
     category: Optional[str] = Field(None, description="对比分区")
     # 01 新增：导出报告时携带同一个冻结排名 run（拒绝跨 UID）
     benchmark_run_id: Optional[str] = Field(None, description="冻结排名 run id（可选）")
+    # 自诊成功后前端已持有完整结果；导出时直接复用，避免重复抓取或产生不同快照。
+    self_data: Optional[Dict[str, Any]] = Field(None, description="已完成的账号自诊数据（可选）")
+    benchmark_data: Optional[Dict[str, Any]] = Field(None, description="已完成的 benchmark 对比数据（可选）")
+    creator_ranking: Optional[Dict[str, Any]] = Field(None, description="已完成的冻结同行排名（可选）")
+    benchmark_status: Optional[str] = Field(None, description="benchmark 状态（可选）")
+    charts: Optional[Dict[str, str]] = Field(None, description="前端捕获的图表 PNG data URI（可选）")
 
 
 def _load_creator_ranking(uid: int, run_id: Optional[str]):
@@ -488,6 +495,77 @@ async def self_diagnosis(request: SelfDiagnosisRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _report_filename(uid: int, suffix: str = "pdf") -> str:
+    """生成诊断报告默认文件名。
+
+    Args:
+        uid: 账号 UID。
+        suffix: 扩展名（不含点）。
+
+    Returns:
+        str: 形如 ``diagnosis_report_123_20261026_120000.pdf``。
+    """
+    return f"diagnosis_report_{uid}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{suffix}"
+
+
+async def _resolve_report_data(request: ReportExportRequest):
+    """解析导出所需数据。
+
+    优先使用前端自诊成功后携带的同一份结果；只有旧调用方未携带时才重新抓取，
+    避免导出报告与屏幕上的自诊快照不一致。
+
+    Args:
+        request: 导出请求。
+
+    Returns:
+        tuple: ``(self_data, benchmark_data, creator_ranking, benchmark_status)``。
+    """
+    if request.self_data:
+        return (
+            request.self_data,
+            request.benchmark_data,
+            request.creator_ranking,
+            request.benchmark_status or "provided",
+        )
+
+    init_clients()
+    analyzer = SelfAnalyzer(bili_api, rate_limiter)
+    self_data = await analyzer.fetch_self_data(request.uid)
+    benchmark_data = (
+        analyzer.benchmark_with_category(self_data, request.category)
+        if request.category else None
+    )
+    creator_ranking, benchmark_status = _load_creator_ranking(request.uid, request.benchmark_run_id)
+    return self_data, benchmark_data, creator_ranking, benchmark_status
+
+
+@router.post("/report-html")
+async def report_html(request: ReportExportRequest):
+    """生成可打印的 HTML 报告，供桌面端选择路径后另存为 PDF。"""
+    try:
+        self_data, benchmark_data, creator_ranking, benchmark_status = await _resolve_report_data(request)
+        generator = ReportGenerator()
+        html_content = generator.generate_html_report(
+            self_data,
+            benchmark_data,
+            creator_ranking=creator_ranking,
+            charts=request.charts,
+        )
+        return {
+            'success': True,
+            'data': {
+                'html': html_content,
+                'filename': _report_filename(request.uid),
+                'benchmark_status': benchmark_status,
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("[API] 生成报告 HTML 失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"生成报告失败: {e}") from e
+
+
 @router.post("/export-report")
 async def export_report(request: ReportExportRequest):
     """导出诊断报告
@@ -503,42 +581,26 @@ async def export_report(request: ReportExportRequest):
     可能要求环境安装额外依赖（如 reportlab）。
     """
     try:
-        # 初始化客户端
-        init_clients()
-        
         logger.info(f"[API] 导出报告: UID={request.uid}, 格式={request.format}")
-        
-        # 1. 获取账号数据
-        analyzer = SelfAnalyzer(bili_api, rate_limiter)
-        # 赋值并准备后续使用
-        self_data = await analyzer.fetch_self_data(request.uid)
-        
-        # 2. benchmark数据
-        # 与自诊接口共用同一 benchmark 逻辑
-        benchmark_data = None
-        # 条件分支处理
-        if request.category:
-            # 赋值并准备后续使用
-            benchmark_data = analyzer.benchmark_with_category(
-                self_data, 
-                request.category
-            )
-        
-        # 3. 生成报告（携带同一冻结 run 时抛出 creator_ranking；保持旧位置参数不变）
-        # 按 format 分支调用不同的生成器
-        creator_ranking, benchmark_status = _load_creator_ranking(request.uid, request.benchmark_run_id)
+
+        # 优先复用前端自诊结果；旧调用方未携带数据时才重新抓取。
+        self_data, benchmark_data, creator_ranking, benchmark_status = await _resolve_report_data(request)
         generator = ReportGenerator()
 
         if request.format == 'pdf':
             if creator_ranking is None:
                 filepath = generator.generate_pdf_report(self_data, benchmark_data)
             else:
-                filepath = generator.generate_pdf_report(self_data, benchmark_data, creator_ranking=creator_ranking)
+                filepath = generator.generate_pdf_report(
+                    self_data, benchmark_data, creator_ranking=creator_ranking
+                )
         else:
             if creator_ranking is None:
                 filepath = generator.save_markdown_report(self_data, benchmark_data)
             else:
-                filepath = generator.save_markdown_report(self_data, benchmark_data, creator_ranking=creator_ranking)
+                filepath = generator.save_markdown_report(
+                    self_data, benchmark_data, creator_ranking=creator_ranking
+                )
 
         return {
             'success': True,

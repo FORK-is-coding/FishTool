@@ -27,6 +27,7 @@ hiddenimports = [
     'PyQt5.QtGui',
     'PyQt5.QtWidgets',
     'PyQt5.QtWebEngineWidgets',
+    'PyQt5.QtPrintSupport',
     'sqlalchemy.ext.declarative',
     'sqlalchemy.sql.default_comparator',
     'aiohttp',
