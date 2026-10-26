@@ -14,16 +14,16 @@
     <link rel="stylesheet" href="/static/css/style.lottery.css?v=split-20260824">
 <link rel="stylesheet" href="/static/css/style.resident.css?v=split-20260824">
 <link rel="stylesheet" href="/static/css/style.base.css?v=split-20260824">
-<link rel="stylesheet" href="/static/css/style.pages.css?v=split-20260824">
-<link rel="stylesheet" href="/static/css/style.log.css?v=split-20260824">
+<link rel="stylesheet" href="/static/css/style.pages.css?v=ui-20261026">
+<link rel="stylesheet" href="/static/css/style.log.css?v=progress-20261026">
 <link rel="stylesheet" href="/static/css/style.config.css?v=split-20260824">
-<link rel="stylesheet" href="/static/css/style.comment.css?v=split-20260824">
+<link rel="stylesheet" href="/static/css/style.comment.css?v=progress-20261026">
 <link rel="stylesheet" href="/static/css/style.up.css?v=split-20260824">
 <link rel="stylesheet" href="/static/css/style.modal.css?v=split-20261026-toast">
 <link rel="stylesheet" href="/static/css/style.responsive.css?v=split-20260824">
 <link rel="stylesheet" href="/static/css/style.logviewer.css?v=split-20260824">
 <link rel="stylesheet" href="/static/css/style.help.css?v=split-20260824">
-<link rel="stylesheet" href="/static/css/style.hotspot.css?v=rev6">
+<link rel="stylesheet" href="/static/css/style.hotspot.css?v=spacing3-20261026">
 </head>
 <body>
     <div class="container">
@@ -168,11 +168,11 @@
                     <p class="hotspot-notice">采集采用活跃时段分段采样、评论热评 Top+增量；为保护账号不被风控，宁慢勿封。</p>
                     <p class="hotspot-notice hotspot-notice-sub">首次使用仅有单日切片，阶段会显示“数据不足”属正常；连续使用几天后算法开始计算，建议持续数天以积累充足数据。</p>
                     <div id="hotspot-lifecycle-grid" class="hotspot-lifecycle-grid"><p class="text-muted">数据积累中，连续采集几天后解锁阶段判断。</p></div>
-                    <!-- 算法口径开关：复用既有 .hotspot-progress-row / .hotspot-collect-select，不新增 CSS。
+                    <!-- 算法口径开关：复用 .hotspot-progress-row；下拉框继承 .form-control 的主题样式，
                          会话级记忆（sessionStorage，见 app.hotspot.js），不引入后端配置项。 -->
                     <div class="hotspot-progress-row">
                         <span>算法口径</span>
-                        <select id="hotspot-algorithm-select" class="hotspot-collect-select" title="生命周期算法">
+                        <select id="hotspot-algorithm-select" class="form-control hotspot-collect-select" title="生命周期算法">
                             <option value="lifecycle_v2" selected>lifecycle_v2（默认）</option>
                             <option value="heuristic_v1">heuristic_v1（对照回放）</option>
                         </select>
@@ -180,16 +180,16 @@
                     <div class="hotspot-progress-row">
                         <span id="hotspot-collect-message">采集进度查询中</span>
                         <progress id="hotspot-collect-progress" max="100" value="0"></progress>
-                        <select id="hotspot-tid-select" class="hotspot-collect-select" title="采集分区">
+                        <select id="hotspot-tid-select" class="form-control hotspot-collect-select" title="采集分区">
                             <option value="">加载全站分区...</option>
                         </select>
-                        <select id="hotspot-limit-select" class="hotspot-collect-select" title="采集数量">
+                        <select id="hotspot-limit-select" class="form-control hotspot-collect-select" title="采集数量">
                             <option value="20" selected>20条</option>
                             <option value="50">50条</option>
                             <option value="100">100条</option>
                             <option value="200">200条</option>
                         </select>
-                        <select id="hotspot-min-view-select" class="hotspot-collect-select" title="绘画区播放量下限">
+                        <select id="hotspot-min-view-select" class="form-control hotspot-collect-select" title="绘画区播放量下限">
                             <option value="10000">下限1万</option>
                             <option value="50000" selected>下限5万</option>
                             <option value="100000">下限10万</option>
@@ -312,7 +312,7 @@
                      一次点击“发现并观察”显示预算/候选/待确认/采样名额；双通道卡片；
                      覆盖不足显示缺的窗口与预计下次数据到达；数值可展开到来源 BVID 与窗口；
                      不依赖颜色唯一表达；不自动发布。 -->
-                <section class="card event-workbench" aria-labelledby="event-workbench-title">
+                <section class="section event-workbench" aria-labelledby="event-workbench-title">
                     <h2 id="event-workbench-title">事件工作台</h2>
                     <div class="form-group">
                         <label>实体 + 具体事件锚点：</label>
@@ -837,15 +837,15 @@
     <!-- ECharts 固定为本地静态资源，断网环境不依赖 CDN。 -->
     <script src="/static/vendor/echarts.min.js"></script>
     <!-- 版本参数用于让 8000 端口加载本次弹窗修复后的脚本，避免旧 JS 缓存导致 onclick 无响应。 -->
-    <script src="/static/js/app.core.js?v=split-20261026-toast"></script>
-<script src="/static/js/app.hotspot.js?v=split-20260824-tagcard-dq03"></script>
+    <script src="/static/js/app.core.js?v=progress-20261026"></script>
+<script src="/static/js/app.hotspot.js?v=progress-20261026"></script>
 <!-- 第三批 g：事件工作台 / 机会列表 / 证据回看 / 最小反馈（新增脚本，不改既有结构）。 -->
 <script src="/static/js/app.events.js?v=batch3h-20261003"></script>
-<script src="/static/js/app.comment.js?v=split-20260824"></script>
+<script src="/static/js/app.comment.js?v=progress-20261026"></script>
 <script src="/static/js/app.config.js?v=split-20260824"></script>
-<script src="/static/js/app.up.js?v=split-20260824-dq03-ranking01"></script>
+<script src="/static/js/app.up.js?v=progress-20261026"></script>
 <script src="/static/js/app.auth.js?v=split-20260824"></script>
-<script src="/static/js/app.lottery.js?v=split-20260824-dq03"></script>
+<script src="/static/js/app.lottery.js?v=welcomefix-20261026"></script>
 <script src="/static/js/app.ui.js?v=split-20261026-toast"></script>
 
     <!-- 单视频跟踪（watch）区块的配套 JS：本批唯一新增脚本，内联在 index.html 内，

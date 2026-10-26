@@ -247,6 +247,25 @@
 }
 
 /* ===== 评论采集进度条 ===== */
+.monitor-progress-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+.monitor-progress-spinner {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--primary-soft);
+    border-top-color: var(--primary-color);
+    border-right-color: var(--accent-color);
+    border-radius: 50%;
+    animation: loading-spin 850ms linear infinite;
+}
+.monitor-progress-spinner[hidden] {
+    display: none;
+}
 .monitor-progress-bar {
     width: 100%;
     height: 10px;
@@ -256,11 +275,14 @@
     overflow: hidden;
     margin: 8px 0 4px;
 }
+.monitor-progress-bar[hidden] {
+    display: none;
+}
 .monitor-progress-fill {
     width: 0%;
     height: 100%;
     border-radius: 5px;
-    background: linear-gradient(90deg, #5b8def, #7bb7ff);
+    background: linear-gradient(90deg, var(--primary-color), var(--accent-color));
     transition: width 0.4s ease;
 }
 .monitor-progress-text {

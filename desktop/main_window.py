@@ -660,6 +660,10 @@ class MainWindow(QMainWindow):
                     result.verifyModal = Boolean(verifyBackdrop);
                     result.verifyVisible = isVisible(verifyBackdrop);
                     verifyBackdrop?.remove();
+                    // 自检只验证弹窗入口，不得改变桌面端启动默认页。
+                    if (typeof window.navigateTo === 'function') {
+                        window.navigateTo('welcome');
+                    }
                 } catch (error) {
                     result.error = String(error && error.stack ? error.stack : error);
                 }

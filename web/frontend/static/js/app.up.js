@@ -134,7 +134,6 @@ async function analyzeUp() {
     }
 
     showLoading('analysis-result', {
-        progress: 0,
         message: '正在创建UP主拆解任务',
     });
 

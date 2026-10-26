@@ -36,7 +36,6 @@ async function generateTagCloud() {
     }
 
     showLoading('tag-cloud-result', {
-        progress: 0,
         message: '正在创建分区热门Tag采集任务',
     });
 
@@ -73,9 +72,7 @@ function renderTagCloudResult(result, zoneName) {
 
     document.getElementById('tag-cloud-result').innerHTML = `
         <h3>分区：${escapeHtml(result.zone_name || zoneName)}</h3>
-        <p>采集进度：${result.progress ?? 100}%</p>
-        <progress max="100" value="${result.progress ?? 100}" style="width: 100%;"></progress>
-        <p>分析视频数：${result.video_count ?? 0} | 提取Tag数：${result.tag_count ?? 0}</p>
+        <p>采集完成 · 分析视频数：${result.video_count ?? 0} | 提取Tag数：${result.tag_count ?? 0}</p>
         <div style="margin-top: 20px;">${tags}</div>
     `;
 }

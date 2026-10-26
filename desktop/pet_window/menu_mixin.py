@@ -25,14 +25,26 @@ class MenuMixin:
     def _sync_menu_position(self):
         """根据桌宠当前全局坐标同步快捷卡片位置。
 
+        默认放在桌宠右侧；右侧空间不足时翻到左侧，并夹在可用屏幕内，
+        避免快捷菜单被屏幕边缘裁掉。
+
         Returns:
             None: 仅更新已创建菜单面板的位置。
         """
         if not hasattr(self, "menu_panel"):
             return
-        # 每次桌宠移动都重新计算右侧锚点，避免卡片停留在首次打开位置。
-        target = self.mapToGlobal(QPoint(self.width() + 8, 0))
-        self.menu_panel.move(target)
+        # 优先按桌宠当前位置计算右侧锚点，必要时翻到左侧。
+        origin = self.mapToGlobal(QPoint(0, 0))
+        x = origin.x() + self.width() + 8
+        y = origin.y()
+        screen = QApplication.screenAt(origin) or QApplication.primaryScreen()
+        if screen is not None:
+            bounds = screen.availableGeometry()
+            if x + self.menu_panel.width() > bounds.right():
+                x = origin.x() - self.menu_panel.width() - 8
+            x = max(bounds.left(), min(x, bounds.right() - self.menu_panel.width()))
+            y = max(bounds.top(), min(y, bounds.bottom() - self.menu_panel.height()))
+        self.menu_panel.move(QPoint(x, y))
 
     def show_menu(self):
         """创建并显示三个菜单卡片，动作复用已有主窗口接口。"""

@@ -129,14 +129,36 @@ function formatEstimatedTime(seconds) {
     return `预计还需约 ${Math.ceil(seconds / 60)} 分钟`;
 }
 
-// 在指定容器渲染带进度条、百分比和预计时间的加载状态，覆盖长耗时任务。
-// options: { progress: 0-100, message: 提示文案, eta: 预计剩余秒数 }
+// 在指定容器渲染加载状态：有真实进度时显示百分比/进度条，未知进度时只显示转圈。
+// options: { progress: >0 的 0-100 数值或 null/undefined, message: 提示文案, eta: 预计剩余秒数 }
 function showLoading(elementId, options = {}) {
     const element = document.getElementById(elementId);
     if (!element) return;
-    const progress = Math.max(0, Math.min(100, Number(options.progress) || 0));
     const message = options.message || '正在加载数据';
     const eta = options.eta ?? null;
+    const rawProgress = options.progress;
+    const numericProgress = Number(rawProgress);
+    // 0 / null / undefined 都视为「还没有可展示的真实进度」：
+    // 不再画一根停在 0% 的假进度条，直接显示转圈 loading。
+    const hasProgress = rawProgress !== null
+        && rawProgress !== undefined
+        && Number.isFinite(numericProgress)
+        && numericProgress > 0;
+
+    if (!hasProgress) {
+        element.innerHTML = `
+            <div class="loading-state loading-state--indeterminate" role="status" aria-live="polite">
+                <div class="loading-spinner" aria-hidden="true"></div>
+                <div class="loading-copy">
+                    <strong>${escapeHtml(message)}</strong>
+                    <span class="loading-status">处理中</span>
+                </div>
+                <p>${eta !== null ? formatEstimatedTime(eta) : '正在处理，请稍候…'}</p>
+            </div>`;
+        return;
+    }
+
+    const progress = Math.round(Math.max(0, Math.min(100, numericProgress)));
     element.innerHTML = `
         <div class="loading-state" role="status" aria-live="polite">
             <div class="loading-spinner" aria-hidden="true"></div>

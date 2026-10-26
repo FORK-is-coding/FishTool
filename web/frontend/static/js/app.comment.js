@@ -426,6 +426,9 @@ async function monitorVideo() {
         // 网络、校验或后端异常统一显示到结果区，并转义错误文本。
         document.getElementById('monitor-result').innerHTML = `<p class="monitor-danger">监控失败: ${escapeHtml(error.message)}</p>`;
     } finally {
+        // 无论成功或失败都停止轮询并移除进度区，避免转圈/进度条残留在页面上。
+        stopProgressPolling();
+        hideMonitorProgress();
         // 无论成功或失败都恢复按钮，允许用户修正输入后再次提交。
         setMonitorButtonLoading(false);
     }
@@ -510,8 +513,11 @@ function ensureProgressWrap() {
     wrap.id = 'monitor-progress-wrap';
     wrap.style.display = 'none';
     wrap.innerHTML = `
+        <div class="monitor-progress-head">
+            <span class="monitor-progress-spinner" role="status" aria-label="正在采集" hidden></span>
+            <span class="monitor-progress-text"></span>
+        </div>
         <div class="monitor-progress-bar"><div class="monitor-progress-fill"></div></div>
-        <span class="monitor-progress-text"></span>
     `;
     const result = document.getElementById('monitor-result');
     if (result && result.parentNode) {
@@ -520,16 +526,31 @@ function ensureProgressWrap() {
     return wrap;
 }
 
+// 未知总量（如全面采集）时不再假装 100% 进度，改为转圈 + 已采集条数。
+function setMonitorProgressIndeterminate(message) {
+    const wrap = document.getElementById('monitor-progress-wrap');
+    if (!wrap) return;
+    const bar = wrap.querySelector('.monitor-progress-bar');
+    const spinner = wrap.querySelector('.monitor-progress-spinner');
+    const text = wrap.querySelector('.monitor-progress-text');
+    if (bar) bar.hidden = true;
+    if (spinner) spinner.hidden = false;
+    if (text) text.textContent = message;
+}
+
+// 采集结束/失败后隐藏进度区，避免全面采集的转圈一直留在页面上。
+function hideMonitorProgress() {
+    const wrap = document.getElementById('monitor-progress-wrap');
+    if (wrap) wrap.style.display = 'none';
+}
+
 // 启动进度轮询：每 1.5s 拉取一次后端进度，与"已采集 N 条"日志同源。
 function startProgressPolling(bvid) {
     stopProgressPolling();
     const wrap = ensureProgressWrap();
     wrap.style.display = 'block';
-    const fill = wrap.querySelector('.monitor-progress-fill');
-    const text = wrap.querySelector('.monitor-progress-text');
-    // 初始状态：等待后端写入第一条进度。
-    fill.style.width = '0%';
-    text.textContent = '正在启动采集...';
+    // 初始状态：还没有拿到真实进度，先显示转圈而不是 0% 假进度条。
+    setMonitorProgressIndeterminate('正在启动采集...');
     monitorProgressTimer = setInterval(async () => {
         try {
             // 第三个参数 false：轮询失败不弹全局错误，避免打断采集主流程。
@@ -551,28 +572,33 @@ function stopProgressPolling() {
     }
 }
 
-// 渲染进度条：快速模式按上限算百分比，全面模式显示已采集条数。
+// 渲染进度条：快速模式按上限算百分比；全面模式没有总量，改用转圈 + 已采集条数。
 function updateProgressUI(p) {
     const wrap = document.getElementById('monitor-progress-wrap');
     if (!wrap) return;
+    const bar = wrap.querySelector('.monitor-progress-bar');
+    const spinner = wrap.querySelector('.monitor-progress-spinner');
     const fill = wrap.querySelector('.monitor-progress-fill');
     const text = wrap.querySelector('.monitor-progress-text');
     const collected = Number(p.collected) || 0;
     if (p.finished) {
         // 完成态：进度条拉满并显示最终条数。
-        fill.style.width = '100%';
+        if (bar) bar.hidden = false;
+        if (spinner) spinner.hidden = true;
+        if (fill) fill.style.width = '100%';
         text.textContent = `采集完成，共 ${collected} 条`;
         return;
     }
     if (p.limit) {
         // 快速模式：按已采集/上限计算百分比。
         const pct = Math.min(100, Math.round((collected / p.limit) * 100));
+        if (bar) bar.hidden = false;
+        if (spinner) spinner.hidden = true;
         fill.style.width = pct + '%';
         text.textContent = `已采集 ${collected} / ${p.limit} 条 (${pct}%)`;
     } else {
-        // 全面模式：无上限，进度条保持流动（宽度100%仅表示进行中）。
-        fill.style.width = '100%';
-        text.textContent = `已采集 ${collected} 条（全面采集，请稍候）`;
+        // 全面模式：没有总量可算百分比，用转圈表示进行中，只展示已采集条数。
+        setMonitorProgressIndeterminate(`已采集 ${collected} 条（全面采集，请稍候）`);
     }
 }
 

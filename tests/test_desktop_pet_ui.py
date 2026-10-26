@@ -340,10 +340,10 @@ def test_pet_asset_roots_are_unique_and_include_repo_assets(qt_app):
 # 2. menu_panel
 # ===========================================================================
 def test_pet_menu_panel_is_fixed_size_frameless_and_has_three_actions(qt_app):
-    """PetMenuPanel 应固定 220x156、无边框置顶透明，并承载三个动作按钮。"""
+    """PetMenuPanel 应固定 236x176、无边框置顶透明，并承载三个动作按钮。"""
     panel = PetMenuPanel()
 
-    assert (panel.width(), panel.height()) == (220, 156)
+    assert (panel.width(), panel.height()) == (236, 176)
     assert panel.windowFlags() & Qt.FramelessWindowHint
     assert panel.windowFlags() & Qt.Tool
     assert panel.testAttribute(Qt.WA_TranslucentBackground)
@@ -352,6 +352,8 @@ def test_pet_menu_panel_is_fixed_size_frameless_and_has_three_actions(qt_app):
         panel.live_button.text(),
         panel.quit_button.text(),
     ] == ["打开主面板", "舆情预警实况（待更新）", "关闭程序"]
+    assert panel.open_button.objectName() == "petMenuPrimary"
+    assert panel.quit_button.objectName() == "petMenuDanger"
     assert panel.layout().count() == 3
     assert panel.open_button.parent() is panel
 
@@ -391,7 +393,7 @@ def test_pet_image_label_clamps_scale_and_paints_both_branches(qt_app):
 # 4. drag_mixin
 # ===========================================================================
 def test_drag_mixin_hover_drag_and_release_flow(qt_app):
-    """悬停放大/还原、拖拽偏移记录、释放回待机并持久化位置与菜单触发。"""
+    """悬停放大/还原、拖拽阈值、单击菜单与拖拽结束持久化位置。"""
     host = _PetHost()
 
     # ---- 悬停进入：真实 QPropertyAnimation 指向 scale_factor，终点 1.06 ----
@@ -409,27 +411,54 @@ def test_drag_mixin_hover_drag_and_release_flow(qt_app):
     assert hover_out.duration() == 180
     assert "leaveEvent" in host.calls
 
-    # ---- 按下：记录偏移、切拖拽态 ----
+    # ---- 按下：只记录偏移，不立即切拖拽态（防止单击闪拖拽素材）----
     press = _FakeMouseEvent(button=Qt.LeftButton, global_pos=QPoint(500, 500))
     host.mousePressEvent(press)
     assert press.accepted is True
-    assert host.state_history[-1] == host.STATE_DRAGGING
+    assert host.state_history == []
+    assert host._is_dragging is False
     assert host.drag_position == QPoint(500, 500) - QRect(0, 0, 150, 150).topLeft()
     assert host._drag_start_position == QPoint(500, 500)
 
-    # ---- 移动：按新全局坐标搬窗 ----
+    # ---- 阈值内抖动：不移动窗口、不切拖拽态 ----
+    jitter = _FakeMouseEvent(buttons=Qt.LeftButton, global_pos=QPoint(503, 503))
+    host.mouseMoveEvent(jitter)
+    assert jitter.accepted is True
+    assert host.state_history == []
+    assert host.moved == []
+
+    # ---- 移动超过阈值：切拖拽态并按新全局坐标搬窗 ----
     move = _FakeMouseEvent(buttons=Qt.LeftButton, global_pos=QPoint(520, 520))
     host.mouseMoveEvent(move)
     assert move.accepted is True
+    assert host.state_history[-1] == host.STATE_DRAGGING
     assert host.moved[-1] == QPoint(520, 520) - host.drag_position
 
-    # ---- 释放（位移 2,2 -> 曼哈顿 4 <= 4）：回待机 + 存位置 + 弹菜单 ----
-    release = _FakeMouseEvent(global_pos=QPoint(502, 502))
+    # ---- 拖拽释放：回待机 + 存位置 + 不触发菜单 ----
+    release = _FakeMouseEvent(global_pos=QPoint(520, 520))
     host.mouseReleaseEvent(release)
     assert release.accepted is True
     assert host.state_history[-1] == host.STATE_IDLE
     assert host.settings.values["position"] == host.pos()
-    assert host.menu_toggles == 1
+    assert host.menu_toggles == 0
+
+    # ---- 单击（阈值内微抖动）：不出现拖拽态，释放时展开菜单 ----
+    click_host = _PetHost()
+    click_host.mousePressEvent(_FakeMouseEvent(button=Qt.LeftButton, global_pos=QPoint(500, 500)))
+    click_host.mouseReleaseEvent(_FakeMouseEvent(global_pos=QPoint(502, 502)))
+    assert click_host.STATE_DRAGGING not in click_host.state_history
+    assert click_host.menu_toggles == 1
+
+    # ---- 长按 100ms（无位移）：计时到期后切拖拽态，释放不弹菜单 ----
+    long_host = _PetHost()
+    long_host.mousePressEvent(_FakeMouseEvent(button=Qt.LeftButton, global_pos=QPoint(500, 500)))
+    assert long_host._drag_press_timer.isActive()
+    assert long_host._drag_press_timer.interval() == long_host.DRAG_LONG_PRESS_MS
+    long_host._begin_drag_after_long_press()
+    assert long_host.state_history[-1] == long_host.STATE_DRAGGING
+    long_host.mouseReleaseEvent(_FakeMouseEvent(global_pos=QPoint(500, 500)))
+    assert long_host.state_history[-1] == long_host.STATE_IDLE
+    assert long_host.menu_toggles == 0
 
     # ---- 非左键释放：落回 super() ----
     host.mouseReleaseEvent(_FakeMouseEvent(button=Qt.RightButton))
