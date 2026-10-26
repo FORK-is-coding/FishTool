@@ -5,6 +5,9 @@ from collections.abc import Awaitable
 from typing import Any
 
 from bilibili.api import BilibiliAPI
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class ProfileCollector:
@@ -181,6 +184,7 @@ class ProfileCollector:
                 return {}, "invalid"
             return response, "ok"
         except Exception as exc:
+            logger.warning("%s 请求失败，按单项失败继续: %s", error_label, exc, exc_info=True)
             errors.append(f"{error_label}: {exc}")
             return {}, "error"
 

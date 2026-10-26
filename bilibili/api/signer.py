@@ -200,7 +200,7 @@ class WBISigner:
             # 预算耗尽不是签名失败：保留类型向上抛出，避免被转成 WBISignError 后重试。
             raise
         except Exception as e:
-            logger.error(f"更新WBI密钥失败: {e}")
+            logger.error(f"更新WBI密钥失败: {e}", exc_info=True)
             # 抛出异常中断流程
             raise WBISignError(f"更新WBI密钥失败: {e}")
     

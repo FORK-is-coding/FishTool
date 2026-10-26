@@ -74,10 +74,10 @@ class ConfigError(BiliOpsException):
     - 必需配置项缺失
     - 配置项类型错误
     """
-    def __init__(self, message: str):
-        """message: str 参数异常初始化，携带固定错误码"""
-        # 使用固定错误码 "CONFIG_ERROR"
-        super().__init__(message, "CONFIG_ERROR")
+    def __init__(self, message: str, code: str = "CONFIG_ERROR"):
+        """初始化配置异常；子类可传入更具体的错误码。"""
+        # 使用固定错误码 "CONFIG_ERROR"；子类（如 ConfigNotFoundError）可覆盖
+        super().__init__(message, code)
 
 
 class ConfigNotFoundError(ConfigError):
@@ -108,9 +108,9 @@ class DatabaseError(BiliOpsException):
     - 事务提交/回滚失败
     - 数据完整性约束违反
     """
-    def __init__(self, message: str):
-        """message: str 参数异常初始化，携带固定错误码"""
-        super().__init__(message, "DATABASE_ERROR")
+    def __init__(self, message: str, code: str = "DATABASE_ERROR"):
+        """初始化数据库异常；子类可传入更具体的错误码。"""
+        super().__init__(message, code)
 
 
 class RecordNotFoundError(DatabaseError):

@@ -81,7 +81,7 @@ class MenuMixin:
                     return
             logger.warning("[桌宠] 未找到主窗口，无法打开主面板")
         except Exception as exc:
-            logger.error(f"[桌宠] 打开主面板失败: {exc}")
+            logger.error(f"[桌宠] 打开主面板失败: {exc}", exc_info=True)
 
     def show_pending_message(self):
         """显示待更新提示，不触发任何业务或网络操作。"""

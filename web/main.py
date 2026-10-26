@@ -2,7 +2,7 @@
 B站运营工具箱 - Web API 主应用
 FastAPI后端，提供RESTful API接口
 
-本模块是整个 Web 服务的入口，负责：
+本模块是 Web 服务的 FastAPI 应用模块，负责：
 1. 应用生命周期管理：启动时初始化 ConfigManager，关闭时清理
 # 设置初始值/默认状态，避免后续空引用
 # 写入配置/属性，影响后续行为
@@ -19,10 +19,8 @@ FastAPI后端，提供RESTful API接口
 - push_alert: 业务侧调用的预警推送入口
 
 运行方式：
-- 直接 python web/main.py 启动，监听 0.0.0.0:8000
-# 触发服务/线程开始运行
-- 或通过 start_web.py 包装启动
-# 触发服务/线程开始运行
+- 统一入口：``python app.py web``（桌面版会自动以子进程方式启动它）
+- 本模块只提供 FastAPI 应用对象 ``app``，不单独作为启动入口
 """
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.exception_handlers import http_exception_handler
@@ -36,13 +34,14 @@ from fastapi.middleware.cors import CORSMiddleware
 # 从 contextlib 导入符号
 from contextlib import asynccontextmanager
 # 导入模块
+import asyncio
 import logging
 # 导入系统模块，用于识别 PyInstaller frozen 环境。
 import sys
 # 导入操作系统接口，用于读取 §18.2 事件开关环境变量。
 import os
 # 导入类型工具
-from typing import Any
+from typing import Any, Callable
 # 从 pathlib 导入符号
 from pathlib import Path
 
@@ -52,6 +51,8 @@ from core.database import init_database
 # 从 core.logger 导入符号
 from core.logger import get_logger
 from core.exceptions import format_exception
+from core.error_policy import ErrorPriority, report_exception
+from core.toast import emit_toast, register_toast_sink
 from core.monitor_service import ResidentCommentMonitor
 # 排名服务由本层组装（modules 不反向 import web）；client 限定自己拥有、只关自己。
 from bilibili.api import BilibiliAPI
@@ -230,6 +231,7 @@ def _build_event_discovery_fetcher():
             try:
                 envelope = await coro
             except Exception as exc:  # noqa: BLE001 - 外部源失败不炸整轮
+                logger.warning("发现来源 %s 请求失败，本轮按错误态返回: %s", source, exc, exc_info=True)
                 return SourceOutcome(
                     source=source,
                     state="error",
@@ -270,6 +272,8 @@ async def lifespan(app: FastAPI):
     
     # 启动时初始化
     logger.info("Web服务启动中...")
+    # 先挂 toast 桥：后续启动装配失败也能通过 /ws 告知前端与桌宠。
+    toast_unregister = _install_toast_bridge()
     # 赋值并准备后续使用
     config_manager = ConfigManager()
     # Web 入口独立运行时也必须初始化数据库全局管理器
@@ -363,7 +367,15 @@ async def lifespan(app: FastAPI):
             fast_watch_enabled,
         )
     except Exception as exc:  # noqa: BLE001 - 装配失败不阻塞 Web 启动，端点按契约返 503
-        logger.error("事件 API 服务装配失败（相关端点将返回 503）: %s", exc)
+        report_exception(
+            exc,
+            logger=logger,
+            action="装配事件 API 服务",
+            priority=ErrorPriority.HIGH,
+            toast_title="事件服务不可用",
+            toast_message="事件 API 服务装配失败，相关功能暂时不可用，详细原因已写入日志。",
+            source="web",
+        )
 
     logger.info("Web服务已启动")
     
@@ -376,14 +388,16 @@ async def lifespan(app: FastAPI):
             try:
                 await benchmark_service.shutdown()
             except Exception as exc:  # noqa: BLE001 - 关闭失败不阻塞进程退出
-                logger.error("排名服务关闭失败: %s", exc)
+                logger.error("排名服务关闭失败: %s", exc, exc_info=True)
         if monitor_service is not None:
             await monitor_service.shutdown()
         if benchmark_client is not None:
             try:
                 await benchmark_client.aclose()
             except Exception as exc:  # noqa: BLE001
-                logger.error("排名 client 关闭失败: %s", exc)
+                logger.error("排名 client 关闭失败: %s", exc, exc_info=True)
+        # 先摘掉 toast 桥，避免关闭阶段再向已断开的 WebSocket 广播。
+        toast_unregister()
         logger.info("Web服务关闭中...")
 
 
@@ -398,13 +412,54 @@ app = FastAPI(
 )
 
 
+@app.exception_handler(HTTPException)
+async def handle_http_exception(request: Request, exc: HTTPException):
+    """HTTPException 统一处理：5xx 视为高优先级错误，额外弹 toast。
+
+    4xx 属于用户输入/业务校验问题，前端已有就地提示，不重复打扰。
+    """
+    if exc.status_code >= 500:
+        detail = exc.detail
+        if isinstance(detail, dict):
+            message = str(detail.get("message") or detail.get("error_code") or "服务处理失败")
+            error_code = str(detail.get("error_code") or f"HTTP_{exc.status_code}")
+        else:
+            message = str(detail or "服务处理失败")
+            error_code = f"HTTP_{exc.status_code}"
+        emit_toast(
+            "操作失败",
+            message[:240] or "服务处理失败，请查看日志。",
+            level="error",
+            source="web",
+            error_code=error_code,
+        )
+        logger.error(
+            "请求处理失败: %s %s -> %s",
+            request.method,
+            request.url.path,
+            exc.status_code,
+            exc_info=exc,
+        )
+    return await http_exception_handler(request, exc)
+
+
 @app.exception_handler(Exception)
 async def handle_unexpected_exception(request: Request, exc: Exception):
     """统一兜底未处理异常，HTTPException 继续交给 FastAPI 默认处理。"""
     # 明确转交 HTTPException 的 FastAPI 默认处理器，保持原始状态码和 detail。
     if isinstance(exc, HTTPException):
         return await http_exception_handler(request, exc)
-    logger.exception("未捕获异常: %s", exc)
+    # 高优先级：未处理异常意味着请求无法完成，除日志外必须让用户看见。
+    report_exception(
+        exc,
+        logger=logger,
+        action="处理 API 请求",
+        priority=ErrorPriority.HIGH,
+        context={"method": request.method, "path": request.url.path},
+        toast_title="操作失败",
+        toast_message="服务处理请求时发生未预期错误，详细原因已写入日志。",
+        source="web",
+    )
     return JSONResponse(
         status_code=500,
         content=format_exception(exc),
@@ -562,30 +617,67 @@ class ConnectionManager:
         logger.info(f"WebSocket连接建立，当前连接数: {len(self.active_connections)}")
     
     def disconnect(self, websocket: WebSocket):
-        """断开连接并从广播列表移除"""
-        # 断开时从列表移除，注意 list.remove 不存在的元素会抛错
-        # 但调用方保证 disconnect 只在已连接状态下触发
-        self.active_connections.remove(websocket)
+        """断开连接并从广播列表移除
+
+        幂等实现：连接可能已因广播失败被移除，重复调用不应抛 ValueError。
+        """
+        # 断开时从列表移除；不存在时按已断开处理。
+        try:
+            self.active_connections.remove(websocket)
+        except ValueError:
+            # 已移除说明并发/重复调用，不是错误，保持幂等。
+            logger.debug("WebSocket 连接已不在广播列表，忽略重复断开")
+            return
         logger.info(f"WebSocket连接断开，当前连接数: {len(self.active_connections)}")
     
     async def broadcast(self, message: dict):
         """广播消息到所有连接
 
-        逐个连接发送，异常只记日志不中断，
-        避免单个坏连接拖垮整个广播
+        逐个连接发送，异常只记日志（含堆栈）不中断，
+        避免单个坏连接拖垮整个广播；发送失败的连接会被移除。
         """
-        for connection in self.active_connections:
+        # 遍历快照：发送失败时 disconnect 会修改 active_connections。
+        for connection in list(self.active_connections):
             # 异常保护：局部失败不影响主流程
             try:
                 # 异步等待结果
                 await connection.send_json(message)
             # 异常处理
-            except Exception as e:
-                logger.error(f"WebSocket发送消息失败: {e}")
+            except Exception as exc:
+                logger.warning("WebSocket发送消息失败，移除该连接: %s", exc, exc_info=True)
+                self.disconnect(connection)
 
 
 # 全局唯一的连接管理器实例
 manager = ConnectionManager()
+
+
+def _install_toast_bridge() -> Callable[[], None]:
+    """把 :func:`core.toast.emit_toast` 桥接到 ``/ws`` 广播。
+
+    Returns:
+        Callable[[], None]: 注销函数。
+    """
+    loop = asyncio.get_running_loop()
+
+    def _sink(payload) -> None:
+        """任意线程调用：把 toast 调度回 FastAPI 事件循环广播。"""
+        message = {"type": "toast", "data": payload.to_dict()}
+        try:
+            future = asyncio.run_coroutine_threadsafe(manager.broadcast(message), loop)
+
+            def _log_broadcast_result(done) -> None:
+                """消费广播 Future 的结果，避免异常只留在 Future 里无人读取。"""
+                try:
+                    done.result()
+                except Exception:  # noqa: BLE001 - 通知失败不能反向打断业务
+                    logger.warning("toast 广播失败，已忽略", exc_info=True)
+
+            future.add_done_callback(_log_broadcast_result)
+        except Exception:  # noqa: BLE001 - 通知失败不能反向打断业务
+            logger.warning("toast 广播调度失败，已忽略", exc_info=True)
+
+    return register_toast_sink(_sink)
 
 
 @app.websocket("/ws")
@@ -609,6 +701,10 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         # 断开连接
         manager.disconnect(websocket)
+    except Exception as exc:
+        # 连接异常关闭（网络中断/协议错误）同样按断开处理，避免异常冒泡。
+        logger.warning("WebSocket 连接异常关闭: %s", exc, exc_info=True)
+        manager.disconnect(websocket)
 
 
 async def push_alert(alert: dict):
@@ -621,11 +717,3 @@ async def push_alert(alert: dict):
         "type": "alert",
         "data": alert
     })
-
-
-# 边界/有效性检查
-if __name__ == "__main__":
-    # 导入模块
-    import uvicorn
-    # 0.0.0.0 允许局域网访问，端口默认 8000
-    uvicorn.run(app, host="0.0.0.0", port=8000)

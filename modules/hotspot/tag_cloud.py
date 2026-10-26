@@ -164,8 +164,8 @@ class TagCloudGenerator:
             return 0
         try:
             return int(float(text))
-        except ValueError:
-            pass
+        except ValueError as exc:
+            logger.debug("标签值不是数字，继续尝试时间解析: %r (%s)", text, exc)
         try:
             normalized = text.replace("Z", "+00:00")
             return int(datetime.fromisoformat(normalized).timestamp())
@@ -574,6 +574,8 @@ class TagCloudGenerator:
             zone_id: 分区ID
             word_frequency: 词频统计
         """
+        # 先置空会话，get_session 失败时 except/finally 不会引用未定义变量。
+        session = None
         try:
             # 赋值并准备后续使用
             session = get_session()
@@ -600,14 +602,15 @@ class TagCloudGenerator:
             logger.info(f"热点数据已保存到数据库")
             
         except Exception as e:
-            logger.error(f"保存热点数据失败: {e}")
-            # 回滚事务
-            session.rollback()
+            logger.error(f"保存热点数据失败: {e}", exc_info=True)
+            # 回滚事务；get_session 失败时 session 仍未创建。
+            if session is not None:
+                session.rollback()
         # 异常处理
         finally:
             # 关闭连接释放资源
-            # 释放连接/窗口资源
-            session.close()
+            if session is not None:
+                session.close()
     
     @staticmethod
     def is_collectable_zone(zone_name: str) -> bool:

@@ -230,7 +230,7 @@ def load_quota_limits() -> Optional[QuotaLimits]:
         logger.error('配额总闸配置校验失败（%s）: %s', path, exc)
         raise
     except Exception as exc:  # noqa: BLE001 - 配置问题不打断业务，转为「无配额上下文」
-        logger.error('读取配额账本失败（%s），不做配额拦截: %r', path, exc)
+        logger.error('读取配额账本失败（%s），不做配额拦截: %r', path, exc, exc_info=True)
         return None
 
 
@@ -303,14 +303,14 @@ def _enforce_quota(domain: str, category: str) -> None:
     except RequestQuotaExceeded:
         raise
     except Exception as exc:  # noqa: BLE001 - 读不可用同样按保守方向拒发，绝不放行
-        logger.error('配额读取不可用，按保守方向拒发 domain=%s category=%s: %r', domain, category, exc)
+        logger.error('配额读取不可用，按保守方向拒发 domain=%s category=%s: %r', domain, category, exc, exc_info=True)
         raise RequestQuotaExceeded('quota_store_unavailable') from exc
 
     # 都通过才写入计数；写库失败直接拒发，不放行（宁严不松）。
     try:
         quota_store.bump(domain, category, now)
     except Exception as exc:  # noqa: BLE001
-        logger.error('配额计数写入失败，按保守方向拒发 domain=%s category=%s: %r', domain, category, exc)
+        logger.error('配额计数写入失败，按保守方向拒发 domain=%s category=%s: %r', domain, category, exc, exc_info=True)
         raise RequestQuotaExceeded('store_write_failed') from exc
 
 
@@ -336,7 +336,7 @@ def log_quota_usage(now: Optional[int] = None) -> Optional[str]:
             for domain, category in limits.pairs
         }
     except Exception as exc:  # noqa: BLE001 - 观测失败不影响调度
-        logger.error('配额用量统计失败: %r', exc)
+        logger.error('配额用量统计失败: %r', exc, exc_info=True)
         return None
 
     parts = []
@@ -472,7 +472,7 @@ def load_cooldown_limits() -> Optional[CooldownLimits]:
             ip_circuit_s=int(ip_circuit.get('cooldown_s', FALLBACK_IP_CIRCUIT_S)),
         )
     except Exception as exc:  # noqa: BLE001 - 冷却账本问题不打断业务，退兜底常量
-        logger.error('读取冷却账本失败（%s），使用兜底冷却参数: %r', path, exc)
+        logger.error('读取冷却账本失败（%s），使用兜底冷却参数: %r', path, exc, exc_info=True)
         return None
 
 
@@ -521,7 +521,7 @@ def _enforce_risk_gate(domain: str) -> None:
     try:
         circuit = quota_store.get_ip_circuit()
     except Exception as exc:  # noqa: BLE001 - 读失败按保守方向拒发，绝不放行
-        logger.error('IP 级熔断状态读取不可用，按保守方向拒发: %r', exc)
+        logger.error('IP 级熔断状态读取不可用，按保守方向拒发: %r', exc, exc_info=True)
         raise RequestQuotaExceeded('ip_circuit_unavailable') from exc
     if circuit is not None:
         # 熔断只能人工清除（见 clear_ip_circuit），不做「到期自动恢复」。
@@ -530,7 +530,7 @@ def _enforce_risk_gate(domain: str) -> None:
     try:
         cooldown = quota_store.get_domain_cooldown(domain)
     except Exception as exc:  # noqa: BLE001 - 读失败按保守方向拒发
-        logger.error('分域冷却状态读取不可用，按保守方向拒发 domain=%s: %r', domain, exc)
+        logger.error('分域冷却状态读取不可用，按保守方向拒发 domain=%s: %r', domain, exc, exc_info=True)
         raise RequestQuotaExceeded('domain_cooldown_unavailable') from exc
     if cooldown is not None and int(cooldown[0]) > _now_epoch():
         raise RequestQuotaExceeded('domain:cooling')
@@ -603,7 +603,7 @@ def _report_risk(domain: str, code: int, *, now: Optional[Union[int, float]] = N
         quota_store.prune_risk_events(before_epoch=moment - RISK_EVENT_RETENTION_S)
         _maybe_open_ip_circuit(moment)
     except Exception as exc:  # noqa: BLE001 - 上报失败不得覆盖原始风控异常
-        logger.error('风控上报失败（不影响原始异常）domain=%s code=%s: %r', domain, code, exc)
+        logger.error('风控上报失败（不影响原始异常）domain=%s code=%s: %r', domain, code, exc, exc_info=True)
 
 
 def report_http_risk(
@@ -687,7 +687,7 @@ def report_status_429(domain: str, retry_after_s: Union[int, float], *, now: Opt
             now=moment,
         )
     except Exception as exc:  # noqa: BLE001 - 上报失败不得覆盖原始限流异常
-        logger.error('429 上报失败 domain=%s retry_after=%s: %r', domain, retry_after_s, exc)
+        logger.error('429 上报失败 domain=%s retry_after=%s: %r', domain, retry_after_s, exc, exc_info=True)
 
 
 def report_http_success(domain: str, *, now: Optional[Union[int, float]] = None) -> bool:
@@ -716,7 +716,7 @@ def report_http_success(domain: str, *, now: Optional[Union[int, float]] = None)
             return True
         return False
     except Exception as exc:  # noqa: BLE001 - 清零失败不影响本次请求
-        logger.error('连续 412 计数清零失败 domain=%s: %r', domain, exc)
+        logger.error('连续 412 计数清零失败 domain=%s: %r', domain, exc, exc_info=True)
         return False
 
 
@@ -731,7 +731,7 @@ def ip_circuit_open() -> bool:
     try:
         return quota_store.get_ip_circuit() is not None
     except Exception as exc:  # noqa: BLE001
-        logger.error('IP 级熔断状态查询失败，按保守方向视为开启: %r', exc)
+        logger.error('IP 级熔断状态查询失败，按保守方向视为开启: %r', exc, exc_info=True)
         return True
 
 

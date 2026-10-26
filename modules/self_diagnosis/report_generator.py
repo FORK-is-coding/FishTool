@@ -659,7 +659,7 @@ class ReportGenerator:
             return str(filepath)
             
         except Exception as e:
-            logger.error(f"[报告生成] 保存Markdown报告失败: {e}")
+            logger.error(f"[报告生成] 保存Markdown报告失败: {e}", exc_info=True)
             # 抛出异常中断流程
             raise
     
@@ -804,7 +804,7 @@ class ReportGenerator:
             return str(filepath)
             
         except Exception as e:
-            logger.error(f"[报告生成] PDF生成失败: {e}，降级为Markdown")
+            logger.error(f"[报告生成] PDF生成失败: {e}，降级为Markdown", exc_info=True)
             # 降级为 Markdown，返回 .md 路径而非伪装成 PDF。
             return self._save_markdown_fallback(self_data, benchmark_data, filename,
                                                 creator_ranking=creator_ranking)

@@ -201,14 +201,14 @@ class LLMClient:
                 db.commit()
             # 异常处理
             except Exception as e:
-                logger.error(f"记录Token使用失败: {e}")
+                logger.error(f"记录Token使用失败: {e}", exc_info=True)
             # 异常处理
             finally:
                 # 关闭连接释放资源
                 # 释放连接/窗口资源
                 db.close()
         except Exception as e:
-            logger.error(f"记录Token使用时获取数据库会话失败: {e}")
+            logger.error(f"记录Token使用时获取数据库会话失败: {e}", exc_info=True)
         
         logger.info(
             f"Token使用: {total_tokens} "
@@ -291,7 +291,7 @@ class LLMClient:
             raise LLMAPIError(message)
         # 异常处理
         except Exception as e:
-            logger.error(f"LLM请求异常: {e}")
+            logger.error(f"LLM请求异常: {e}", exc_info=True)
             # 抛出异常中断流程
             raise LLMError(f"请求失败: {e}")
     
@@ -361,8 +361,9 @@ class LLMClient:
                                 if 'content' in delta:
                                     yield delta['content']
                         # 异常处理
-                        except Exception:
-                            # 跳过本轮继续循环
+                        except Exception as exc:
+                            # 单个 SSE 块解析失败不应中断整个流；记录原因后跳过。
+                            logger.debug("跳过无法解析的 SSE 数据块: %s", exc, exc_info=True)
                             continue
                             
         except httpx.HTTPStatusError as e:
@@ -371,7 +372,7 @@ class LLMClient:
             raise LLMAPIError(f"流式请求失败: {e.response.text}")
         # 异常处理
         except Exception as e:
-            logger.error(f"LLM流式请求异常: {e}")
+            logger.error(f"LLM流式请求异常: {e}", exc_info=True)
             # 抛出异常中断流程
             raise LLMError(f"流式请求失败: {e}")
     
@@ -502,7 +503,7 @@ class LLMClient:
                 # 释放连接/窗口资源
                 db.close()
         except Exception as e:
-            logger.error(f"读取Token使用统计失败: {e}")
+            logger.error(f"读取Token使用统计失败: {e}", exc_info=True)
         
         # 数据库不可用时的内存回退
         return {

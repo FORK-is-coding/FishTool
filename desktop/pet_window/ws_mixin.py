@@ -72,3 +72,7 @@ class WsMixin:
             # 将内容呈现到界面上
             alert_data = data.get('data', {})
             self.show_notification(alert_data)
+        elif msg_type == 'toast':
+            # 后端高优先级错误 toast：复用通知气泡，不额外弹阻塞对话框。
+            toast_data = data.get('data', {})
+            self.show_toast(toast_data)

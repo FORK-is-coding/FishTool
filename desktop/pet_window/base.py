@@ -199,7 +199,7 @@ class PetWindowBase:
                 else:
                     logger.warning(f"[桌宠] 素材不存在，使用占位图: {path}")
             except Exception as exc:
-                logger.error(f"[桌宠] 加载素材失败 {path}: {exc}")
+                logger.error(f"[桌宠] 加载素材失败 {path}: {exc}", exc_info=True)
 
     def set_state(self, state: int):
         """切换桌宠状态

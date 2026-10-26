@@ -46,22 +46,25 @@
 # 1. 安装依赖
 pip install -r requirements.txt
 
-# 2a. 启动 Web 版（浏览器访问 http://localhost:8000）
-python start_web.py
+# 2. 启动（默认桌面版，同时自动提供 http://localhost:8000）
+python app.py
 
-# 2b. 或启动桌面版
-python start_desktop.py
+# 仅浏览器使用 Web 版
+python app.py web
 
 # 3. 打包 exe（可选，产物在 dist/）
-python build.py
+pyinstaller --clean --noconfirm build.spec
 ```
 
-详细使用教程见 [QUICKSTART.md](QUICKSTART.md)，接口文档启动后访问 `http://localhost:8000/docs`。
+运行 `python app.py` 会同时创建主窗口与桌宠，并在后台启动 Web 服务；此时浏览器访问
+`http://localhost:8000` 也可以使用同一套界面和 API。详细使用教程见
+[QUICKSTART.md](QUICKSTART.md)，接口文档访问 `http://localhost:8000/docs`。
 
 ## 📁 项目结构
 
 ```
 bili_ops_toolbox/
+├── app.py              # 唯一启动入口（桌面版 / Web 版 / 初始化）
 ├── bilibili/           # B站API封装（WBI签名、Cookie池、限频器）
 ├── core/               # 核心基础设施（配置、数据库、日志、异常、监控）
 ├── llm/                # LLM客户端（OpenAI兼容，可自定义端点）
@@ -73,16 +76,14 @@ bili_ops_toolbox/
 │   ├── up_analyzer/    # 头部拆解（数据采集、策略分析）
 │   └── self_diagnosis/ # 账号自诊（数据分析、报告生成）
 ├── web/                # FastAPI 服务
-│   ├── main.py         # 主应用
+│   ├── main.py         # FastAPI 应用对象（由 app.py 启动，不是独立入口）
 │   ├── routers/        # API 路由（按功能拆分）
 │   └── frontend/       # 前端（原生 HTML/CSS/JS，按页拆分）
 ├── desktop/            # 桌面客户端（WebView 主窗 + 桌宠）
 ├── tools/              # 运维与开发工具
 ├── tests/              # pytest 测试
 ├── config/  logs/  data/  reports/
-├── start_web.py        # Web 启动入口
-├── start_desktop.py    # 桌面启动入口
-└── main.py             # 主程序入口
+└── build.spec          # PyInstaller 打包配置（入口为 app.py）
 ```
 
 ## 💡 技术亮点

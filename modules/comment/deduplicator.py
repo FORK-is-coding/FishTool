@@ -358,8 +358,9 @@ class CommentDeduplicator:
                     # 格式不标准时尝试常见格式解析
                     try:
                         ctime = datetime.strptime(ctime, '%Y-%m-%d %H:%M:%S')
-                    except ValueError:
-                        # 解析失败跳过该评论，不影响整体去重
+                    except ValueError as exc:
+                        # 解析失败跳过该评论，不影响整体去重。
+                        logger.debug("评论时间解析失败，跳过该条: %r (%s)", ctime, exc)
                         continue
             window_key = ctime.replace(minute=0, second=0, microsecond=0)
             time_windows[window_key].append(comment)

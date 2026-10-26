@@ -271,7 +271,7 @@ class RateLimiter:
                         history.popleft()
                 history.append(now)
         except Exception as exc:
-            logger.error("%s接口滑动窗口限频失败: %s", budget_key, exc)
+            logger.error("%s接口滑动窗口限频失败: %s", budget_key, exc, exc_info=True)
             raise
 
     def report_429(self, endpoint: str) -> int:

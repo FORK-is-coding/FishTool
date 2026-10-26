@@ -109,8 +109,8 @@ def _coerce_datetime(value: Any) -> datetime:
             try:
                 # 兼容末尾 'Z'（Python 3.11 起 fromisoformat 也认，但显式替换更稳）。
                 return datetime.fromisoformat(text.replace("Z", "+00:00")).replace(tzinfo=None)
-            except ValueError:
-                pass
+            except ValueError as exc:
+                logger.debug("时间字符串解析失败，回退当前时间: %r (%s)", text, exc)
     return datetime.now()
 
 
@@ -257,7 +257,7 @@ class TopicGenerator:
             return topics
             
         except Exception as e:
-            logger.error(f"LLM生成选题失败: {e}")
+            logger.error(f"LLM生成选题失败: {e}", exc_info=True)
             # 抛出异常中断流程
             raise
     
@@ -964,7 +964,7 @@ class TopicGenerator:
             logger.info(f"选题已保存到选题库，共 {len(saved_ids)} 个")
             return saved_ids
         except Exception as e:
-            logger.error(f"保存选题到数据库失败: {e}")
+            logger.error(f"保存选题到数据库失败: {e}", exc_info=True)
             if session is not None:
                 # 修 §11.6 缺陷三：session 未赋值时不再 rollback/close 覆盖原错误
                 session.rollback()
@@ -1046,7 +1046,7 @@ class TopicGenerator:
             return result
             
         except Exception as e:
-            logger.error(f"查询选题库失败: {e}")
+            logger.error(f"查询选题库失败: {e}", exc_info=True)
             raise
         finally:
             if session is not None:
@@ -1083,7 +1083,7 @@ class TopicGenerator:
             return True
             
         except Exception as e:
-            logger.error(f"更新选题状态失败: {e}")
+            logger.error(f"更新选题状态失败: {e}", exc_info=True)
             if session is not None:
                 # 修 §11.6 缺陷三：session 未赋值时不再 rollback/close 覆盖原错误
                 session.rollback()

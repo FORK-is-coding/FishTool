@@ -75,9 +75,10 @@ document.querySelectorAll('.nav-item').forEach(item => {
 
 // ============ 工具函数 ============
 
-// 统一封装 fetch 请求：自动拼接 API_BASE、带 JSON 头；失败时可选弹窗提示。
+// 统一封装 fetch 请求：自动拼接 API_BASE、带 JSON 头；失败时可选提示。
 // showError=false 用于轮询类静默请求，避免高频失败打断用户操作。
 async function apiRequest(url, options = {}, showError = true) {
+    let responseStatus = 0;
     try {
         const response = await fetch(`${API_BASE}${url}`, {
             headers: {
@@ -86,16 +87,37 @@ async function apiRequest(url, options = {}, showError = true) {
             },
             ...options
         });
+        responseStatus = response.status;
         
         if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || '请求失败');
+            // FastAPI 的 detail 可能是字符串，也可能是 {error_code, message} 结构。
+            const payload = await response.json().catch(() => ({}));
+            const detail = payload && payload.detail !== undefined ? payload.detail : payload;
+            let message;
+            if (typeof detail === 'string' && detail) {
+                message = detail;
+            } else if (detail && typeof detail === 'object') {
+                message = detail.message || detail.error_code || `请求失败（HTTP ${response.status}）`;
+            } else {
+                message = `请求失败（HTTP ${response.status}）`;
+            }
+            const error = new Error(message);
+            error.status = response.status;
+            throw error;
         }
         
         return await response.json();
     } catch (error) {
         console.error('API请求失败:', error);
-        if (showError) showAppAlert(`错误: ${error.message}`);
+        if (showError) {
+            // 5xx 属于高优先级错误：优先用 toast；后端也会通过 /ws 推同文案，前端按文案去重。
+            // 弹窗仅作为旧浏览器 / toast 脚本缺失时的兜底。
+            if (responseStatus >= 500 && typeof showToast === 'function') {
+                showToast(error.message, { level: 'error', title: '操作失败' });
+            } else {
+                showAppAlert(`错误: ${error.message}`);
+            }
+        }
         throw error;
     }
 }

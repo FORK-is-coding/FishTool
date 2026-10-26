@@ -380,7 +380,7 @@ async def start_collect(
         except Exception as exc:
             # 采集异常已由采集器写入进度状态，此处仅记录日志。
             import logging
-            logging.getLogger(__name__).error("后台采集任务异常: %s", exc)
+            logging.getLogger(__name__).error("后台采集任务异常: %s", exc, exc_info=True)
 
     _collect_task = asyncio.create_task(_run())
     return {

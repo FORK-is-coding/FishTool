@@ -23,7 +23,7 @@ httpx==0.25.2
 # HTML解析
 beautifulsoup4==4.12.2
 # 二维码生成
-qrcode==7.4.2
+qrcode[pil]==7.4.2
 # PDF导出
 markdown2==2.4.12
 pdfkit==1.0.0

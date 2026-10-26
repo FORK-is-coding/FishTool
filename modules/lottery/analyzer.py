@@ -78,8 +78,9 @@ def _clean_analysis_text(reasons: Any, fallback: List[str]) -> str:
                     # 解码后递归展开字段。
                         extracted.extend(_flatten_analysis_values(decoded))
                         continue
-                    except json.JSONDecodeError:
-                        pass
+                    except json.JSONDecodeError as exc:
+                        # 不是二次编码 JSON，按普通字符串处理即可。
+                        logger.debug("理由片段 JSON 解码失败，按普通字符串处理: %s", exc)
             # 普通字符串直接作为理由片段。
                 extracted.append(candidate)
             elif value is not None:

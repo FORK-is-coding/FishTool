@@ -166,7 +166,7 @@ async def list_watch(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("读取跟踪列表失败: %s", exc)
+        logger.error("读取跟踪列表失败: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"读取跟踪列表失败: {exc}") from exc
     finally:
         session.close()
@@ -196,7 +196,7 @@ async def get_watch(bvid: str):
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("读取跟踪目标失败 bvid=%s: %s", bvid, exc)
+        logger.error("读取跟踪目标失败 bvid=%s: %s", bvid, exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"读取跟踪目标失败: {exc}") from exc
     finally:
         session.close()
@@ -238,7 +238,7 @@ async def create_watch(payload: WatchCreateRequest):
         raise
     except Exception as exc:
         session.rollback()
-        logger.error("加入跟踪失败 bvid=%s: %s", payload.bvid, exc)
+        logger.error("加入跟踪失败 bvid=%s: %s", payload.bvid, exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"加入跟踪失败: {exc}") from exc
     finally:
         session.close()
@@ -286,7 +286,7 @@ async def release_watch(bvid: str):
         raise
     except Exception as exc:
         session.rollback()
-        logger.error("停止跟踪失败 bvid=%s: %s", bvid, exc)
+        logger.error("停止跟踪失败 bvid=%s: %s", bvid, exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"停止跟踪失败: {exc}") from exc
     finally:
         session.close()

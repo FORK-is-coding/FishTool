@@ -75,7 +75,8 @@ def _read_fast_watch_switch() -> bool:
         from core.config import config as _config
 
         raw = _config.get("event_switches.fast_watch_enabled")
-    except Exception:  # noqa: BLE001 - 配置不可用不应影响默认关的语义
+    except Exception as exc:  # noqa: BLE001 - 配置不可用不应影响默认关的语义
+        logger.warning("读取 fast_watch 开关失败，按默认关处理: %s", exc, exc_info=True)
         return False
     if raw is None:
         return False
@@ -163,7 +164,8 @@ def _manual_stop_bvids(session: Session, bvids: Sequence[str]) -> set:
             "WHERE active = 0 AND stop_reason = 'manual_stop' AND bvid IN :bvids"
         ).bindparams(bindparam("bvids", expanding=True))
         rows = session.execute(stmt, {"bvids": wanted}).all()
-    except Exception:  # noqa: BLE001 - 缺表 / 缺列时按「无 manual_stop」处理
+    except Exception as exc:  # noqa: BLE001 - 缺表 / 缺列时按「无 manual_stop」处理
+        logger.debug("读取 manual_stop 失败，按无 manual_stop 处理: %s", exc, exc_info=True)
         return set()
     return {str(row[0]) for row in rows}
 
@@ -207,8 +209,8 @@ def _load_fast_union(session: Session, now_s: int) -> set:
         )
         for (bvid,) in session.execute(stmt, {"now": now_s}).all():
             used.add(str(bvid))
-    except Exception:  # noqa: BLE001 - 未跑迁移的旧库无该列：只用 panel 历史口径
-        pass
+    except Exception as exc:  # noqa: BLE001 - 未跑迁移的旧库无该列：只用 panel 历史口径
+        logger.debug("读取 fast_until_s 失败，仅使用 panel 历史口径: %s", exc, exc_info=True)
     return used
 
 
@@ -233,8 +235,8 @@ def _mark_fast_until(session: Session, bvids: Sequence[str], until_s: int) -> in
         result = session.execute(stmt, {"until": int(until_s), "bvids": wanted})
         session.flush()
         return int(result.rowcount or 0)
-    except Exception:  # noqa: BLE001 - 缺列（未跑迁移的库）时静默跳过，不炸整笔
-        logger.warning("fast_until_s 列不可用，跳过快采标记")
+    except Exception as exc:  # noqa: BLE001 - 缺列（未跑迁移的库）时静默跳过，不炸整笔
+        logger.warning("fast_until_s 列不可用，跳过快采标记: %s", exc, exc_info=True)
         return 0
 
 
@@ -395,8 +397,9 @@ def supply_members_from_counters(counters: Mapping[str, Any]) -> tuple[SupplyMem
                     author_mid=item.get("author_mid"),
                 )
             )
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as exc:
             # 非法枚举 / 形状 → 跳过该条，绝不拖垮整跑。
+            logger.debug("跳过非法事件成员: %r (%s)", item, exc)
             continue
     return tuple(members)
 

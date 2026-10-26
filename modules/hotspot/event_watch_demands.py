@@ -207,7 +207,8 @@ class EventWatchDemandReconciler:
             from modules.hotspot.events.service import _read_fast_watch_switch
 
             return bool(_read_fast_watch_switch())
-        except Exception:  # noqa: BLE001 - 开关不可读时按「关」处理（与默认一致）
+        except Exception as exc:  # noqa: BLE001 - 开关不可读时按「关」处理（与默认一致）
+            logger.warning("读取快采开关失败，按关闭处理: %s", exc, exc_info=True)
             return False
 
     @staticmethod
@@ -280,7 +281,8 @@ class EventWatchDemandReconciler:
         ).bindparams(bindparam("bvids", expanding=True))
         try:
             rows = session.execute(stmt, {"bvids": wanted}).all()
-        except Exception:  # noqa: BLE001 - 缺表 / 缺列时按「无 manual_stop」处理
+        except Exception as exc:  # noqa: BLE001 - 缺表 / 缺列时按「无 manual_stop」处理
+            logger.debug("读取 manual_stop 失败，按无 manual_stop 处理: %s", exc, exc_info=True)
             return set()
         return {str(row[0]) for row in rows}
 

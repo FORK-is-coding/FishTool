@@ -2,7 +2,7 @@
 
 ```
 bili_ops_toolbox/
-├── main.py                      # 主程序入口
+├── app.py                       # 唯一启动入口（默认桌面版；app.py web 为纯 Web）
 ├── requirements.txt             # 依赖列表
 ├── README.md                    # 项目说明
 ├── PROGRESS.md                  # 开发进度记录
@@ -18,7 +18,9 @@ bili_ops_toolbox/
 │   ├── config.py               # 配置管理器（支持加密、热重载）
 │   ├── logger.py               # 日志系统（分级、风控专用）
 │   ├── database.py             # 数据库模型（SQLAlchemy ORM）
-│   └── exceptions.py           # 自定义异常类
+│   ├── exceptions.py           # 自定义异常类
+│   ├── error_policy.py         # 异常分级：低优先级记日志，高优先级另发 toast
+│   └── toast.py                # 进程内 toast 总线（Web / 桌面 sink 注册）
 │
 ├── bilibili/                    # B站API封装
 │   ├── __init__.py
@@ -110,6 +112,12 @@ bili_ops_toolbox/
   - 20+自定义异常类
   - 统一错误码
   - 异常可重试判断
+
+- **error_policy.py** / **toast.py**: 统一异常处理与通知
+  - `report_exception` / `log_low_priority` / `report_high_priority` 分级入口
+  - 低优先级只写日志，高优先级写 ERROR 日志并投递 toast
+  - toast 通过 `/ws` 推送前端与桌宠，桌面壳用系统托盘气泡
+  - 规范与检查：`docs/EXCEPTION_HANDLING.md`、`tools/check_exception_handling.py`
 
 ### bilibili/ - B站API封装
 - **api.py**: API基础类

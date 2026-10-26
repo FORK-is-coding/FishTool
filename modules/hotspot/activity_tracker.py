@@ -209,7 +209,7 @@ class ActivityTracker:
             return []
         except Exception as e:
             # 兜底：NetworkError 等非 APIError 异常也不能让官方活动模块崩掉
-            logger.error(f"获取官方活动异常（已忽略）: {e}")
+            logger.error(f"获取官方活动异常（已忽略）: {e}", exc_info=True)
             return []
     
     async def get_ugc_account_dynamics(self, uid: str, offset: int = 0, limit: int = 10) -> List[Dict[str, Any]]:
@@ -312,7 +312,8 @@ class ActivityTracker:
                     timestamp = (module_author or {}).get('pub_ts', 0)
                     try:
                         pub_time = datetime.fromtimestamp(int(timestamp)) if timestamp else None
-                    except (ValueError, TypeError, OSError):
+                    except (ValueError, TypeError, OSError) as exc:
+                        logger.debug("动态发布时间解析失败，按无时间处理: %r (%s)", timestamp, exc)
                         pub_time = None
                     
                     # 组装动态数据
@@ -349,7 +350,7 @@ class ActivityTracker:
         except Exception as e:
             # 兜底：B站风控偶发断连/超时抛 NetworkError 等非 APIError 异常，
             # 单个账号失败不能冒泡导致整个活动模块 500 甚至崩进程
-            logger.error(f"获取账号 {uid} 动态异常（已忽略）: {e}")
+            logger.error(f"获取账号 {uid} 动态异常（已忽略）: {e}", exc_info=True)
             return []
     
     async def fetch_all_activities(self, include_ugc: bool = True, zone: str = 'all') -> Dict[str, Any]:
@@ -561,7 +562,8 @@ class ActivityTracker:
                 ts = ts / 1000
             return datetime.fromtimestamp(ts)
         # 异常处理
-        except Exception:
+        except Exception as exc:
+            logger.debug("活动时间戳解析失败，按无时间处理: %r (%s)", ts, exc, exc_info=True)
             return None
     
     def _get_activity_status(self, start_time: Optional[datetime], end_time: Optional[datetime]) -> str:
@@ -663,7 +665,7 @@ class ActivityTracker:
             logger.info(f"活动信息已保存到数据库（分区={zone}）")
             
         except Exception as e:
-            logger.error(f"保存活动信息失败: {e}")
+            logger.error(f"保存活动信息失败: {e}", exc_info=True)
             # 回滚事务
             if session is not None:
                 session.rollback()

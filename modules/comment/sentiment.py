@@ -312,7 +312,7 @@ class SentimentAnalyzer:
             return summary
             
         except Exception as e:
-            logger.error(f"LLM总结失败: {e}")
+            logger.error(f"LLM总结失败: {e}", exc_info=True)
             return {'error': str(e)}
     
     def _build_summary_prompt(self, batch: List[Dict[str, Any]], base_result: Dict[str, Any]) -> str:
@@ -391,8 +391,9 @@ class SentimentAnalyzer:
             if json_match:
                 return json.loads(json_match.group())
             return {'raw': content}
-        except Exception:
-            # 解析失败时保留原文
+        except Exception as exc:
+            # 解析失败时保留原文，不丢数据；调试时可回溯具体格式问题。
+            logger.debug("LLM 情感 JSON 解析失败，保留原始文本: %s", exc, exc_info=True)
             return {'raw': content}
     
     def _merge_llm_summaries(self, summaries: List[Dict[str, Any]]) -> Dict[str, Any]:

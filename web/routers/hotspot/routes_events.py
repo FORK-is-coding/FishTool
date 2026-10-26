@@ -38,6 +38,7 @@ from sqlalchemy.orm import Session
 
 from core.database import Topic, get_session
 from core.database.hot_event_repository import HotEventRepository
+from core.logger import get_logger
 from core.database.models_hot_event import (
     ASSESSMENT_STATUSES,
     GENERATION_STATES,
@@ -73,6 +74,8 @@ from .schemas import (
     MemberDecisionsRequest,
     OpportunityTaskRequest,
 )
+
+logger = get_logger(__name__)
 
 # ===========================================================================
 # 上限（§1.2）
@@ -1194,7 +1197,8 @@ def _quota_limit_view(category: str, source_key: str) -> Dict[str, Any]:
         from core.request_budget import load_quota_limits
 
         limits = load_quota_limits()
-    except Exception:  # noqa: BLE001 - 账本不可用按“未提供”处理，不臆造
+    except Exception as exc:  # noqa: BLE001 - 账本不可用按“未提供”处理，不臆造
+        logger.debug("读取预算上限失败，按未提供处理: %s", exc, exc_info=True)
         return {"available": False, "reason_code": "budget_config_unavailable"}
     if limits is None:
         return {"available": False, "reason_code": "budget_config_unavailable"}
@@ -1218,7 +1222,8 @@ def _quota_remaining_view(category: str, source_key: str, now_s: int) -> Dict[st
         if not domain:
             return {"available": False, "reason_code": "budget_domain_missing", "category": category}
         used = int(quota_store.used(domain, category, int(now_s)))
-    except Exception:  # noqa: BLE001 - 对账状态不可用如实标未提供
+    except Exception as exc:  # noqa: BLE001 - 对账状态不可用如实标未提供
+        logger.debug("读取配额对账状态失败，按未提供处理: %s", exc, exc_info=True)
         return {"available": False, "reason_code": "quota_store_unavailable"}
     return {
         "available": True,

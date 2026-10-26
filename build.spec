@@ -22,6 +22,7 @@ datas = [
 
 # 隐藏导入
 hiddenimports = [
+    'web.main',
     'PyQt5.QtCore',
     'PyQt5.QtGui',
     'PyQt5.QtWidgets',
@@ -44,7 +45,7 @@ hiddenimports = [
 ]
 
 a = Analysis(
-    ['start_desktop.py', 'start_web.py'],  # 同时打包桌面和 Web 启动脚本
+    ['app.py'],  # 唯一启动入口：默认桌面版；app.py web 提供 Web 服务
     pathex=[],
     binaries=[],
     datas=datas,

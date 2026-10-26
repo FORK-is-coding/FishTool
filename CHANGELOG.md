@@ -10,6 +10,44 @@
 
 ## [未发布]
 
+### 统一启动入口
+
+- 新增根目录 `app.py` 作为唯一启动入口：
+  - `python app.py`：默认桌面版，同时自动启动 `http://localhost:8000` 的 Web 服务；
+  - `python app.py web`：仅启动 Web 版，支持 `--host/--port/--reload/--init-only`；
+  - `python app.py init`：只初始化配置、数据库和运行目录。
+- 删除根目录 `main.py`、`start_web.py`、`start_desktop.py`；桌面源码模式改为通过
+  `app.py web --port <port>` 启动 Web 子进程，仍保持日志落盘与子进程退出检测。
+- `web/main.py` 仅保留为 FastAPI 应用模块，移除其 `__main__` 直接启动入口；
+  `desktop/main_window.py`、`desktop/pet_window/runner.py` 也移除重复入口。
+- `build.spec` 改为只打包 `app.py`，并补充 `web.main` hidden import；README、QUICKSTART、
+  STRUCTURE、交接文档同步更新。
+
+### 异常处理统一（低优先级 logger / 高优先级 toast）
+
+- 新增 `core/error_policy.py`：统一的 `report_exception` / `log_low_priority` /
+  `report_high_priority`，按异常类型或显式参数分级；HIGH 级别写 ERROR 日志并投递 toast。
+- 新增 `core/toast.py`：进程内 toast 总线（注册/注销 sink、短窗口去重、sink 故障隔离）；
+  无 UI 环境只记日志，不抛异常。
+- Web 侧 `web/main.py`：lifespan 注册 `/ws` 广播 sink；`HTTPException` 5xx 与未处理异常
+  统一写 ERROR 日志并推送 toast；WebSocket 广播失败会记录堆栈并移除坏连接。
+- 前端 `app.ui.js` / `style.modal.css`：新增右上角 `showToast()` 与 `/ws` 自动重连订阅；
+  桌宠新增 `type=toast` 通知气泡，主窗口新增非阻塞 `show_toast()` 托盘提示。
+- 前端 `apiRequest`：5xx 改走 toast（与后端 `/ws` 同文案去重），4xx 保留既有模态提示；
+  FastAPI 结构化 `detail` 不再被拼成 `[object Object]`。
+- 清理全部生产代码中的静默宽泛捕获：54 处宽泛 silent except 降为 0（测试/工具目录除外），
+  89 处 ERROR 级日志补齐 `exc_info=True`；解析类兜底、旧库缺列降级等补 `debug` 日志。
+- 修复 `ConfigNotFoundError` / `RecordNotFoundError` 构造时父类不接受 `code` 参数导致的
+  `TypeError`；`ConfigError` / `DatabaseError` 现允许子类传入更具体的错误码。
+- 修复评论预警入库/查询、标签云落库、增量断点查询在 `get_session()` 失败时
+  `session` 未绑定、`except/finally` 二次抛 `UnboundLocalError` 的问题。
+- 修复桌面版源码模式启动 Web 子进程时 `stdout/stderr=subprocess.PIPE` 且从不读取，
+  日志写满管道后 Web 服务阻塞、表现为「页面能打开但所有网络请求超时」；子进程输出
+  改为落盘 `data/logs/web_subprocess.log`，并在子进程退出时把退出码与日志末尾展示出来。
+- 新增 `tools/check_exception_handling.py` 与 `tests/test_error_policy.py`：静态拦截裸
+  except / 静默宽泛捕获 / 只写 pass，并覆盖 toast 去重与分级行为。
+- 规范文档：`docs/EXCEPTION_HANDLING.md`。
+
 **口径：热点生命周期双轨 —— 默认 `lifecycle_v2`，可切回 `heuristic_v1`；单视频持续追踪链（watch）固定走 v2。**
 
 - `GET /api/hotspot/lifecycle` 与 `HotspotService` 门面的默认 `algorithm` 由 `heuristic_v1`

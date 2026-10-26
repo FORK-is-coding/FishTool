@@ -165,6 +165,7 @@ async def _run_analysis_task(task_id: str, request: UPAnalysisRequest) -> None:
             result={"up_data": up_data, "analysis": analysis_result},
         )
     except Exception as exc:
+        logger.exception("UP主拆解后台任务失败 task=%s", task_id)
         _analysis_tasks[task_id].update(
             status="failed", message=f"分析失败: {exc}", estimated_seconds=0
         )
@@ -321,7 +322,7 @@ async def get_category_top_ups(request: CategoryTopRequest):
         }
         
     except Exception as e:
-        logger.error(f"[API] 获取分区UP主失败: {e}")
+        logger.error(f"[API] 获取分区UP主失败: {e}", exc_info=True)
         # 抛出异常中断流程
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -417,7 +418,7 @@ async def analyze_up(request: UPAnalysisRequest):
         raise
     # 异常处理
     except Exception as e:
-        logger.error(f"[API] UP主分析失败: {e}")
+        logger.error(f"[API] UP主分析失败: {e}", exc_info=True)
         # 抛出异常中断流程
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -482,7 +483,7 @@ async def self_diagnosis(request: SelfDiagnosisRequest):
         # 排名 run 校验失败等 HTTP 语义异常原样透传，避免被兜底成 500
         raise
     except Exception as e:
-        logger.error(f"[API] 账号自诊失败: {e}")
+        logger.error(f"[API] 账号自诊失败: {e}", exc_info=True)
         # 抛出异常中断流程
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -554,7 +555,7 @@ async def export_report(request: ReportExportRequest):
         # 排名 run 校验失败（含跨 UID 拒绝）原样透传
         raise
     except Exception as e:
-        logger.error(f"[API] 报告导出失败: {e}")
+        logger.error(f"[API] 报告导出失败: {e}", exc_info=True)
         # 抛出异常中断流程
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -584,8 +585,8 @@ async def get_llm_status():
         }
     # 异常处理
     except Exception as e:
-        # 配置缺失/无效时返回 false，附原因供前端提示
-        # 将结果交回调用方
+        # 配置缺失/无效时返回 false，附原因供前端提示；属于预期分支，记 debug 即可。
+        logger.debug("LLM 配置检查失败，按未配置返回: %s", e, exc_info=True)
         return {
             'success': True,
             'data': {

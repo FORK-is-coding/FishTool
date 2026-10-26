@@ -289,7 +289,7 @@ class StrategyAnalyzer:
                 'message': f'LLM调用失败: {str(e)}'
             }
         except Exception as e:
-            logger.error(f"[策略分析] 分析失败: {e}")
+            logger.error(f"[策略分析] 分析失败: {e}", exc_info=True)
             return {
                 'success': False,
                 'error': 'unknown_error',
@@ -359,7 +359,7 @@ class StrategyAnalyzer:
             if empty_dims:
                 logger.warning(f"[解析] 以下维度未解析到内容: {empty_dims}")
         except Exception as e:
-            logger.error(f"[解析] 解析分析结果失败: {e}")
+            logger.error(f"[解析] 解析分析结果失败: {e}", exc_info=True)
 
         return result
     

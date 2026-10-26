@@ -43,7 +43,7 @@ class DragMixin:
             else:
                 super().mousePressEvent(event)
         except Exception as exc:
-            logger.error(f"[桌宠] 鼠标按下处理失败: {exc}")
+            logger.error(f"[桌宠] 鼠标按下处理失败: {exc}", exc_info=True)
             event.ignore()
 
     def mouseMoveEvent(self, event):
