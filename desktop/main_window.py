@@ -475,7 +475,11 @@ class MainWindow(QMainWindow):
         # -u 让子进程 stdout/stderr 不缓冲，日志能及时落盘。
         try:
             self.web_process = subprocess.Popen(
-                [sys.executable, "-u", str(entry_script), "web", "--port", str(self.web_port)],
+                # 显式只监听回环地址：内嵌窗口与桌宠都经 localhost 访问。
+                [
+                    sys.executable, "-u", str(entry_script), "web",
+                    "--host", "127.0.0.1", "--port", str(self.web_port),
+                ],
                 stdout=stdout_target,
                 stderr=subprocess.STDOUT,
                 cwd=str(project_root),
@@ -561,7 +565,7 @@ class MainWindow(QMainWindow):
             # 实例化对象并准备使用
             """
             try:
-                logger.info(f"[主窗口] 在后台线程启动uvicorn: 0.0.0.0:{self.web_port}")
+                logger.info(f"[主窗口] 在后台线程启动uvicorn: 127.0.0.1:{self.web_port}")
                 
                 # 使用 Config+Server 方式，更适合在线程中运行
                 # run() 内部会调用 loop.run_until_complete，在线程中会冲突
@@ -574,7 +578,7 @@ class MainWindow(QMainWindow):
                 # 日志改走项目自身的 logging 配置（冒泡到根 logger 文件 handler）。
                 config = uvicorn.Config(
                     app=app,
-                    host="0.0.0.0",
+                    host="127.0.0.1",  # 只监听回环地址，内嵌窗口经 localhost 访问
                     port=self.web_port,
                     log_level="info",
                     access_log=False,  # 减少日志输出

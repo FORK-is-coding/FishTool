@@ -45,3 +45,31 @@ def test_desktop_port_option(monkeypatch):
 
     assert entry.main(["desktop", "--port", "9001"]) == 0
     assert calls == [9001]
+
+
+def test_web_host_defaults_to_loopback():
+    """app.py web 不传 --host 时只监听回环地址（issue #5）。"""
+    args = entry.build_parser().parse_args(["web"])
+
+    assert args.host == "127.0.0.1"
+
+
+def test_web_without_host_dispatches_loopback(monkeypatch):
+    """app.py web 不传 --host 时，传给 Web 启动函数的也是回环地址。"""
+    calls = []
+    monkeypatch.setattr(entry, "init_project", lambda: True)
+    monkeypatch.setattr(
+        entry,
+        "run_web",
+        lambda host, port, reload: calls.append((host, port, reload)) or 0,
+    )
+
+    assert entry.main(["web"]) == 0
+    assert calls == [("127.0.0.1", 8000, False)]
+
+
+def test_web_host_can_opt_in_all_interfaces():
+    """局域网访问仍可显式传 --host 0.0.0.0。"""
+    args = entry.build_parser().parse_args(["web", "--host", "0.0.0.0"])
+
+    assert args.host == "0.0.0.0"

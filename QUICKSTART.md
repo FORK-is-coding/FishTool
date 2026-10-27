@@ -25,6 +25,10 @@ python app.py web
 
 访问：http://localhost:8000
 
+默认只监听本机 127.0.0.1（桌面版内嵌服务同样如此）。需要局域网访问时显式传 `--host 0.0.0.0`，
+并设置环境变量 `FISHTOOL_ALLOWED_HOSTS`（逗号分隔，覆盖默认白名单，需同时保留 `localhost,127.0.0.1`，
+如 `localhost,127.0.0.1,192.168.1.10`），否则配置接口会返回 403。
+
 ### 5. 仅初始化
 ```bash
 python app.py init
@@ -120,6 +124,9 @@ python app.py desktop --port 9000
 
 # 仅 Web 版指定端口
 python app.py web --port 9000
+
+# 允许局域网访问（默认只监听 127.0.0.1；需同时配置 FISHTOOL_ALLOWED_HOSTS）
+python app.py web --host 0.0.0.0
 
 # 开发模式（热重载，仅 Web 版）
 python app.py web --reload

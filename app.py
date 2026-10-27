@@ -177,7 +177,12 @@ def build_parser() -> argparse.ArgumentParser:
     desktop_parser.add_argument("--port", type=int, default=8000, help="内嵌 Web 端口（默认 8000）")
 
     web_parser = subparsers.add_parser("web", help="仅启动 Web 服务")
-    web_parser.add_argument("--host", default="0.0.0.0", help="监听地址（默认 0.0.0.0）")
+    # 默认只监听回环地址；局域网访问需显式 --host 0.0.0.0 并配置 FISHTOOL_ALLOWED_HOSTS。
+    web_parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="监听地址（默认 127.0.0.1，仅本机；局域网访问传 0.0.0.0 并配置 FISHTOOL_ALLOWED_HOSTS）",
+    )
     web_parser.add_argument("--port", type=int, default=8000, help="监听端口（默认 8000）")
     web_parser.add_argument("--reload", action="store_true", help="开启开发热重载")
     web_parser.add_argument("--init-only", action="store_true", help="仅初始化，不启动服务")

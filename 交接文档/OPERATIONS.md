@@ -20,7 +20,7 @@ PDF 导出还依赖系统安装 `wkhtmltopdf`；没有它时 Markdown 导出仍�
 
 主要配置：
 
-- `server.host/port/reload`：配置默认 127.0.0.1:8080，但 `app.py` CLI 默认 0.0.0.0:8000；命令参数优先影响实际启动。
+- `server.host/port/reload`：配置默认 127.0.0.1:8080，但 `app.py` CLI 默认 127.0.0.1:8000；命令参数优先影响实际启动。
 - `database.path`：默认 `data/bili_ops.db`。
 - `bilibili.rate_limit.normal/comment/dynamic`：默认 2/4/2.5 秒间隔。
 - `bilibili.cookie_check_interval`：默认 1800 秒。
@@ -57,7 +57,7 @@ python app.py web --host 127.0.0.1 --port 8000 --reload
 Invoke-RestMethod http://127.0.0.1:8000/health
 ```
 
-应返回 `{"status":"ok"}`。浏览器访问 `/`，接口文档访问 `/docs`。默认建议只监听本机；对局域网开放前必须增加认证、反向代理和访问控制，当前业务接口没有完整用户鉴权。
+应返回 `{"status":"ok"}`。浏览器访问 `/`，接口文档访问 `/docs`。默认只监听本机（`app.py web` 与桌面版内嵌服务均为 127.0.0.1）；确需局域网访问时显式传 `--host 0.0.0.0`，并用 `FISHTOOL_ALLOWED_HOSTS` 列出允许的 Host（逗号分隔，覆盖默认白名单，需同时保留 `localhost,127.0.0.1`），否则 `/api/config` 返回 403。对局域网开放前必须增加认证、反向代理和访问控制，当前业务接口没有完整用户鉴权。
 
 ## 4. 桌面运行
 

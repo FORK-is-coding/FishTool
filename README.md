@@ -49,7 +49,8 @@ pip install -r requirements.txt
 # 2. 启动（默认桌面版，同时自动提供 http://localhost:8000）
 python app.py
 
-# 仅浏览器使用 Web 版
+# 仅浏览器使用 Web 版（默认只监听本机 127.0.0.1）
+#   局域网访问：python app.py web --host 0.0.0.0，并配置 FISHTOOL_ALLOWED_HOSTS
 python app.py web
 
 # 3. 打包 exe（可选，产物在 dist/）

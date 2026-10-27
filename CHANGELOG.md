@@ -10,6 +10,16 @@
 
 ## [未发布]
 
+### 默认只监听本机（#5）
+
+- `python app.py web` 的 `--host` 默认值、桌面版内嵌 Web 服务（源码模式子进程与打包版进程内
+  uvicorn）的监听地址由 `0.0.0.0` 改为 **`127.0.0.1`**，局域网其他设备默认无法访问。
+- `/api/config` 全部路由挂 `require_local_read`：`Host` / `Origin` 不在本机白名单内一律 403
+  （`local_host_required` / `cross_site_request_blocked`），防 DNS rebinding 读取配置。
+- **迁移说明**：需要局域网访问时，显式传 `--host 0.0.0.0`，并设置环境变量
+  `FISHTOOL_ALLOWED_HOSTS`（逗号分隔，覆盖默认白名单，需同时保留 `localhost,127.0.0.1`，
+  如 `localhost,127.0.0.1,192.168.1.10`）；否则配置页会返回 403。
+
 ### 账号自诊报告导出
 
 - “导出报告”改为 PDF：未自诊时 toast 提示“请先进行自诊”；自诊成功后复用当前结果，

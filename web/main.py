@@ -22,7 +22,7 @@ FastAPI后端，提供RESTful API接口
 - 统一入口：``python app.py web``（桌面版会自动以子进程方式启动它）
 - 本模块只提供 FastAPI 应用对象 ``app``，不单独作为启动入口
 """
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import JSONResponse
 # 从 fastapi.staticfiles 导入符号
@@ -68,6 +68,8 @@ from .routers import (
     hotspot, comment, config as config_router, logs, analysis,
     auth as auth_router, lottery, benchmark,
 )
+# 本机同源校验（Host / Origin），用于配置接口防 DNS rebinding 读取
+from .local_guard import require_local_read
 
 # 统一使用 core.logger 的日志实例，避免重复配置
 logger = get_logger(__name__)
@@ -562,7 +564,13 @@ templates = Jinja2Templates(directory=str(templates_dir))
 # 每个业务模块独立 APIRouter，按功能前缀挂载
 app.include_router(hotspot.router, prefix="/api/hotspot", tags=["热点发现"])
 app.include_router(comment.router, prefix="/api/comment", tags=["评论监控"])
-app.include_router(config_router.router, prefix="/api/config", tags=["配置管理"])
+# 配置接口含密钥相关读写：Host / Origin 须在本机白名单内（可用 FISHTOOL_ALLOWED_HOSTS 覆盖）
+app.include_router(
+    config_router.router,
+    prefix="/api/config",
+    tags=["配置管理"],
+    dependencies=[Depends(require_local_read)],
+)
 app.include_router(logs.router, prefix="/api/logs", tags=["日志查看"])
 # 抽奖工具（目标预览、真人筛选与随机抽奖）
 app.include_router(lottery.router, prefix="/api", tags=["抽奖工具"])
