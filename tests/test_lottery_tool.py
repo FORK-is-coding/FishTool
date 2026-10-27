@@ -219,6 +219,49 @@ def test_lottery_frontend_paths_match_backend_contract() -> None:
     assert "API_BASE = '/api'" in core_js
 
 
+def test_poll_task_timeout_is_marked_still_running_with_default_limits() -> None:
+    """pollTask 超时须带 TASK_STILL_RUNNING，新参数可选且默认仍为 1800 次 / 1 秒（issue #13）。"""
+    import re
+    from pathlib import Path
+
+    core_js = Path("web/frontend/static/js/app.core.js").read_text(encoding="utf-8")
+    assert "async function pollTask(statusUrl, elementId, options = {})" in core_js
+    assert "options.maxAttempts ?? 1800" in core_js
+    assert "options.intervalMs ?? 1000" in core_js
+    assert "code = 'TASK_STILL_RUNNING'" in core_js
+    # 其他调用方仍按两个参数调用，行为不变。
+    for name in ("app.hotspot.js", "app.up.js"):
+        source = Path(f"web/frontend/static/js/{name}").read_text(encoding="utf-8")
+        assert re.search(r"pollTask\(\s*`[^`]+`,\s*'[\w-]+'\s*\)", source), name
+    # 后端没有 cancelled 状态，通用 pollTask 不识别它。
+    poll_body = core_js.split("async function pollTask", 1)[1].split("\n}\n", 1)[0]
+    assert "cancelled" not in poll_body
+
+
+def test_lottery_page_keeps_running_task_and_resumes_instead_of_restarting() -> None:
+    """抽奖页超时后保留 task_id 并提供继续查看；有活动任务时再次点击只续查不新建（issue #13）。"""
+    from pathlib import Path
+
+    lottery_js = Path("web/frontend/static/js/app.lottery.js").read_text(encoding="utf-8")
+    assert "sessionStorage.setItem(LOTTERY_ACTIVE_TASKS[kind].storageKey, taskId)" in lottery_js
+    assert "error.code === 'TASK_STILL_RUNNING'" in lottery_js
+    assert "任务仍在后台运行" in lottery_js
+    # 真人筛选：有活动任务时跳过创建，直接轮询原任务。
+    filter_body = lottery_js.split("async function startRealUserFilter", 1)[1].split("\n}\n", 1)[0]
+    assert "let taskId = lotteryReadActiveTask('filter');" in filter_body
+    assert "if (!taskId) {" in filter_body
+    assert filter_body.index("if (!taskId) {") < filter_body.index("'/lottery/filter/tasks'")
+    # 随机抽奖：有活动任务时直接续查，不再走预览确认与创建。
+    draw_body = lottery_js.split("async function previewLotteryDraw", 1)[1].split("\n}\n", 1)[0]
+    assert draw_body.split("{", 1)[1].lstrip().startswith(
+        "if (lotteryReadActiveTask('draw')) return resumeLotteryDraw();"
+    )
+    # 任务结束（成功或真实失败）后清除活动任务。
+    assert "lotteryWriteActiveTask(kind, '');" in lottery_js
+    assert "lotteryWriteActiveTask('draw', '');" in lottery_js
+    assert "lotteryWriteActiveTask('filter', '');" in lottery_js
+
+
 def test_lottery_routes_are_mounted() -> None:
     """主应用必须挂载预览、筛选、抽奖和任务查询路由。"""
     from web.main import app

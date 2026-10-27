@@ -62,19 +62,93 @@ function knownRatioPercent(value) {
     return Number.isFinite(n) ? `${(n * 100).toFixed(0)}%` : '未知';
 }
 
-/** 启动评论区全用户筛选并持续展示采集与 AI 阶段进度。 */
+// ============ 后台任务找回（页面等待超时后任务可能仍在运行） ============
+// 每类任务对应的会话存储键、触发按钮与“继续查看”文案。
+const LOTTERY_ACTIVE_TASKS = {
+    filter: { storageKey: 'fishtool.lottery.activeTask.filter', buttonId: 'lottery-filter-button', resumeLabel: '继续查看筛选进度' },
+    draw: { storageKey: 'fishtool.lottery.activeTask.draw', buttonId: 'lottery-preview-button', resumeLabel: '继续查看抽奖进度' },
+};
+// sessionStorage 在隐私模式 / 被禁用时会抛错，保留内存兜底，保证本页内仍可继续查看。
+const lotteryActiveTaskMemory = {};
+
+// 读取某类仍在后台运行的任务 ID：内存兜底 -> 会话存储，没有则返回空串。
+function lotteryReadActiveTask(kind) {
+    if (lotteryActiveTaskMemory[kind]) return lotteryActiveTaskMemory[kind];
+    try {
+        return window.sessionStorage ? (window.sessionStorage.getItem(LOTTERY_ACTIVE_TASKS[kind].storageKey) || '') : '';
+    } catch (error) {
+        return '';  // 存储不可用：静默降级，仅内存生效
+    }
+}
+
+// 记录或清除某类活动任务 ID（传空值即清除），并同步按钮文案。
+function lotteryWriteActiveTask(kind, taskId) {
+    lotteryActiveTaskMemory[kind] = taskId || '';
+    try {
+        if (window.sessionStorage) {
+            if (taskId) window.sessionStorage.setItem(LOTTERY_ACTIVE_TASKS[kind].storageKey, taskId);
+            else window.sessionStorage.removeItem(LOTTERY_ACTIVE_TASKS[kind].storageKey);
+        }
+    } catch (error) {
+        // 忽略：持久化失败不影响本页继续查看
+    }
+    lotterySyncTaskButton(kind);
+}
+
+// 有活动任务时按钮变为“继续查看”，否则恢复原文案。
+function lotterySyncTaskButton(kind) {
+    const button = document.getElementById(LOTTERY_ACTIVE_TASKS[kind].buttonId);
+    if (!button) return;
+    if (!button.dataset.idleLabel) button.dataset.idleLabel = button.textContent;
+    button.textContent = lotteryReadActiveTask(kind) ? LOTTERY_ACTIVE_TASKS[kind].resumeLabel : button.dataset.idleLabel;
+}
+
+// 轮询达到页面等待上限时，提示任务仍在后台运行，并给出继续查看入口。
+function renderLotteryTaskStillRunning(kind, elementId) {
+    const resumeHandler = kind === 'filter' ? 'startRealUserFilter()' : 'previewLotteryDraw()';
+    document.getElementById(elementId).innerHTML = `
+        <div class="analysis-notice" role="status">
+            <p>任务仍在后台运行，页面已暂停等待。后台完成后可继续查看进度和结果，无需重新发起。</p>
+            <button class="btn btn-secondary" type="button" onclick="${resumeHandler}">${LOTTERY_ACTIVE_TASKS[kind].resumeLabel}</button>
+        </div>`;
+}
+
+// 统一处理筛选/抽奖任务错误：仍在运行则保留任务 ID，其余情况视为结束并清除。
+function handleLotteryTaskError(kind, error, elementId, failurePrefix) {
+    if (error.code === 'TASK_STILL_RUNNING') {
+        renderLotteryTaskStillRunning(kind, elementId);
+        return;
+    }
+    lotteryWriteActiveTask(kind, '');
+    document.getElementById(elementId).innerHTML = `<p class="analysis-error">${failurePrefix}：${escapeHtml(error.message)}</p>`;
+}
+
+// 页面就绪后按会话中记录的活动任务恢复按钮文案。
+window.addEventListener('DOMContentLoaded', () => {
+    Object.keys(LOTTERY_ACTIVE_TASKS).forEach(lotterySyncTaskButton);
+});
+
+/** 启动评论区全用户筛选并持续展示采集与 AI 阶段进度；已有后台任务时继续查看该任务。 */
 async function startRealUserFilter() {
     const target = document.getElementById('lottery-filter-target')?.value.trim();
     const button = document.getElementById('lottery-filter-button');
-    if (!target) return showAppAlert('请先输入视频 BV 号或动态完整链接');
+    let taskId = lotteryReadActiveTask('filter');
+    if (!taskId && !target) return showAppAlert('请先输入视频 BV 号或动态完整链接');
     button.disabled = true;
-    showLoading('lottery-filter-result', { message: '正在建立筛选任务，随后将优先检查本地评论数据' });
+    showLoading('lottery-filter-result', {
+        message: taskId ? '正在继续查看后台筛选任务' : '正在建立筛选任务，随后将优先检查本地评论数据',
+    });
     try {
-        const started = await apiRequest('/lottery/filter/tasks', {
-            method: 'POST',
-            body: JSON.stringify({ target, focus_template: getLotteryFocusTemplate() }),
-        });
-        const result = await pollTask(`/lottery/tasks/${started.task_id}`, 'lottery-filter-result');
+        if (!taskId) {
+            const started = await apiRequest('/lottery/filter/tasks', {
+                method: 'POST',
+                body: JSON.stringify({ target, focus_template: getLotteryFocusTemplate() }),
+            });
+            taskId = started.task_id;
+            lotteryWriteActiveTask('filter', taskId);
+        }
+        const result = await pollTask(`/lottery/tasks/${encodeURIComponent(taskId)}`, 'lottery-filter-result');
+        lotteryWriteActiveTask('filter', '');
         const realUsers = Array.isArray(result.real_users) ? result.real_users : [];
         const suspiciousUsers = Array.isArray(result.suspicious_users) ? result.suspicious_users : [];
         const indeterminateUsers = Array.isArray(result.indeterminate_users) ? result.indeterminate_users : [];
@@ -93,7 +167,7 @@ async function startRealUserFilter() {
                 <section><h3>资料不足</h3>${indeterminateUsers.map(renderLotteryUser).join('') || '<p class="card-empty">暂无未知账号</p>'}</section>
             </div>`;
     } catch (error) {
-        document.getElementById('lottery-filter-result').innerHTML = `<p class="analysis-error">筛选失败：${escapeHtml(error.message)}</p>`;
+        handleLotteryTaskError('filter', error, 'lottery-filter-result', '筛选失败');
     } finally {
         button.disabled = false;
     }
@@ -263,8 +337,9 @@ function getLotteryDrawFilters() {
     };
 }
 
-/** 读取标题与发布者，得到明确确认后才创建抽奖任务。 */
+/** 读取标题与发布者，得到明确确认后才创建抽奖任务；已有后台抽奖任务时继续查看该任务。 */
 async function previewLotteryDraw() {
+    if (lotteryReadActiveTask('draw')) return resumeLotteryDraw();
     const target = document.getElementById('lottery-draw-target')?.value.trim();
     const winnerCount = Number(document.getElementById('lottery-winner-count')?.value);
     const uniqueUsers = Boolean(document.getElementById('lottery-unique-users')?.checked);
@@ -288,7 +363,21 @@ async function previewLotteryDraw() {
         if (!await confirmLotteryTarget(metadata)) return;
         await runLotteryDraw(target, winnerCount, uniqueUsers, filters);
     } catch (error) {
-        document.getElementById('lottery-draw-result').innerHTML = `<p class="analysis-error">抽奖准备失败：${escapeHtml(error.message)}</p>`;
+        handleLotteryTaskError('draw', error, 'lottery-draw-result', '抽奖准备失败');
+    } finally {
+        button.disabled = false;
+    }
+}
+
+/** 继续查看仍在后台运行的抽奖任务，不重新确认、也不重新创建任务。 */
+async function resumeLotteryDraw() {
+    const button = document.getElementById('lottery-preview-button');
+    button.disabled = true;
+    showLoading('lottery-draw-result', { message: '正在继续查看后台抽奖任务' });
+    try {
+        await pollLotteryDraw(lotteryReadActiveTask('draw'));
+    } catch (error) {
+        handleLotteryTaskError('draw', error, 'lottery-draw-result', '抽奖失败');
     } finally {
         button.disabled = false;
     }
@@ -303,7 +392,14 @@ async function runLotteryDraw(target, winnerCount, uniqueUsers, filters) {
         method: 'POST',
         body: JSON.stringify({ target, winner_count: winnerCount, unique_users: uniqueUsers, ...filters }),
     });
-    const result = await pollTask(`/lottery/tasks/${started.task_id}`, 'lottery-draw-result');
+    lotteryWriteActiveTask('draw', started.task_id);
+    await pollLotteryDraw(started.task_id);
+}
+
+/** 轮询抽奖任务直至结束，成功后清除活动任务并渲染中奖名单。 */
+async function pollLotteryDraw(taskId) {
+    const result = await pollTask(`/lottery/tasks/${encodeURIComponent(taskId)}`, 'lottery-draw-result');
+    lotteryWriteActiveTask('draw', '');
     const winners = Array.isArray(result.winners) ? result.winners : [];
     currentLotteryWinners = winners.map(winner => ({ ...winner }));
     document.getElementById('lottery-winner-verification-result').innerHTML = '';

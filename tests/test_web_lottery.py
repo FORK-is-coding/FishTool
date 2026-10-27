@@ -331,6 +331,143 @@ def test_get_task_missing_returns_404(client):
 
 
 # ---------------------------------------------------------------------------
+# 运行中任务复用 / 强引用 / 过期清理（issue #13）
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def spawned(monkeypatch):
+    """替换 _spawn：只记录调度请求、不真正运行，使任务稳定停留在 running。"""
+    calls: list = []
+
+    def fake_spawn(task_id, coroutine):
+        """记录任务 ID 并关闭协程，避免未等待告警。"""
+        coroutine.close()
+        calls.append(task_id)
+
+    monkeypatch.setattr(lottery_module, "_spawn", fake_spawn)
+    return calls
+
+
+def test_start_filter_task_reuses_running_task_with_same_body(client, spawned):
+    """同参筛选任务仍在运行时应复用原任务，不再重复调度。"""
+    body = {"target": "BV1xx411c7mD", "focus_template": "侧重点"}
+    first = client.post("/api/lottery/filter/tasks", json=body).json()
+    second = client.post("/api/lottery/filter/tasks", json=body).json()
+
+    assert first["reused"] is False
+    assert second == {"success": True, "task_id": first["task_id"], "reused": True}
+    assert spawned == [first["task_id"]]
+    assert len(lottery_module._tasks) == 1
+
+
+def test_start_filter_task_creates_new_task_after_previous_finished(client, spawned):
+    """原任务结束后同参请求应新建任务。"""
+    body = {"target": "BV1xx411c7mD"}
+    first = client.post("/api/lottery/filter/tasks", json=body).json()
+    lottery_module._tasks[first["task_id"]].update(status="completed")
+
+    second = client.post("/api/lottery/filter/tasks", json=body).json()
+    assert second["reused"] is False
+    assert second["task_id"] != first["task_id"]
+    assert spawned == [first["task_id"], second["task_id"]]
+
+
+def test_start_task_does_not_reuse_different_body_or_kind(client, spawned):
+    """请求体不同或任务类型不同都不应复用。"""
+    first = client.post("/api/lottery/draw/tasks", json={"target": "BV1xx411c7mD", "winner_count": 1}).json()
+    other_count = client.post("/api/lottery/draw/tasks", json={"target": "BV1xx411c7mD", "winner_count": 2}).json()
+    other_kind = client.post("/api/lottery/filter/tasks", json={"target": "BV1xx411c7mD"}).json()
+    same = client.post("/api/lottery/draw/tasks", json={"winner_count": 1, "target": "BV1xx411c7mD"}).json()
+
+    assert other_count["reused"] is False and other_count["task_id"] != first["task_id"]
+    assert other_kind["reused"] is False and other_kind["task_id"] != first["task_id"]
+    assert same == {"success": True, "task_id": first["task_id"], "reused": True}
+    assert len(spawned) == 3
+
+
+def test_get_task_hides_fingerprint_and_finish_time(client, spawned):
+    """查询接口不应暴露请求指纹与结束时间等内部字段。"""
+    task_id = client.post("/api/lottery/filter/tasks", json={"target": "BV1xx411c7mD"}).json()["task_id"]
+    lottery_module._tasks[task_id]["finished_monotonic"] = 1.0
+
+    data = client.get(f"/api/lottery/tasks/{task_id}").json()["data"]
+    assert "fingerprint" not in data
+    assert "finished_monotonic" not in data
+    assert "started_monotonic" not in data
+
+
+def test_spawn_holds_strong_reference_until_done(monkeypatch):
+    """_spawn 应在运行期间持有 Task 强引用，结束后释放并记录结束时间。"""
+    monkeypatch.setattr(lottery_module, "_tasks", {})
+    monkeypatch.setattr(lottery_module, "_background_tasks", {})
+
+    async def scenario():
+        release = asyncio.Event()
+        task_id = lottery_module._create_task("filter")
+
+        async def work(tid):
+            await release.wait()
+            lottery_module._tasks[tid].update(status="completed")
+
+        lottery_module._spawn(task_id, work(task_id))
+        held = lottery_module._background_tasks.get(task_id)
+        assert isinstance(held, asyncio.Task) and not held.done()
+
+        release.set()
+        await held
+        await asyncio.sleep(0)  # 让 done 回调执行
+        return task_id
+
+    task_id = asyncio.run(scenario())
+    assert task_id not in lottery_module._background_tasks
+    assert lottery_module._tasks[task_id]["status"] == "completed"
+    assert lottery_module._tasks[task_id]["finished_monotonic"] is not None
+
+
+def test_spawn_marks_cancelled_task_failed(monkeypatch):
+    """协程被取消仍停在 running 时应落 failed，避免同参请求复用已死任务。"""
+    monkeypatch.setattr(lottery_module, "_tasks", {})
+    monkeypatch.setattr(lottery_module, "_background_tasks", {})
+
+    async def scenario():
+        task_id = lottery_module._create_task("draw", "fp")
+        lottery_module._spawn(task_id, asyncio.Event().wait())
+        held = lottery_module._background_tasks[task_id]
+        await asyncio.sleep(0)
+        held.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await held
+        await asyncio.sleep(0)
+        return task_id
+
+    task_id = asyncio.run(scenario())
+    assert lottery_module._tasks[task_id]["status"] == "failed"
+    assert lottery_module._find_running_task("fp") is None
+    assert task_id not in lottery_module._background_tasks
+
+
+def test_create_task_prunes_finished_tasks_after_ttl(monkeypatch):
+    """新建任务时应清理超过保留时长的已结束任务，运行中与未过期任务保留。"""
+    now = 100_000.0
+    monkeypatch.setattr(lottery_module.time, "monotonic", lambda: now)
+    ttl = lottery_module._FINISHED_TASK_TTL_SECONDS
+    monkeypatch.setattr(
+        lottery_module,
+        "_tasks",
+        {
+            "old-done": {"status": "completed", "finished_monotonic": now - ttl - 1},
+            "old-failed": {"status": "failed", "finished_monotonic": now - ttl - 1},
+            "recent-done": {"status": "completed", "finished_monotonic": now - 10},
+            "long-running": {"status": "running", "started_monotonic": now - ttl * 5},
+        },
+    )
+
+    new_id = lottery_module._create_task("filter")
+    assert set(lottery_module._tasks) == {"recent-done", "long-running", new_id}
+
+
+# ---------------------------------------------------------------------------
 # 后台任务
 # ---------------------------------------------------------------------------
 
