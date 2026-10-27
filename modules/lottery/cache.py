@@ -114,6 +114,30 @@ def group_is_fresh(group: Dict[str, Any], now_s: int, ttl_s: int) -> bool:
     return attempt_s == stamp and attempt_s <= now_s
 
 
+def snapshot_is_reusable(snapshot: Any, now_s: int, ttl_s: int) -> bool:
+    """判断评论快照能否直接作为抽奖候选集复用。
+
+    只有显式标记 ``complete is True`` 且 ``saved_epoch_s`` 在 TTL 内的快照才可复用；
+    旧格式（无完整性标记）、部分采集、过期、未来时间戳或字段类型异常一律不可复用。
+
+    Args:
+        snapshot: ``load_dynamic_snapshot`` / ``load_video_snapshot`` 的返回值。
+        now_s: 当前 UTC 秒级时间戳。
+        ttl_s: 复用窗口秒数，必须为正整数。
+
+    Returns:
+        ``True`` 表示可以跳过在线采集。
+    """
+    if not isinstance(snapshot, dict) or snapshot.get("complete") is not True:
+        return False
+    saved_s = snapshot.get("saved_epoch_s")
+    if type(now_s) is not int or type(ttl_s) is not int or ttl_s <= 0:
+        return False
+    if type(saved_s) is not int:
+        return False
+    return 0 <= now_s - saved_s <= ttl_s
+
+
 @dataclass
 class CacheLookup:
     """画像缓存查询结果，携带状态与需刷新的 group 列表。"""
@@ -160,18 +184,90 @@ class LotteryCache:
             logger.warning("动态评论缓存读取失败: %s", exc)
             return []
 
-    def save_dynamic_comments(self, dynamic_id: str, comments: List[Dict[str, Any]]) -> None:
+    def load_dynamic_snapshot(self, dynamic_id: str) -> Optional[Dict[str, Any]]:
+        """读取动态评论快照及其完整性标记。
+
+        旧格式文件（只有 ``saved_at`` / ``comments``）没有完整性标记，
+        按 ``complete=False`` 返回，由调用方判为不可复用。
+
+        Args:
+            dynamic_id: B 站动态 ID。
+
+        Returns:
+            ``{"comments", "complete", "saved_epoch_s"}``；缺失或损坏时返回 ``None``。
+        """
+        payload = self._read_json(self.dynamic_path(dynamic_id), "动态评论")
+        if payload is None:
+            return None
+        comments = payload.get("comments")
+        return {
+            "comments": comments if isinstance(comments, list) else [],
+            "complete": payload.get("complete") is True,
+            "saved_epoch_s": payload.get("saved_epoch_s"),
+        }
+
+    def save_dynamic_comments(
+        self,
+        dynamic_id: str,
+        comments: List[Dict[str, Any]],
+        complete: bool = False,
+    ) -> None:
         """原子保存动态评论缓存。
 
         Args:
             dynamic_id: B 站动态 ID。
             comments: 标准评论列表。
+            complete: 本次采集是否确认翻到评论区末页；默认按不完整保存。
 
         Returns:
             无。
         """
-        payload = {"saved_at": datetime.now().isoformat(), "comments": comments}
+        payload = {
+            "saved_at": datetime.now().isoformat(),
+            "saved_epoch_s": int(time.time()),
+            "complete": bool(complete),
+            "comments": comments,
+        }
         self._write_json(self.dynamic_path(dynamic_id), payload, "动态评论")
+
+    # ------------------------------------------------------------------ 视频快照标记
+
+    def load_video_snapshot(self, bvid: str) -> Optional[Dict[str, Any]]:
+        """读取视频评论快照标记（评论本体在 SQLite，此处只记完整性与时间）。
+
+        Args:
+            bvid: 视频 BV 号。
+
+        Returns:
+            ``{"complete", "saved_epoch_s", "comment_count"}``；缺失或损坏时返回 ``None``。
+        """
+        payload = self._read_json(self.video_snapshot_path(bvid), "视频评论快照")
+        if payload is None:
+            return None
+        return {
+            "complete": payload.get("complete") is True,
+            "saved_epoch_s": payload.get("saved_epoch_s"),
+            "comment_count": payload.get("comment_count"),
+        }
+
+    def mark_video_snapshot(self, bvid: str, comment_count: int, complete: bool = True) -> None:
+        """记录一次抽奖用视频评论采集的完整性与时间。
+
+        Args:
+            bvid: 视频 BV 号。
+            comment_count: 本次采集并成功落库的评论条数。
+            complete: 本次采集是否为完整采集。
+
+        Returns:
+            无。
+        """
+        payload = {
+            "saved_at": datetime.now().isoformat(),
+            "saved_epoch_s": int(time.time()),
+            "complete": bool(complete),
+            "comment_count": int(comment_count),
+        }
+        self._write_json(self.video_snapshot_path(bvid), payload, "视频评论快照")
 
     # ------------------------------------------------------------------ 画像兼容层
 
@@ -521,6 +617,17 @@ class LotteryCache:
         """
         return self.cache_dir / f"dynamic_{dynamic_id}.json"
 
+    def video_snapshot_path(self, bvid: str) -> Path:
+        """返回指定视频的评论快照标记路径。
+
+        Args:
+            bvid: 视频 BV 号。
+
+        Returns:
+            视频快照标记 JSON 路径。
+        """
+        return self.cache_dir / f"video_{bvid}.json"
+
     def profile_path(self) -> Path:
         """返回用户画像缓存路径。
 
@@ -532,6 +639,18 @@ class LotteryCache:
     def _ttl_for(self, group: str) -> int:
         """返回 group 的 TTL 秒数，未知 group 使用默认 6h。"""
         return _GROUP_TTL_S.get(group, _DEFAULT_TTL_S)
+
+    @staticmethod
+    def _read_json(path: Path, label: str) -> Optional[Dict[str, Any]]:
+        """容错读取 JSON 对象文件，缺失、损坏或非对象时返回 ``None``。"""
+        try:
+            if not path.exists():
+                return None
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("%s缓存读取失败: %s", label, exc)
+            return None
+        return payload if isinstance(payload, dict) else None
 
     def _read_profile_doc(self) -> Dict[str, Any]:
         """容错读取画像缓存原始文档，异常/非 dict 返回空字典。"""

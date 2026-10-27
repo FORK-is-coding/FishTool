@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from modules.lottery.cache import LotteryCache
+from modules.lottery.cache import LotteryCache, snapshot_is_reusable
 
 
 # ------------------------------------------------------------------ 夹具
@@ -153,6 +153,101 @@ def test_load_dynamic_comments_survives_oserror(cache: LotteryCache) -> None:
     cache.dynamic_path("D_dir").mkdir(parents=True, exist_ok=True)
 
     assert cache.load_dynamic_comments("D_dir") == []
+
+
+# ------------------------------------------------- 评论快照完整性（issue #5-6）
+
+_NOW = 1_800_000_000
+
+
+@pytest.mark.parametrize(
+    "snapshot, ttl, expected",
+    [
+        ({"complete": True, "saved_epoch_s": _NOW}, 600, True),
+        ({"complete": True, "saved_epoch_s": _NOW - 600}, 600, True),
+        # 过期。
+        ({"complete": True, "saved_epoch_s": _NOW - 601}, 600, False),
+        # 部分采集。
+        ({"complete": False, "saved_epoch_s": _NOW}, 600, False),
+        # 旧格式：没有完整性标记与秒级时间戳。
+        ({"saved_at": "2026-01-01T00:00:00", "comments": []}, 600, False),
+        ({"complete": True}, 600, False),
+        # 标记必须是真布尔，不接受字符串/整数等“看起来为真”的值。
+        ({"complete": "true", "saved_epoch_s": _NOW}, 600, False),
+        ({"complete": 1, "saved_epoch_s": _NOW}, 600, False),
+        # 时间戳类型异常或来自未来。
+        ({"complete": True, "saved_epoch_s": str(_NOW)}, 600, False),
+        ({"complete": True, "saved_epoch_s": float(_NOW)}, 600, False),
+        ({"complete": True, "saved_epoch_s": _NOW + 5}, 600, False),
+        # TTL 非法。
+        ({"complete": True, "saved_epoch_s": _NOW}, 0, False),
+        # 非字典。
+        (None, 600, False),
+        ([], 600, False),
+    ],
+)
+def test_snapshot_is_reusable_table(snapshot, ttl, expected) -> None:
+    """只有近期且显式完整的快照可复用。"""
+    assert snapshot_is_reusable(snapshot, _NOW, ttl) is expected
+
+
+def test_save_dynamic_comments_records_completeness(cache: LotteryCache) -> None:
+    """保存动态缓存时应记录完整性与秒级时间戳，默认按不完整保存。"""
+    cache.save_dynamic_comments("D200", [{"rpid": "1"}])
+    cache.save_dynamic_comments("D201", [{"rpid": "2"}], complete=True)
+
+    partial = cache.load_dynamic_snapshot("D200")
+    full = cache.load_dynamic_snapshot("D201")
+    assert partial["complete"] is False
+    assert full["complete"] is True
+    assert full["comments"] == [{"rpid": "2"}]
+    assert type(full["saved_epoch_s"]) is int
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        json.dumps({"saved_at": "2026-01-01T00:00:00", "comments": [{"rpid": "old"}]}),
+        json.dumps({"complete": "yes", "saved_epoch_s": "坏值", "comments": "坏数据"}),
+    ],
+)
+def test_load_dynamic_snapshot_tolerates_legacy_payload(cache: LotteryCache, raw: str) -> None:
+    """旧格式或字段异常的历史文件不抛异常，且按不完整处理。"""
+    path = cache.dynamic_path("D_old")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(raw, encoding="utf-8")
+
+    snapshot = cache.load_dynamic_snapshot("D_old")
+
+    assert snapshot["complete"] is False
+    assert isinstance(snapshot["comments"], list)
+    assert snapshot_is_reusable(snapshot, _NOW, 600) is False
+    # 旧读取入口保持兼容。
+    assert isinstance(cache.load_dynamic_comments("D_old"), list)
+
+
+@pytest.mark.parametrize("raw", ["{坏 JSON", json.dumps([1, 2])])
+def test_load_snapshots_return_none_when_corrupted(cache: LotteryCache, raw: str) -> None:
+    """快照文件损坏或顶层不是对象时返回 None。"""
+    for path in (cache.dynamic_path("D_bad"), cache.video_snapshot_path("BV_bad")):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(raw, encoding="utf-8")
+
+    assert cache.load_dynamic_snapshot("D_bad") is None
+    assert cache.load_video_snapshot("BV_bad") is None
+
+
+def test_video_snapshot_round_trip(cache: LotteryCache, tmp_path: Path) -> None:
+    """视频快照标记可往返，缺失时返回 None。"""
+    assert cache.video_snapshot_path("BV1") == tmp_path / "lottery_cache" / "video_BV1.json"
+    assert cache.load_video_snapshot("BV1") is None
+
+    cache.mark_video_snapshot("BV1", 3)
+
+    snapshot = cache.load_video_snapshot("BV1")
+    assert snapshot["complete"] is True
+    assert snapshot["comment_count"] == 3
+    assert type(snapshot["saved_epoch_s"]) is int
 
 
 # ------------------------------------------------- 用户画像缓存

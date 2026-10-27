@@ -6,6 +6,8 @@ SQLite 一律使用 tmp_path 下的隔离库（monkeypatch 模块级 get_session
 """
 
 import asyncio
+import json
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -472,8 +474,10 @@ def test_collect_dynamic_comments_respects_max_count_as_soft_cap(
 def test_get_comments_prefers_local_video_rows(
     service: LotteryService, isolated_db: DatabaseManager
 ) -> None:
-    """视频命中本地库时应跳过在线采集并推送复用进度。"""
+    """视频命中近期完整快照时应跳过在线采集并推送复用进度。"""
     _seed_video(isolated_db, "BV200", [_full_comment_row(1, "c1", datetime(2024, 5, 1))])
+    # issue #5-6：本地有行还不够，必须有 TTL 内的完整采集标记才可复用。
+    service._cache.mark_video_snapshot("BV200", 1, complete=True)
     collector = _ContractCollector(comments=[{"rpid": "crawler"}])
     service.collector = collector
     progress = _ProgressRecorder()
@@ -491,8 +495,9 @@ def test_get_comments_prefers_local_video_rows(
 def test_get_comments_prefers_local_dynamic_cache(
     service: LotteryService, monkeypatch
 ) -> None:
-    """动态命中 JSON 缓存时同样跳过在线采集。"""
-    service._save_dynamic_comments("123", [{"rpid": "cached", "uid": 1}])
+    """动态命中近期完整 JSON 快照时同样跳过在线采集。"""
+    # issue #5-6：只有标记为完整采集的快照才可复用。
+    service._save_dynamic_comments("123", [{"rpid": "cached", "uid": 1}], complete=True)
     progress = _ProgressRecorder()
 
     comments, source = asyncio.run(
@@ -534,6 +539,263 @@ def test_get_comments_falls_back_to_dynamic_collection(service: LotteryService) 
 
     assert source == "crawler"
     assert [item["rpid"] for item in comments] == ["dyn"]
+
+
+# ================================================================ 候选集完整性（issue #5-6）
+
+def _write_snapshot_file(path: Path, payload: dict) -> None:
+    """直接写入快照 JSON，模拟旧格式或过期的历史数据。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def test_get_comments_recollects_video_when_no_snapshot_mark(
+    service: LotteryService, isolated_db: DatabaseManager
+) -> None:
+    """视频本地只有普通采集留下的部分评论、没有完整快照标记时，必须重新完整采集。"""
+    from modules.comment.collector import CommentCollector
+
+    _seed_video(isolated_db, "BV300", [_full_comment_row(1, "partial", datetime(2024, 5, 1))])
+    collector = _ContractCollector(comments=[{"rpid": "partial", "uid": 1}, {"rpid": "more", "uid": 2}])
+    service.collector = collector
+
+    comments, source = asyncio.run(
+        asyncio.wait_for(service.get_comments(_video_target("BV300"), None), timeout=5)
+    )
+
+    assert source == "crawler"
+    assert [row["rpid"] for row in comments] == ["partial", "more"]
+    assert collector.calls == [{"bvid": "BV300", "strategy": CommentCollector.STRATEGY_FULL}]
+    # 完整采集后写入快照标记，TTL 内再次抽奖可直接复用。
+    snapshot = service._cache.load_video_snapshot("BV300")
+    assert snapshot["complete"] is True and snapshot["comment_count"] == 2
+
+
+def test_get_comments_reuses_video_rows_after_full_collection(
+    service: LotteryService, isolated_db: DatabaseManager
+) -> None:
+    """FULL 采集落库并标记后，TTL 内第二次读取应走本地复用。"""
+    _seed_video(isolated_db, "BV301", [_full_comment_row(1, "c1", datetime(2024, 5, 1))])
+    collector = _ContractCollector(comments=[{"rpid": "c1", "uid": 1}])
+    service.collector = collector
+
+    asyncio.run(asyncio.wait_for(service.get_comments(_video_target("BV301"), None), timeout=5))
+    comments, source = asyncio.run(
+        asyncio.wait_for(service.get_comments(_video_target("BV301"), None), timeout=5)
+    )
+
+    assert source == "local"
+    assert [row["rpid"] for row in comments] == ["c1"]
+    assert len(collector.calls) == 1
+
+
+def test_get_comments_recollects_video_when_snapshot_expired(
+    service: LotteryService, isolated_db: DatabaseManager
+) -> None:
+    """视频快照超过 TTL 时不复用，避免漏掉缓存之后新增的评论。"""
+    _seed_video(isolated_db, "BV302", [_full_comment_row(1, "old", datetime(2024, 5, 1))])
+    _write_snapshot_file(
+        service._cache.video_snapshot_path("BV302"),
+        {"complete": True, "saved_epoch_s": int(time.time()) - 601, "comment_count": 1},
+    )
+    collector = _ContractCollector(comments=[{"rpid": "old", "uid": 1}, {"rpid": "new", "uid": 2}])
+    service.collector = collector
+
+    comments, source = asyncio.run(
+        asyncio.wait_for(service.get_comments(_video_target("BV302"), None), timeout=5)
+    )
+
+    assert source == "crawler"
+    assert [row["rpid"] for row in comments] == ["old", "new"]
+
+
+def test_get_comments_does_not_mark_video_snapshot_when_save_failed(
+    service: LotteryService, isolated_db: DatabaseManager
+) -> None:
+    """落库失败时不能标记快照，否则下次会把不完整的本地行当作完整候选集。"""
+    collector = _ContractCollector(comments=[{"rpid": "x", "uid": 1}])
+    collector.last_save_result = {"success": False, "saved_count": 0, "warning": "落库失败"}
+    service.collector = collector
+
+    asyncio.run(asyncio.wait_for(service.get_comments(_video_target("BV303"), None), timeout=5))
+
+    assert service._cache.load_video_snapshot("BV303") is None
+
+
+def test_get_comments_recollects_dynamic_legacy_cache(service: LotteryService) -> None:
+    """旧格式动态缓存（无完整性标记）一律视为不可复用。"""
+    _write_snapshot_file(
+        service._cache.dynamic_path("123"),
+        {"saved_at": datetime.now().isoformat(), "comments": [{"rpid": "legacy", "uid": 1}]},
+    )
+    calls = _install_api_get(
+        service.api,
+        lambda url, params: {"cursor": {"is_end": True}, "replies": [_raw_reply("fresh", 8)]},
+    )
+
+    comments, source = asyncio.run(
+        asyncio.wait_for(service.get_comments(_dynamic_target("123"), None), timeout=5)
+    )
+
+    assert source == "crawler"
+    assert [item["rpid"] for item in comments] == ["fresh"]
+    assert len(calls) == 1
+    # 重新采集后旧文件被升级为带完整性标记的新格式。
+    snapshot = service._cache.load_dynamic_snapshot("123")
+    assert snapshot["complete"] is True
+    assert type(snapshot["saved_epoch_s"]) is int
+
+
+def test_get_comments_recollects_dynamic_when_snapshot_expired(service: LotteryService) -> None:
+    """动态快照超过 TTL 时重新采集。"""
+    _write_snapshot_file(
+        service._cache.dynamic_path("124"),
+        {
+            "saved_at": datetime.now().isoformat(),
+            "saved_epoch_s": int(time.time()) - 601,
+            "complete": True,
+            "comments": [{"rpid": "stale", "uid": 1}],
+        },
+    )
+    _install_api_get(
+        service.api,
+        lambda url, params: {"cursor": {"is_end": True}, "replies": [_raw_reply("fresh", 8)]},
+    )
+
+    comments, source = asyncio.run(
+        asyncio.wait_for(service.get_comments(_dynamic_target("124"), None), timeout=5)
+    )
+
+    assert source == "crawler"
+    assert [item["rpid"] for item in comments] == ["fresh"]
+
+
+def test_repeated_cursor_marks_dynamic_snapshot_incomplete(service: LotteryService) -> None:
+    """重复游标提前停止时缓存标记为不完整，下一次抽奖必须重新采集。"""
+    same_cursor = {
+        "cursor": {"is_end": False, "pagination_reply": {"next_offset": "SAME"}},
+        "replies": [_raw_reply("r1", 1)],
+    }
+    calls = _install_api_get(service.api, lambda url, params: same_cursor)
+
+    asyncio.run(asyncio.wait_for(service._collect_dynamic_comments(_dynamic_target()), timeout=5))
+
+    assert service._cache.load_dynamic_snapshot("123")["complete"] is False
+    _, source = asyncio.run(
+        asyncio.wait_for(service.get_comments(_dynamic_target(), None), timeout=5)
+    )
+    assert source == "crawler"
+    assert len(calls) == 4
+
+
+@pytest.mark.parametrize(
+    "pages, expected",
+    [
+        # 接口明确 is_end -> 完整。
+        ([{"cursor": {"is_end": True}, "replies": [_raw_reply("a", 1)]}], True),
+        # 未声明结束却返回空页 -> 无法确认已到末页。
+        (
+            [
+                {"cursor": {"is_end": False, "next": 1}, "replies": [_raw_reply("a", 1)]},
+                {"cursor": {"is_end": False, "next": 2}, "replies": []},
+            ],
+            False,
+        ),
+        # 缺失 cursor -> 无法确认已到末页。
+        ([{"replies": [_raw_reply("a", 1)]}], False),
+    ],
+)
+def test_dynamic_snapshot_completeness_follows_cursor(
+    service: LotteryService, pages: list, expected: bool
+) -> None:
+    """完整性只认接口 is_end 声明，其余提前结束都按不完整保存。"""
+    index = {"value": 0}
+
+    def responder(url, params):
+        """按顺序返回预置分页。"""
+        page = pages[index["value"]]
+        index["value"] += 1
+        return page
+
+    _install_api_get(service.api, responder)
+
+    asyncio.run(asyncio.wait_for(service._collect_dynamic_comments(_dynamic_target("200")), timeout=5))
+
+    assert service._cache.load_dynamic_snapshot("200")["complete"] is expected
+
+
+def test_dynamic_max_count_cap_marks_snapshot_incomplete(service: LotteryService) -> None:
+    """触达 max_count 软上限时评论区未翻完，快照不得标记为完整。"""
+    _install_api_get(
+        service.api,
+        lambda url, params: {
+            "cursor": {"is_end": False, "pagination_reply": {"next_offset": "O1"}},
+            "replies": [_raw_reply("r1", 1)],
+        },
+    )
+
+    asyncio.run(
+        asyncio.wait_for(
+            service._collect_dynamic_comments(_dynamic_target("201"), None, max_count=1), timeout=5
+        )
+    )
+
+    assert service._cache.load_dynamic_snapshot("201")["complete"] is False
+
+
+def test_snapshot_ttl_defaults_to_600_and_reads_config(
+    service: LotteryService, monkeypatch
+) -> None:
+    """TTL 默认 600 秒；配置项覆盖生效，非法值回退默认。"""
+    from core.config import config
+
+    values = {"lottery.comment_snapshot_ttl_seconds": None}
+    monkeypatch.setattr(config, "get", lambda key, default=None: values.get(key, default))
+    assert service._snapshot_ttl_s() == 600
+
+    values["lottery.comment_snapshot_ttl_seconds"] = 30
+    assert service._snapshot_ttl_s() == 30
+
+    for invalid in (0, -5, "abc", True, [1]):
+        values["lottery.comment_snapshot_ttl_seconds"] = invalid
+        assert service._snapshot_ttl_s() == 600
+
+
+def test_snapshot_ttl_constructor_override(tmp_path: Path, isolated_db) -> None:
+    """构造参数显式指定 TTL 时优先于配置。"""
+    svc = LotteryService(BilibiliAPI(), cache_dir=tmp_path / "c", snapshot_ttl_s=5)
+
+    assert svc._snapshot_ttl_s() == 5
+
+
+def test_get_comments_honors_configured_ttl(service: LotteryService, monkeypatch) -> None:
+    """配置把 TTL 缩短后，原本 TTL 内的完整快照也应重新采集。"""
+    from core.config import config
+
+    _write_snapshot_file(
+        service._cache.dynamic_path("125"),
+        {
+            "saved_epoch_s": int(time.time()) - 120,
+            "complete": True,
+            "comments": [{"rpid": "cached", "uid": 1}],
+        },
+    )
+    _install_api_get(
+        service.api,
+        lambda url, params: {"cursor": {"is_end": True}, "replies": [_raw_reply("fresh", 8)]},
+    )
+    # 默认 600 秒内可复用。
+    monkeypatch.setattr(config, "get", lambda key, default=None: default)
+    _, source = asyncio.run(asyncio.wait_for(service.get_comments(_dynamic_target("125"), None), timeout=5))
+    assert source == "local"
+
+    monkeypatch.setattr(
+        config,
+        "get",
+        lambda key, default=None: 60 if key == "lottery.comment_snapshot_ttl_seconds" else default,
+    )
+    _, source = asyncio.run(asyncio.wait_for(service.get_comments(_dynamic_target("125"), None), timeout=5))
+    assert source == "crawler"
 
 
 # ================================================================ 单用户流程
