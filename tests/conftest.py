@@ -76,13 +76,32 @@ class _NoopResidentMonitor:
         self.shutdown_called = True
 
 
+class _LazyConfig:
+    """惰性配置替身：首次读取属性时才用工厂构造真实 ConfigManager 并转发。"""
+
+    def __init__(self, factory) -> None:
+        """记录工厂，暂不构造。
+
+        Args:
+            factory: 无参可调用对象，返回指向临时目录的 ConfigManager。
+        """
+        self._factory = factory
+        self._real = None
+
+    def __getattr__(self, name):
+        """把未命中的属性访问转发给真实实例（必要时先构造）。"""
+        if self._real is None:
+            self._real = self._factory()
+        return getattr(self._real, name)
+
+
 @pytest.fixture(autouse=True)
 def _isolate_web_lifespan(tmp_path, monkeypatch):
     """把 web.main 的 lifespan 三个污染点全部重定向到临时目录 / 假对象。
 
     隔离点（全部打在 web.main 模块对象上）：
         1. web.main.init_database         -> 临时库 tmp_path/"bili_ops.db"
-        2. web.main.ConfigManager         -> 指向临时 config 目录的工厂
+        2. web.main.runtime_config        -> 指向临时 config 目录的惰性配置实例
         3. web.main.ResidentCommentMonitor-> _NoopResidentMonitor（不真起常驻监控）
 
     额外保护：lifespan 会改写 web.main.config_manager / monitor_service 两个模块级
@@ -172,7 +191,11 @@ def _isolate_web_lifespan(tmp_path, monkeypatch):
         kwargs.setdefault("config_dir", str(isolated_config_dir))
         return real_config_manager(*args, **kwargs)
 
-    monkeypatch.setattr(web_main, "ConfigManager", _isolated_config_manager)
+    # lifespan 直接引用运行时单例 web.main.runtime_config（即 core.config.config），
+    # 这里换成指向临时目录的惰性实例：首次访问才构造，不走 lifespan 的用例不付构造成本。
+    monkeypatch.setattr(
+        web_main, "runtime_config", _LazyConfig(_isolated_config_manager), raising=False
+    )
 
     # -------------------------------------------------------------------
     # 隔离点 3：常驻监控换成 no-op 假对象，绝不真起常驻任务
