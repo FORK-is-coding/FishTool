@@ -290,7 +290,7 @@ async function loadEventHotTags() {
         }
         if (el) {
             el.innerHTML = tags.map(tag =>
-                `<button class="btn btn-sm event-tag-chip" onclick="createEventDraftFromHotTag('${escapeHtml(tag)}')">${escapeHtml(tag)}</button>`
+                `<button class="btn btn-sm event-tag-chip" onclick="createEventDraftFromHotTag(${jsArg(tag)})">${escapeHtml(tag)}</button>`
             ).join(' ');
         }
     } catch (error) {
@@ -437,7 +437,7 @@ function renderEventChannels(counters, members) {
     const videos = list
         .map(m => String((m && m.bvid) || ''))
         .filter(Boolean)
-        .map(bvid => `<button class="btn btn-sm event-video-link" type="button" onclick="openEventVideoCard('${escapeHtml(bvid)}')">${escapeHtml(bvid)} → 02 卡片</button>`)
+        .map(bvid => `<button class="btn btn-sm event-video-link" type="button" onclick="openEventVideoCard(${jsArg(bvid)})">${escapeHtml(bvid)} → 02 卡片</button>`)
         .join(' ');
     return `
         <div class="event-dual-channel">
@@ -643,9 +643,11 @@ function renderOpportunityList(run) {
             ? '无已知/可信且绑定的截止（寿命未知，不编造剩余天数）'
             : `截止 ${eventEpochText(deadline.deadline_s) || deadline.deadline_s || '未提供'}（可信度 ${deadline.deadline_confidence ?? '未提供'}，可行性 ${deadline.feasibility_category || '未提供'}）`;
         const angleDensity = renderSupplyAngleDensity(discovery);
-        const runId = escapeHtml(run.opportunity_run_id);
+        // 显示文本与内联事件参数分开：参数用 jsArg 编码，避免实体解码后跳出 JS 字符串。
         const eid = escapeHtml(candidate.event_id || '');
-        const topicArg = topicId ? `'${escapeHtml(topicId)}'` : "''";
+        const runIdArg = jsArg(run.opportunity_run_id);
+        const eidArg = jsArg(candidate.event_id || '');
+        const topicArg = jsArg(topicId || '');
         return `
             <div class="event-opportunity-card">
                 <h4>${eid} ${eventActionBadge(candidate.action)}</h4>
@@ -656,11 +658,11 @@ function renderOpportunityList(run) {
                 <p class="event-meta">排序键 rank_key：${escapeHtml(JSON.stringify(candidate.rank_key || []))}</p>
                 <p class="event-meta">局限：${escapeHtml((candidate.notes || []).join('；') || '无额外说明')}</p>
                 ${renderTraceableMetrics(daily, ((candidate.evidence || {}).provenance) || [])}
-                <button class="btn" onclick="generateTopicsForEvent('${runId}', ['${eid}'])">生成针对这个事件的选题</button>
-                <button class="btn" onclick="generateTopicsForEvent('${runId}', ['${eid}'], true)">重新生成（新键）</button>
-                <button class="btn" onclick="submitOpportunityFeedback('${runId}', {kind:'adopted', event_id:'${eid}', topic_id:${topicArg}, reason:'用户采纳'}, 'event-opportunity-result')">采用</button>
-                <button class="btn" onclick="submitOpportunityFeedback('${runId}', {kind:'rejected', event_id:'${eid}', topic_id:${topicArg}, reason:'用户拒绝'}, 'event-opportunity-result')">不采用</button>
-                <button class="btn" onclick="submitOpportunityFeedback('${runId}', {kind:'published', event_id:'${eid}', topic_id:${topicArg}, reason:'用户已发布'}, 'event-opportunity-result')">已发布</button>
+                <button class="btn" onclick="generateTopicsForEvent(${runIdArg}, [${eidArg}])">生成针对这个事件的选题</button>
+                <button class="btn" onclick="generateTopicsForEvent(${runIdArg}, [${eidArg}], true)">重新生成（新键）</button>
+                <button class="btn" onclick="submitOpportunityFeedback(${runIdArg}, {kind:'adopted', event_id:${eidArg}, topic_id:${topicArg}, reason:'用户采纳'}, 'event-opportunity-result')">采用</button>
+                <button class="btn" onclick="submitOpportunityFeedback(${runIdArg}, {kind:'rejected', event_id:${eidArg}, topic_id:${topicArg}, reason:'用户拒绝'}, 'event-opportunity-result')">不采用</button>
+                <button class="btn" onclick="submitOpportunityFeedback(${runIdArg}, {kind:'published', event_id:${eidArg}, topic_id:${topicArg}, reason:'用户已发布'}, 'event-opportunity-result')">已发布</button>
             </div>
         `;
     }).join('');

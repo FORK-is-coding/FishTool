@@ -103,7 +103,7 @@ function renderActivitiesResult(result, zone, zoneLabels) {
             <p>${escapeHtml(act.desc || '暂无描述')}</p>
             <p style="color: var(--text-secondary); font-size: 12px;">
                 状态: ${escapeHtml(act.status)} | 来源: ${escapeHtml(act.source)}${act.source_username ? ' | 账号: ' + escapeHtml(act.source_username) : ''} |
-                <a href="${safeUrl(act.link)}" target="_blank" rel="noopener noreferrer">查看详情</a>
+                ${safeUrl(act.link) ? `<a href="${safeUrl(act.link)}" target="_blank" rel="noopener noreferrer">查看详情</a>` : '无链接'}
             </p>
         </div>
     `).join('');
@@ -173,7 +173,7 @@ function renderTopicsResult(result) {
 
 // ============ 评论监控模块 ============
 
-// escapeHtml 的统一实现位于本文件后部，所有模块共用同一个函数。
+// escapeHtml / jsArg 的统一实现位于 app.core.js，所有模块共用同一个函数。
 
 // 统一将未知接口字段收敛为数组，避免 map(undefined) 中断整页渲染。
 
@@ -389,7 +389,7 @@ async function loadHotspotLifecycle() {
                 : `<p class="hotspot-lifecycle-meta">参与UP数 <span class="hotspot-up-count">${vm.upText}</span> · ${vm.observedText} · 实际跨度 ${vm.spanText}</p>`;
             return `
             <article class="hotspot-lifecycle-card">
-                <div class="hotspot-card-title-row" onclick="loadHotspotTimeline('${escapeHtml(item.bvid)}', this)">
+                <div class="hotspot-card-title-row" onclick="loadHotspotTimeline(${jsArg(item.bvid)}, this)">
                     <h3>${escapeHtml(item.title || item.bvid)}</h3>
                     <span class="hotspot-stage-pill">${escapeHtml(item.stage)}</span>${hotspotTrendBadges(item)}
                     ${hotspotMetricBadges(item.owner_metrics)}
@@ -400,7 +400,7 @@ async function loadHotspotLifecycle() {
                 ${ageLine}
                 <div class="hotspot-timeline-box" data-bvid="${escapeHtml(item.bvid)}"></div>
                 <div class="hotspot-card-actions">
-                    ${item.owner_mid ? `<button class="btn btn-secondary btn-sm" type="button" onclick="openHotspotAccount(${Number(item.owner_mid)}, '${escapeHtml(item.bvid)}')">查看上涨账号</button>` : ''}
+                    ${item.owner_mid ? `<button class="btn btn-secondary btn-sm" type="button" onclick="openHotspotAccount(${Number(item.owner_mid) || 0}, ${jsArg(item.bvid)})">查看上涨账号</button>` : ''}
                 </div>
             </article>`;
         }).join('') : '<p class="text-muted">数据积累中，连续采集几天后解锁阶段判断。</p>';
@@ -510,7 +510,7 @@ async function openHotspotAccount(mid, bvid) {
             : `近90日播放 ${(d.growth_ratio * 100).toFixed(0)}%（持平或下滑）`;
         drawer.innerHTML = `
             <div class="hotspot-drawer-header">
-                <h3>${escapeHtml(d.name || 'UP主')} <small>UID ${d.mid ?? ''}</small></h3>
+                <h3>${escapeHtml(d.name || 'UP主')} <small>UID ${Number(d.mid) || ''}</small></h3>
                 <button class="hotspot-drawer-close" onclick="closeHotspotDrawer()" aria-label="关闭">×</button>
             </div>
             <div class="hotspot-drawer-body">
@@ -536,8 +536,8 @@ async function openHotspotAccount(mid, bvid) {
                     <span>每千粉充电率</span><b>${formatPermille(d.charge_count, d.follower)}</b>
                 </div>
                 <div class="hotspot-drawer-actions">
-                    <a class="btn btn-primary btn-sm" target="_blank" href="https://space.bilibili.com/${d.mid ?? ''}">打开B站主页</a>
-                    <button class="btn btn-secondary btn-sm" type="button" onclick="jumpToAnalysis(${d.mid ?? 0})">去账号分析</button>
+                    <a class="btn btn-primary btn-sm" target="_blank" href="https://space.bilibili.com/${Number(d.mid) || ''}">打开B站主页</a>
+                    <button class="btn btn-secondary btn-sm" type="button" onclick="jumpToAnalysis(${Number(d.mid) || 0})">去账号分析</button>
                 </div>
             </div>`;
     } catch (error) {
@@ -602,7 +602,7 @@ async function pollHotspotCollectProgress(highFrequency = false) {
         if (data.status === 'failed') {
             detail = '<p class="hotspot-collect-detail">采集异常，请检查日志或稍后重试。</p>';
         } else if (failed.length) {
-            detail = `<p class="hotspot-collect-detail">失败 ${failed.length} 个：${failed.slice(0, 3).map(f => `${f.bvid}(${f.error})`).join('、')}${failed.length > 3 ? ' 等' : ''}</p>`;
+            detail = `<p class="hotspot-collect-detail">失败 ${failed.length} 个：${failed.slice(0, 3).map(f => `${escapeHtml(String(f.bvid))}(${escapeHtml(String(f.error))})`).join('、')}${failed.length > 3 ? ' 等' : ''}</p>`;
         }
         const oldDetail = message.parentElement.querySelector('.hotspot-collect-detail');
         if (oldDetail) oldDetail.remove();

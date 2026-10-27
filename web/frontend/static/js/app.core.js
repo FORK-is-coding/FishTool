@@ -202,6 +202,17 @@ function formatDate(dateString) {
     return date.toLocaleString('zh-CN');
 }
 
+// 转义接口文本，避免昵称或AI大模型内容被当作HTML执行。
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>'"]/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+    })[char]);
+}
+
+// 内联事件处理器参数：先 JSON 编码成 JS 字符串字面量，再做 HTML 属性转义。
+// 浏览器先解实体再解析 JS，单靠 escapeHtml 无法阻止跳出 JS 字符串。
+function jsArg(value) { return escapeHtml(JSON.stringify(String(value ?? ''))); }
+
 // 过滤外部链接：仅放行 http/https，其余（含 javascript: 伪协议）一律置空。
 // 返回值已完成 HTML 转义，可直接插入 href 属性。
 function safeUrl(value) {

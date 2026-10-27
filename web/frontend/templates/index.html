@@ -903,7 +903,7 @@
                 : '';
             const action = item.state === 'released'
                 ? '<span class="text-muted">已释放</span>'
-                : `<button class="btn" type="button" onclick="releaseHotspotWatch('${escapeHtml(item.bvid)}')">停止跟踪</button>`;
+                : `<button class="btn" type="button" onclick="releaseHotspotWatch(${jsArg(item.bvid)})">停止跟踪</button>`;
             return `<div class="hotspot-watch-item">
                 <span class="hotspot-stage-pill">${escapeHtml(label)}</span>
                 <strong>${escapeHtml(item.bvid)}</strong>
@@ -1083,7 +1083,7 @@
                 <strong>${escapeHtml(hotspotDiscoveryValue(video.bvid))}</strong>
                 <span class="hotspot-lifecycle-meta">来源 ${escapeHtml(sourceList)} · 展示取 ${escapeHtml(hotspotDiscoveryValue(video.display_source))} · 播放 ${escapeHtml(hotspotDiscoveryValue(video.view))}(${escapeHtml(hotspotDiscoveryQualityLabel(video.view_status))}) · legacy_tid ${escapeHtml(hotspotDiscoveryValue(video.legacy_tid))} · tidv2 ${escapeHtml(hotspotDiscoveryValue(video.tidv2))} · pid_v2 ${escapeHtml(hotspotDiscoveryValue(video.pid_v2))} · 采样 ${escapeHtml(hotspotDiscoveryValue(video.captured_epoch_s))}</span>
                 ${conflictTag}
-                <button class="btn" type="button" onclick="watchHotspotDiscovery('${escapeHtml(String(video.bvid))}')">加入关注</button>
+                <button class="btn" type="button" onclick="watchHotspotDiscovery(${jsArg(video.bvid)})">加入关注</button>
             </div>`;
         }).join('');
         box.innerHTML = `<h3>视频候选（展示值来源优先级 ranking_all &gt; popular &gt; ranking_all_others）</h3>${rows}`;

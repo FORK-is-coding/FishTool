@@ -14,7 +14,7 @@ async function loadAnalysisZones() {
         const analysisSelect = document.getElementById('analysis-zone-select');
         if (analysisSelect) {
             analysisSelect.innerHTML = zones.map(z => 
-                `<option value="${z.name}">${z.name}</option>`
+                `<option value="${escapeHtml(z.name)}">${escapeHtml(z.name)}</option>`
             ).join('');
         }
         
@@ -22,7 +22,7 @@ async function loadAnalysisZones() {
         const diagnosisSelect = document.getElementById('diagnosis-zone-select');
         if (diagnosisSelect) {
             diagnosisSelect.innerHTML = '<option value="">不对比分区</option>' + zones.map(z => 
-                `<option value="${z.name}">${z.name}</option>`
+                `<option value="${escapeHtml(z.name)}">${escapeHtml(z.name)}</option>`
             ).join('');
         }
     } catch (error) {
@@ -64,26 +64,19 @@ function renderTopUpsResult(result) {
                 </button>
             </h4>
             <p style="color: var(--text-secondary); font-size: 13px;">
-                粉丝: ${up.follower_count ?? up.fans ?? '未知'} | 
-                充电: ${up.charge_count ?? '未知'} | 
-                总播放: ${up.total_play ?? up.play_count ?? up.play ?? '未知'} | 
-                UID: ${up.uid || up.mid || '未知'}
+                粉丝: ${escapeHtml(String(up.follower_count ?? up.fans ?? '未知'))} | 
+                充电: ${escapeHtml(String(up.charge_count ?? '未知'))} | 
+                总播放: ${escapeHtml(String(up.total_play ?? up.play_count ?? up.play ?? '未知'))} | 
+                UID: ${escapeHtml(String(up.uid || up.mid || '未知'))}
             </p>
         </div>
     `).join('');
     
     document.getElementById('top-ups-result').innerHTML = `
-        <p>分区: ${result.category} | 获取到 ${result.count} 位UP主</p>
+        <p>分区: ${escapeHtml(String(result.category))} | 获取到 ${escapeHtml(String(result.count))} 位UP主</p>
         <p style="color: var(--text-secondary); font-size: 12px;">点击"分析TA"可快速填入分析框</p>
         ${ups || '<p>暂无数据</p>'}
     `;
-}
-
-// 转义接口文本，避免昵称或AI大模型内容被当作HTML执行。
-function escapeHtml(value) {
-    return String(value ?? '').replace(/[&<>'"]/g, char => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
-    })[char]);
 }
 
 // 将数值格式化为适合概要卡展示的万/亿单位。
@@ -954,8 +947,8 @@ async function discoverRankingCandidates() {
             <p class="analysis-hint">热门作品作者参评集合候选（仅发现，不代表排名）。点击「加入」写入同行名单。</p>
             <div class="candidate-list">
                 ${creatorRankingState.candidates.map(item => `
-                    <button class="btn btn-secondary candidate-item" onclick="selectRankingCandidate(${item.uid})">
-                        ${escapeHtml(item.name || ('UID ' + item.uid))} (${item.uid}) 加入
+                    <button class="btn btn-secondary candidate-item" onclick="selectRankingCandidate(${Number(item.uid) || 0})">
+                        ${escapeHtml(item.name || ('UID ' + item.uid))} (${escapeHtml(String(item.uid))}) 加入
                     </button>`).join('')}
             </div>`;
     } catch (error) {
@@ -1105,7 +1098,7 @@ function renderCreatorRanking(result) {
                 <tbody>
                     ${leaderboard.map(row => `
                         <tr class="${row.is_target ? 'ranking-row-target' : ''}">
-                            <td>${row.uid}${row.is_target ? '（你）' : ''}</td>
+                            <td>${escapeHtml(String(row.uid))}${row.is_target ? '（你）' : ''}</td>
                             <td>${formatRankingValue(row.selected_count)}</td>
                             <td>${formatRankingValue(row.metric_value)}</td>
                             <td>${formatRankingRank(row)}</td>
@@ -1114,7 +1107,7 @@ function renderCreatorRanking(result) {
                         </tr>`).join('')}
                 </tbody>
             </table>
-            ${excluded.length ? `<div class="diagnosis-detail-card"><h4>被排除的请求账号</h4><ul>${excluded.map(item => `<li>UID ${item.uid}: ${escapeHtml(item.reason || '未知原因')}</li>`).join('')}</ul></div>` : ''}
+            ${excluded.length ? `<div class="diagnosis-detail-card"><h4>被排除的请求账号</h4><ul>${excluded.map(item => `<li>UID ${escapeHtml(String(item.uid))}: ${escapeHtml(item.reason || '未知原因')}</li>`).join('')}</ul></div>` : ''}
             ${warnings.map(item => `<p class="analysis-hint">⚠️ ${escapeHtml(item.message || item.code || '')}</p>`).join('')}
             <p class="analysis-hint">快照 hash：${escapeHtml(result.snapshot_hash || '—')} · 刷新读取同一 run，名次不会重算。</p>
         </div>`;
