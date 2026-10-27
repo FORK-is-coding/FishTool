@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import httpx
 import pytest
@@ -696,6 +696,92 @@ def test_get_daily_usage_zero_limit_avoids_division_by_zero(llm_env, monkeypatch
     usage = client.get_daily_usage()
     assert usage["usage_percent"] == 0
     assert usage["remaining"] == 0
+
+
+@pytest.fixture()
+def usage_db(tmp_path, monkeypatch):
+    """真实 SQLite 用量库：验证字符串日期区间在 SQLite 上的真实比较语义。"""
+    from core.database import DatabaseManager, LLMUsage
+
+    manager = DatabaseManager(str(tmp_path / "usage.db"))
+    monkeypatch.setattr(llm_module, "get_session", manager.get_session)
+
+    def add(day: str, total_tokens: int, request_count: int = 1) -> None:
+        """写入一条指定日期的用量记录。"""
+        session = manager.get_session()
+        try:
+            session.add(LLMUsage(date=day, model="m", prompt_tokens=total_tokens, completion_tokens=0,
+                                 total_tokens=total_tokens, request_count=request_count, module="unit"))
+            session.commit()
+        finally:
+            session.close()
+
+    return add
+
+
+def test_check_token_limit_counts_db_usage_across_instances(llm_env, usage_db):
+    """新实例也要计入数据库中当日已用量（#5-9：原实现每个实例从 0 计数）。"""
+    usage_db(date.today().isoformat(), 990)
+    client = _make_client()
+    assert client.daily_tokens_used == 0
+
+    client._check_token_limit(10)  # 990 + 10 = 1000，边界内
+    with pytest.raises(TokenLimitExceededError) as excinfo:
+        client._check_token_limit(20)
+    assert excinfo.value.used == 1010
+    assert excinfo.value.limit == 1000
+
+
+def test_check_token_limit_shares_usage_recorded_by_other_instance(llm_env, usage_db):
+    """实例 A 写库的用量，实例 B 预检时可见。"""
+    writer = _make_client()
+    writer._record_token_usage(600, 300, module="unit")
+    reader = _make_client()
+
+    with pytest.raises(TokenLimitExceededError):
+        reader._check_token_limit(200)
+
+
+def test_check_token_limit_ignores_other_days_and_counts_legacy_rows(llm_env, usage_db):
+    """昨日用量不计入；带时分秒的历史脏日期仍归入当日。"""
+    today = date.today()
+    usage_db((today - timedelta(days=1)).isoformat(), 5000)
+    usage_db(f"{today.isoformat()} 10:00:00", 400)
+    client = _make_client()
+
+    client._check_token_limit(600)  # 400 + 600 = 1000
+    with pytest.raises(TokenLimitExceededError) as excinfo:
+        client._check_token_limit(601)
+    assert excinfo.value.used == 1001
+
+
+def test_check_token_limit_falls_back_to_memory_when_db_unavailable(llm_env, monkeypatch):
+    """数据库不可用时按内存计数判断，不阻断调用。"""
+
+    def _boom():
+        """模拟取会话失败。"""
+        raise RuntimeError("no db")
+
+    monkeypatch.setattr(llm_module, "get_session", _boom)
+    client = _make_client()
+    client.daily_tokens_used = 500
+    client._check_token_limit(500)
+    with pytest.raises(TokenLimitExceededError):
+        client._check_token_limit(501)
+
+
+def test_get_daily_usage_reads_today_from_real_sqlite(llm_env, usage_db):
+    """当日用量查询在真实 SQLite 上不能恒为 0（原实现用 datetime 比较 String 列）。"""
+    today = date.today()
+    usage_db(today.isoformat(), 100, 1)
+    usage_db(today.isoformat(), 50, 2)
+    usage_db((today - timedelta(days=1)).isoformat(), 999, 9)
+    client = _make_client()
+
+    usage = client.get_daily_usage()
+    assert usage["total_tokens"] == 150
+    assert usage["total_requests"] == 3
+    assert usage["remaining"] == 850
 
 
 def test_is_configured_reflects_credentials(llm_env):

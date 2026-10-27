@@ -37,7 +37,7 @@ import asyncio
 # 从 typing 导入符号
 from typing import List, Dict, Any, Optional, AsyncIterator
 # 从 datetime 导入符号
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 # 导入模块
 import logging
 # 导入模块
@@ -53,6 +53,32 @@ from core.config import config
 from core.database import get_session, LLMUsage
 
 logger = get_logger(__name__)
+
+
+def _usage_records_on(db, day: date) -> list:
+    """查询指定自然日的 LLMUsage 记录。
+
+    LLMUsage.date 是 String(10)（'YYYY-MM-DD'），必须用同类型的字符串区间比较：
+    此前用 datetime 参数比较时 SQLite 绑定为 'YYYY-MM-DD 00:00:00'，
+    '2026-10-26' >= '2026-10-26 00:00:00' 为假，导致当日用量恒为 0。
+    半开区间 [当日, 次日) 同时兼容历史上带时分秒的脏数据。
+    """
+    start = day.isoformat()
+    end = (day + timedelta(days=1)).isoformat()
+    return db.query(LLMUsage).filter(LLMUsage.date >= start, LLMUsage.date < end).all()
+
+
+def _db_tokens_used_on(day: date) -> Optional[int]:
+    """读取指定自然日数据库中已记录的 token 总量；数据库不可用时返回 None。"""
+    try:
+        db = get_session()
+        try:
+            return sum(int(r.total_tokens or 0) for r in _usage_records_on(db, day))
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"读取当日Token用量失败，回退内存计数: {e}")
+        return None
 
 
 class LLMClient:
@@ -150,12 +176,18 @@ class LLMClient:
             self.current_date = today
             self.daily_tokens_used = 0
         
+        # 已用量以数据库当日记录为准：各模块每次请求都会新建 LLMClient，重启也会清零内存计数，
+        # 只看实例内计数会让每日限额形同虚设。取 max 兼容写库失败时内存计数更大的情况；
+        # 数据库不可用时回退内存计数。并发请求可能各自通过预检，限额按软上限处理。
+        db_used = _db_tokens_used_on(today)
+        used = self.daily_tokens_used if db_used is None else max(db_used, self.daily_tokens_used)
+
         # 检查限额
         # 预检（估算+已用）超过限额则拒绝本次调用
-        if self.daily_tokens_used + estimated_tokens > self.daily_token_limit:
+        if used + estimated_tokens > self.daily_token_limit:
             # 抛出异常中断流程
             raise TokenLimitExceededError(
-                self.daily_tokens_used + estimated_tokens,
+                used + estimated_tokens,
                 self.daily_token_limit
             )
     
@@ -480,10 +512,8 @@ class LLMClient:
             try:
                 # 赋值并准备后续使用
                 today = date.today()
-                # 取全部记录
-                usage_records = db.query(LLMUsage).filter(
-                    LLMUsage.date >= datetime.combine(today, datetime.min.time())
-                ).all()
+                # 取当日记录（字符串区间，与 _check_token_limit 共用同一口径）
+                usage_records = _usage_records_on(db, today)
                 
                 total_tokens = sum(r.total_tokens for r in usage_records)
                 # 赋值并准备后续使用
