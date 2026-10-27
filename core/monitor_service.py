@@ -210,6 +210,8 @@ class ResidentCommentMonitor:
         # 第四条常驻 task：discovery 发现循环（默认关闭，仅显式配置 monitor.discovery_enable=True 才拉起）。
         self.discovery_task: Optional[asyncio.Task] = None
         self.stop_event = asyncio.Event()
+        # 最近一轮评论采集中失败的目标 (bvid, 错误信息)，部分失败时写入 last_error 供状态卡片展示。
+        self._last_collect_failures: list[tuple[str, str]] = []
         # watch 服务的构造入口；缺省走缺省装配（导入期不建客户端、不发请求）。
         self.watch_service_factory = watch_service_factory or build_watch_service
         self._watch_service: Any = None
@@ -543,7 +545,8 @@ class ResidentCommentMonitor:
                     try:
                         collected = await self._collect_targets(state.get("target_bvids", []))
                         failures = 0
-                        self._update(last_collect_at=datetime.now(), total_collected=state.get("total_collected", 0) + collected, consecutive_failures=0, last_error=None)
+                        # 部分目标失败不触发退避，但把失败目标写入 last_error，避免状态显示完全正常。
+                        self._update(last_collect_at=datetime.now(), total_collected=state.get("total_collected", 0) + collected, consecutive_failures=0, last_error=self._collect_failure_summary() or None)
                     except Exception as exc:
                         failures += 1
                         # 指数退避：连续失败次数越多等待越久，封顶 1800 秒避免长时间无意义重试。
@@ -573,24 +576,42 @@ class ResidentCommentMonitor:
             self._update(status="stopped", last_error="监控任务异常退出")
 
     async def _collect_targets(self, bvids: list[str]) -> int:
-        """按 SQLite checkpoint 增量采集目标视频，返回本轮新增入库数。"""
+        """按 SQLite checkpoint 增量采集目标视频，返回本轮新增入库数。
+
+        单个目标失败只记录日志并继续下一个目标，避免一个视频持续报错导致其余目标永远采不到；
+        全部目标都失败时才上抛，交给 _monitor_loop 走既有的指数退避。
+        """
+        self._last_collect_failures = []
         if not bvids:
             return 0
         monitor = self.monitor_factory()
         total = 0
         # 逐个目标视频走增量采集（依赖 SQLite checkpoint），已有评论不会重复入库。
         for bvid in bvids:
-            comments = await monitor.collector.collect_incremental_comments(bvid)
-            # 统计本轮实际新增入库条数；采集器未暴露结果时退化为按评论条数估算。
-            if comments:
-                # 对新增评论执行舆情分析与预警，但不再次全量请求。
-                # 新评论进入舆情分析流水线，只处理本轮增量，避免全量重算。
-                sentiment_result = monitor.analyzer.analyze_batch(comments)
-                monitor._apply_sentiment_results(comments, sentiment_result)
-                dedup_result = monitor.deduplicator.deduplicate(comments)
-                processed_comments = dedup_result['deduplicated_comments']
-                # 命中预警规则时写入告警记录，供前端监控页展示。
-                alerts = await monitor._detect_alerts(bvid, comments, processed_comments, sentiment_result)
-                await monitor._save_monitoring_record(bvid, comments, alerts)
-                total += len(comments)
-            return total
+            try:
+                comments = await monitor.collector.collect_incremental_comments(bvid)
+                # 统计本轮实际新增入库条数；采集器未暴露结果时退化为按评论条数估算。
+                if comments:
+                    # 对新增评论执行舆情分析与预警，但不再次全量请求。
+                    # 新评论进入舆情分析流水线，只处理本轮增量，避免全量重算。
+                    sentiment_result = monitor.analyzer.analyze_batch(comments)
+                    monitor._apply_sentiment_results(comments, sentiment_result)
+                    dedup_result = monitor.deduplicator.deduplicate(comments)
+                    processed_comments = dedup_result['deduplicated_comments']
+                    # 命中预警规则时写入告警记录，供前端监控页展示。
+                    alerts = await monitor._detect_alerts(bvid, comments, processed_comments, sentiment_result)
+                    await monitor._save_monitoring_record(bvid, comments, alerts)
+                    total += len(comments)
+            except Exception as exc:
+                # CancelledError 不是 Exception 子类，停止监控时仍会正常上抛。
+                logger.exception("评论常驻采集目标失败 bvid=%s，继续处理下一个目标", bvid)
+                self._last_collect_failures.append((bvid, str(exc)))
+        # 遍历完全部目标后再汇总返回（此前 return 位于循环内，只会处理第一个视频）。
+        if self._last_collect_failures and len(self._last_collect_failures) == len(bvids):
+            raise RuntimeError(self._collect_failure_summary())
+        return total
+
+    def _collect_failure_summary(self) -> str:
+        """把本轮失败目标拼成可读摘要，供 last_error 展示；截断避免撑爆状态字段。"""
+        summary = "; ".join(f"{bvid}: {error}" for bvid, error in self._last_collect_failures)
+        return summary[:500]

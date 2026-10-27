@@ -459,6 +459,61 @@ def test_collect_targets_runs_full_pipeline():
     assert fake.saved_records == [("BV1", 2, ["alert-1"])]
 
 
+class _PerTargetCollector:
+    """按 bvid 返回预置结果的采集器替身；值为异常实例时抛出。"""
+
+    def __init__(self, results):
+        """保存 bvid -> 评论列表 / 异常 的映射与调用记录。"""
+        self.results = results
+        self.calls = []
+
+    async def collect_incremental_comments(self, bvid):
+        """记录目标并返回或抛出预置结果。"""
+        self.calls.append(bvid)
+        result = self.results[bvid]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+def test_collect_targets_processes_all_targets():
+    """多个目标必须全部采集并累加入库数（#5-5：原 return 在循环内只处理第一个）。"""
+    fake = _FakeMonitor([])
+    fake.collector = _PerTargetCollector({"BV1": [], "BV2": [{"rpid": 1}, {"rpid": 2}], "BV3": [{"rpid": 3}]})
+    monitor = ResidentCommentMonitor(lambda: fake, config=_FakeConfig())
+
+    total = asyncio.run(monitor._collect_targets(["BV1", "BV2", "BV3"]))
+    assert total == 3
+    assert fake.collector.calls == ["BV1", "BV2", "BV3"]
+    assert [record[0] for record in fake.saved_records] == ["BV2", "BV3"]
+    assert monitor._last_collect_failures == []
+
+
+def test_collect_targets_continues_after_single_failure():
+    """单个目标失败不阻断其余目标，失败目标被记录。"""
+    fake = _FakeMonitor([])
+    fake.collector = _PerTargetCollector({"BV1": RuntimeError("-412"), "BV2": [{"rpid": 1}]})
+    monitor = ResidentCommentMonitor(lambda: fake, config=_FakeConfig())
+
+    total = asyncio.run(monitor._collect_targets(["BV1", "BV2"]))
+    assert total == 1
+    assert fake.collector.calls == ["BV1", "BV2"]
+    assert monitor._last_collect_failures == [("BV1", "-412")]
+    assert monitor._collect_failure_summary() == "BV1: -412"
+
+
+def test_collect_targets_all_fail_raises():
+    """全部目标失败时上抛，交给主循环走指数退避。"""
+    fake = _FakeMonitor([])
+    fake.collector = _PerTargetCollector({"BV1": RuntimeError("a"), "BV2": RuntimeError("b")})
+    monitor = ResidentCommentMonitor(lambda: fake, config=_FakeConfig())
+
+    with pytest.raises(RuntimeError) as excinfo:
+        asyncio.run(monitor._collect_targets(["BV1", "BV2"]))
+    assert "BV1: a" in str(excinfo.value)
+    assert "BV2: b" in str(excinfo.value)
+
+
 # ---------------------------------------------------------------------------
 # 长循环（必须先解除"不退出"风险）
 # ---------------------------------------------------------------------------
@@ -542,11 +597,50 @@ def test_monitor_loop_backoff_on_collect_failure(db, monkeypatch):
 
     asyncio.run(asyncio.wait_for(monitor._monitor_loop(), timeout=2))
     assert sleeps == [600]  # min(1800, 300 * 2**1)
-
     row = _read_state(db)
     assert row.consecutive_failures == 1
     assert row.last_error == "collect boom"
     assert row.status == "running"
+
+
+def test_monitor_loop_partial_failure_records_last_error(db, monkeypatch):
+    """部分目标失败：不退避、失败计数归零，但 last_error 记录失败目标。"""
+    fake = _FakeMonitor([])
+    fake.collector = _PerTargetCollector({"BV1": RuntimeError("-412"), "BV2": [{"rpid": 1}]})
+    monitor = ResidentCommentMonitor(lambda: fake, config=_FakeConfig({"monitor.check_interval": 300}))
+    updates = []
+    sleeps = []
+
+    class _AsyncioShim:
+        """代理真实 asyncio，仅拦截 sleep。"""
+
+        def __init__(self) -> None:
+            """持有真实模块。"""
+            self._real = asyncio
+
+        def __getattr__(self, name):
+            """未拦截属性转发真实 asyncio。"""
+            return getattr(self._real, name)
+
+        async def sleep(self, delay, *args, **kwargs):
+            """记录延迟并置位停止事件。"""
+            sleeps.append(delay)
+            monitor.stop_event.set()
+
+    monkeypatch.setattr(monitor_module, "asyncio", _AsyncioShim())
+    monkeypatch.setattr(monitor_module.random, "uniform", lambda low, high: 0.0)
+    monkeypatch.setattr(monitor, "_update", lambda **fields: updates.append(fields))
+    monkeypatch.setattr(
+        monitor,
+        "snapshot",
+        lambda: {"enabled": True, "paused": False, "target_bvids": ["BV1", "BV2"], "total_collected": 0},
+    )
+
+    asyncio.run(asyncio.wait_for(monitor._monitor_loop(), timeout=2))
+    assert sleeps == [300]  # 正常轮询间隔，而非退避
+    assert updates[-1]["consecutive_failures"] == 0
+    assert updates[-1]["total_collected"] == 1
+    assert updates[-1]["last_error"] == "BV1: -412"
 
 
 def test_cookie_loop_breaks_on_stop_event(db, monkeypatch):
