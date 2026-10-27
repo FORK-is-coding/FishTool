@@ -439,3 +439,164 @@ def test_watch_algorithm_version_matches_lifecycle_v2():
     from modules.hotspot.algorithm.lifecycle_v2 import LifecycleV2
 
     assert routes_watch._WATCH_ALGORITHM_VERSION == LifecycleV2().version
+
+
+# ---------------------------------------------------------------------------
+# issue #12：tracking 但 watch 采样任务未运行 → display_state=pending_enable
+# ---------------------------------------------------------------------------
+
+
+def _set_runtime(monkeypatch, provider) -> None:
+    """注入运行态提供者；用 monkeypatch 改模块全局，用例结束自动还原。"""
+    monkeypatch.setattr(routes_watch, "_runtime_provider", provider)
+
+
+def test_list_marks_tracking_pending_enable_when_provider_missing(client, db, monkeypatch):
+    """未注入运行态提供者：tracking 展示为 pending_enable，state 三态不变，其余态原样透传。"""
+    _set_runtime(monkeypatch, None)
+    _seed_three_states(db)
+
+    data = client.get("/api/hotspot/watch").json()["data"]
+    assert data["collector"] == {
+        "running": False,
+        "status_known": False,
+        "enable_config_key": "monitor.watch_enable",
+    }
+    by_bvid = {item["bvid"]: item for item in data["items"]}
+    assert by_bvid["BV1TRACK0001"]["state"] == "tracking"
+    assert by_bvid["BV1TRACK0001"]["display_state"] == "pending_enable"
+    assert by_bvid["BV1EXPIRE001"]["display_state"] == "expired"
+    assert by_bvid["BV1RELEAS001"]["display_state"] == "released"
+
+
+def test_list_tracking_when_watch_task_running(client, db, monkeypatch):
+    """采样任务在运行（snapshot 报 watch_task_running=True）：tracking 原样展示。"""
+    _set_runtime(monkeypatch, lambda: {"watch_task_running": True, "task_running": False})
+    _seed_three_states(db)
+
+    data = client.get("/api/hotspot/watch").json()["data"]
+    assert data["collector"]["running"] is True
+    assert data["collector"]["status_known"] is True
+    assert {item["bvid"]: item["display_state"] for item in data["items"]} == {
+        "BV1TRACK0001": "tracking",
+        "BV1EXPIRE001": "expired",
+        "BV1RELEAS001": "released",
+    }
+
+
+def test_list_degrades_safely_when_provider_raises(client, db, monkeypatch):
+    """提供者抛异常：接口仍 200，按未运行降级为 pending_enable，status_known=False。"""
+
+    def _boom() -> dict:
+        raise RuntimeError("snapshot 失败")
+
+    _set_runtime(monkeypatch, _boom)
+    _seed_watch(db, "BV1TRACK0001", active=True, ttl_epoch_s=E + HOUR)
+
+    response = client.get("/api/hotspot/watch")
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["collector"]["running"] is False
+    assert data["collector"]["status_known"] is False
+    assert data["items"][0]["display_state"] == "pending_enable"
+
+
+def test_list_snapshot_error_shape_degrades_to_not_running(client, db, monkeypatch):
+    """snapshot 自身读库失败时返回不含 watch_task_running 的降级结构：按未运行、状态未知处理。"""
+    _set_runtime(monkeypatch, lambda: {"enabled": False, "status": "stopped", "error": "db"})
+    _seed_watch(db, "BV1TRACK0001", active=True, ttl_epoch_s=E + HOUR)
+
+    data = client.get("/api/hotspot/watch").json()["data"]
+    assert data["collector"]["running"] is False
+    assert data["collector"]["status_known"] is False
+    assert data["items"][0]["display_state"] == "pending_enable"
+
+
+def test_state_filter_still_uses_three_states(client, db, monkeypatch):
+    """state=tracking 过滤仍按三态命中待启用目标；pending_enable 不是合法过滤值。"""
+    _set_runtime(monkeypatch, None)
+    _seed_three_states(db)
+
+    data = client.get("/api/hotspot/watch", params={"state": "tracking"}).json()["data"]
+    assert [item["bvid"] for item in data["items"]] == ["BV1TRACK0001"]
+    assert data["items"][0]["display_state"] == "pending_enable"
+    assert client.get("/api/hotspot/watch", params={"state": "pending_enable"}).status_code == 400
+
+
+def test_detail_and_create_carry_collector_and_display_state(client, db, monkeypatch):
+    """详情与创建响应同样带 collector / display_state。"""
+    _set_runtime(monkeypatch, lambda: {"watch_task_running": False})
+    created = client.post("/api/hotspot/watch", json={"bvid": "BV1PEND00001"}).json()["data"]
+    assert created["state"] == "tracking"
+    assert created["display_state"] == "pending_enable"
+    assert created["collector"] == {
+        "running": False,
+        "status_known": True,
+        "enable_config_key": "monitor.watch_enable",
+    }
+
+    _set_runtime(monkeypatch, lambda: {"watch_task_running": True})
+    detail = client.get("/api/hotspot/watch/BV1PEND00001").json()["data"]
+    assert detail["display_state"] == "tracking"
+    assert detail["collector"]["running"] is True
+
+
+def test_release_response_display_state_is_released(client, db, monkeypatch):
+    """停追后的行展示态即 released（不受采集运行态影响）。"""
+    _set_runtime(monkeypatch, None)
+    _seed_watch(db, "BV1STOP00009", active=True, ttl_epoch_s=E + HOUR)
+    client.post("/api/hotspot/watch/BV1STOP00009/release")
+
+    detail = client.get("/api/hotspot/watch/BV1STOP00009").json()["data"]
+    assert detail["state"] == "released"
+    assert detail["display_state"] == "released"
+
+
+def test_watch_enable_config_key_matches_monitor_service_switch():
+    """提示里的配置项名必须与常驻服务实际判断的开关一致，防文案漂移。"""
+    from core import monitor_service
+
+    assert routes_watch._WATCH_ENABLE_CONFIG_KEY in inspect.getsource(monitor_service.ResidentCommentMonitor.start)
+
+
+def test_main_lifespan_wires_watch_runtime_provider(monkeypatch):
+    """web/main.py lifespan 注入运行态提供者（读 monitor_service.snapshot），关闭时解除注入。"""
+    import importlib
+
+    web_main = importlib.import_module("web.main")
+    calls: list[int] = []
+
+    def _fake_snapshot(self) -> dict:
+        calls.append(1)
+        return {"watch_task_running": False}
+
+    # conftest 已把常驻监控替换为 _NoopResidentMonitor；给它补一个 snapshot 供本用例观测。
+    monkeypatch.setattr(web_main.ResidentCommentMonitor, "snapshot", _fake_snapshot, raising=False)
+    monkeypatch.setattr(routes_watch, "_runtime_provider", None)
+    with TestClient(web_main.app):
+        assert routes_watch._runtime_provider is not None
+        assert routes_watch._collector_status() == {
+            "running": False,
+            "status_known": True,
+            "enable_config_key": "monitor.watch_enable",
+        }
+        assert calls
+    assert routes_watch._runtime_provider is None
+
+
+def test_index_html_shows_pending_enable_and_enable_hint():
+    """前端静态契约：「待启用」标签、按 display_state 渲染、开启方式说明与最近成功采样时间。"""
+    from pathlib import Path
+
+    html = (
+        Path(__file__).resolve().parent.parent / "web" / "frontend" / "templates" / "index.html"
+    ).read_text(encoding="utf-8")
+    assert "pending_enable: '待启用'" in html
+    assert "item.display_state || item.state" in html
+    assert 'id="hotspot-watch-collector-hint"' in html
+    assert "renderHotspotWatchCollectorHint(payload.items || [], payload.collector)" in html
+    assert "monitor.watch_enable" in html
+    assert "最近成功采样" in html
+    assert "item.last_success_epoch_s" in html
+    # 三态筛选下拉不新增 pending_enable（过滤仍走后端三态）。
+    assert '<option value="pending_enable"' not in html
