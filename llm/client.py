@@ -543,6 +543,28 @@ def get_llm_client() -> LLMClient:
     return _global_llm_client
 
 
+async def reset_llm_client() -> None:
+    """重置全局LLM客户端（保存LLM配置后调用）
+
+    旧实例在构造时已固定 api_base、model 和带密钥的请求头，
+    仅重载配置无法让它切换到新配置，必须丢弃后按新配置重建。
+
+    实现步骤：
+    1. 先清空单例，后续 get_llm_client() 按新配置重建
+    2. 再关闭旧实例持有的 httpx 连接池
+    3. 关闭失败只记日志，不影响配置保存
+    """
+    global _global_llm_client
+    old_client = _global_llm_client
+    _global_llm_client = None
+    if old_client is None:
+        return
+    try:
+        await old_client.close()
+    except Exception as e:
+        logger.warning(f"关闭旧LLM客户端失败: {e}")
+
+
 def is_llm_available() -> bool:
     """检查LLM是否可用
     # 验证状态/条件，决定下一步分支

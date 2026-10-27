@@ -720,6 +720,43 @@ def test_get_llm_client_is_lazy_singleton(llm_env):
     assert len(llm_env["created"]) == 1
 
 
+def test_reset_llm_client_closes_old_and_rebuilds_with_new_config(llm_env):
+    """重置后关闭旧连接池，下次获取按新配置重建。"""
+    first = llm_module.get_llm_client()
+    old_http = first.client
+
+    llm_env["config"]._values["llm.model"] = "new-model"
+    asyncio.run(llm_module.reset_llm_client())
+
+    assert old_http.closed == 1
+    assert llm_module._global_llm_client is None
+    second = llm_module.get_llm_client()
+    assert second is not first
+    assert second.model == "new-model"
+    assert len(llm_env["created"]) == 2
+
+
+def test_reset_llm_client_without_instance_is_noop(llm_env):
+    """尚未创建实例时重置不报错。"""
+    asyncio.run(llm_module.reset_llm_client())
+    assert llm_module._global_llm_client is None
+
+
+def test_reset_llm_client_tolerates_close_failure(llm_env):
+    """关闭旧连接失败只记 warning，单例仍被清空。"""
+    first = llm_module.get_llm_client()
+
+    async def _broken_close():
+        """模拟关闭连接池失败。"""
+        raise RuntimeError("close boom")
+
+    first.client.aclose = _broken_close
+    asyncio.run(llm_module.reset_llm_client())
+
+    assert llm_module._global_llm_client is None
+    assert any(call[0] == "warning" for call in llm_module.logger.calls)
+
+
 def test_is_llm_available_true_when_configured(llm_env):
     """配置齐全时可用。"""
     assert llm_module.is_llm_available() is True

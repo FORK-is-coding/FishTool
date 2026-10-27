@@ -473,6 +473,31 @@ def test_update_llm_config_persists_and_resets_client(client):
     assert _FakeConfig.saved == 1
 
 
+def test_update_llm_config_closes_old_global_client(client, monkeypatch):
+    """保存后应经 reset_llm_client() 清空全局单例并关闭旧客户端连接。"""
+    import llm.client as llm_module
+
+    class _OldClient:
+        """持有旧配置的客户端替身。"""
+
+        closed = 0
+
+        async def close(self):
+            """记录关闭次数。"""
+            type(self).closed += 1
+
+    old_client = _OldClient()
+    monkeypatch.setattr(llm_module, "_global_llm_client", old_client)
+
+    response = client.post(
+        "/api/config/llm",
+        json={"api_key": "sk-new", "base_url": "https://api.new/v1", "model": "gpt-new"},
+    )
+    assert response.status_code == 200
+    assert llm_module._global_llm_client is None
+    assert _OldClient.closed == 1
+
+
 def test_update_llm_config_skips_empty_daily_limit(client):
     """daily_token_limit 缺省时不应写入该键。"""
     client.post(

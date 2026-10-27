@@ -334,12 +334,12 @@ async def update_llm_config(request: LLMConfigRequest):
         # 根因：llm/client.py 持有模块级 config 单例 + 全局 LLMClient 单例，
         # 上面用的是新建的 ConfigManager() 实例写盘，旧单例内存里还是旧 model，
         # 导致前端保存成功但实际请求仍用旧模型（qwen3.7 之类）。
-        # 处理：reload 模块级 config 单例 + 重置 LLMClient 全局单例，
-        # 下次 get_llm_client() 会用新配置重建。
+        # 处理：reload 模块级 config 单例 + 重置 LLMClient 全局单例并关闭旧连接，
+        # 下次 get_llm_client() 会用新配置重建（热点、评论模块都委托该单例）。
         from core.config import config as runtime_config
         runtime_config.reload()
-        import llm.client as llm_client_module
-        llm_client_module._global_llm_client = None
+        from llm.client import reset_llm_client
+        await reset_llm_client()
         
         return {
             "success": True,

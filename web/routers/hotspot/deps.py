@@ -14,19 +14,19 @@ import uuid
 
 from bilibili.api import BilibiliAPI
 from bilibili.cookie_pool import get_cookie_pool
-from llm.client import LLMClient
+from llm.client import LLMClient, get_llm_client as get_global_llm_client
 from core.config import ConfigManager
-from core.exceptions import ValidationError
+from core.exceptions import LLMNotConfiguredError, ValidationError
 from core.logger import get_logger
 from modules.hotspot import TagCloudGenerator, ActivityTracker, TopicGenerator
 
 logger = get_logger(__name__)
 
 # ============ 全局实例（延迟初始化模式） ============
-# 采用单例模式管理API和LLM客户端，避免重复初始化
+# 采用单例模式管理API客户端，避免重复初始化
 # 延迟初始化：只有在首次调用时才创建实例，节省资源
+# LLM客户端不在本模块缓存，统一委托 llm.client 全局单例（保存配置后会被重置）
 _api: Optional[BilibiliAPI] = None  # B站API客户端实例
-_llm_client: Optional[LLMClient] = None  # LLM客户端实例（可能为None）
 _tag_cloud_tasks = {}
 
 
@@ -88,11 +88,11 @@ def get_api() -> BilibiliAPI:
 
 def get_llm_client() -> Optional[LLMClient]:
     """
-    获取LLM客户端实例（单例模式，允许失败）
+    获取LLM客户端实例（委托全局单例，允许失败）
     
     功能说明：
-    - 尝试初始化LLM客户端，用于AI选题生成
-    - 如果初始化失败（如未配置API Key），返回None
+    - 委托 llm.client.get_llm_client()，与配置保存后的重置共用同一实例
+    - 如果初始化失败（如未配置API Key），返回None，且不缓存失败结果
     - LLM功能是可选的，失败不影响其他功能
     
     Returns:
@@ -103,16 +103,15 @@ def get_llm_client() -> Optional[LLMClient]:
     - 其他功能（词云、活动追踪）不依赖LLM
     
     容错设计：
-    - 捕获所有异常，避免LLM初始化失败影响整个服务
+    - 未配置记 info，其他初始化异常记完整堆栈
     - 调用方需要检查返回值是否为None
     """
-    global _llm_client
-    if _llm_client is None:
-        try:
-            # 尝试初始化LLM客户端
-            _llm_client = LLMClient()
-        except Exception as exc:
-            # 初始化失败（如API Key未配置），设为None；记录原因便于排查配置问题。
-            logger.debug("LLM 初始化失败，按未配置处理: %s", exc, exc_info=True)
-            _llm_client = None
-    return _llm_client
+    try:
+        return get_global_llm_client()
+    except LLMNotConfiguredError as e:
+        # 未配置属于正常状态，降级为非LLM模式
+        logger.info(f"LLM未配置，跳过LLM客户端初始化: {e}")
+    except Exception:
+        # 此处不抛出异常，允许系统继续运行
+        logger.exception("LLM客户端初始化失败")
+    return None

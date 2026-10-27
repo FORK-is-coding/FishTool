@@ -23,7 +23,6 @@ from web.routers.hotspot import deps as deps_module
 def _reset_singletons(monkeypatch):
     """每个用例前重置单例与任务表，避免跨用例串味。"""
     monkeypatch.setattr(deps_module, "_api", None)
-    monkeypatch.setattr(deps_module, "_llm_client", None)
     monkeypatch.setattr(deps_module, "_tag_cloud_tasks", {})
     yield
 
@@ -65,31 +64,113 @@ def test_get_api_creates_singleton_with_cookie_pool(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_get_llm_client_returns_cached_instance(monkeypatch):
-    """构造成功时缓存实例，二次调用不再构造。"""
+class _RecordingLogger:
+    """记录 info / exception 调用的 logger 替身。"""
+
+    def __init__(self) -> None:
+        self.records = []
+
+    def info(self, *args, **kwargs):
+        """记录 info 级别日志。"""
+        self.records.append(("info", args))
+
+    def exception(self, *args, **kwargs):
+        """记录 exception 级别日志。"""
+        self.records.append(("exception", args))
+
+
+def test_get_llm_client_delegates_to_global_singleton(monkeypatch):
+    """应委托 llm.client 全局单例，本模块不再自建或缓存客户端。"""
     calls = {"count": 0}
     sentinel = object()
 
-    def fake_client():
-        """统计构造次数并返回哨兵。"""
+    def fake_global():
+        """统计调用次数并返回哨兵。"""
         calls["count"] += 1
         return sentinel
 
-    monkeypatch.setattr(deps_module, "LLMClient", fake_client)
+    monkeypatch.setattr(deps_module, "get_global_llm_client", fake_global)
     assert deps_module.get_llm_client() is sentinel
     assert deps_module.get_llm_client() is sentinel
-    assert calls["count"] == 1
+    # 每次都转交全局单例，由全局单例自己负责缓存与重置
+    assert calls["count"] == 2
+    assert not hasattr(deps_module, "_llm_client")
 
 
-def test_get_llm_client_degrades_to_none_on_error(monkeypatch):
-    """构造失败时应降级为 None，且不抛异常。"""
+def test_get_llm_client_not_configured_returns_none_and_logs_info(monkeypatch):
+    """未配置时降级为 None，只记 info，不抛异常。"""
+    from core.exceptions import LLMNotConfiguredError
+
+    def not_configured():
+        """模拟未配置密钥。"""
+        raise LLMNotConfiguredError("LLM API密钥未配置")
+
+    recorder = _RecordingLogger()
+    monkeypatch.setattr(deps_module, "logger", recorder)
+    monkeypatch.setattr(deps_module, "get_global_llm_client", not_configured)
+    assert deps_module.get_llm_client() is None
+    assert [level for level, _ in recorder.records] == ["info"]
+
+
+def test_get_llm_client_unexpected_error_returns_none_and_logs_exception(monkeypatch):
+    """其他初始化异常也降级为 None，但要记完整堆栈。"""
 
     def boom():
-        """模拟未配置密钥导致的构造失败。"""
-        raise RuntimeError("no key")
+        """模拟意外的构造失败。"""
+        raise RuntimeError("boom")
 
-    monkeypatch.setattr(deps_module, "LLMClient", boom)
+    recorder = _RecordingLogger()
+    monkeypatch.setattr(deps_module, "logger", recorder)
+    monkeypatch.setattr(deps_module, "get_global_llm_client", boom)
     assert deps_module.get_llm_client() is None
+    assert [level for level, _ in recorder.records] == ["exception"]
+
+
+def test_get_llm_client_failure_is_not_cached(monkeypatch):
+    """首次失败不缓存 None，配置补齐后下一次调用能拿到客户端。"""
+    from core.exceptions import LLMNotConfiguredError
+
+    sentinel = object()
+    state = {"configured": False}
+
+    def fake_global():
+        """未配置时抛错，配置后返回哨兵。"""
+        if not state["configured"]:
+            raise LLMNotConfiguredError("LLM API密钥未配置")
+        return sentinel
+
+    monkeypatch.setattr(deps_module, "logger", _RecordingLogger())
+    monkeypatch.setattr(deps_module, "get_global_llm_client", fake_global)
+    assert deps_module.get_llm_client() is None
+    state["configured"] = True
+    assert deps_module.get_llm_client() is sentinel
+
+
+def test_get_llm_client_follows_global_reset(monkeypatch):
+    """全局单例被 reset_llm_client() 重置后，热点模块拿到的是新实例。"""
+    import llm.client as llm_module
+
+    class _FakeClient:
+        """带 close 的客户端替身。"""
+
+        def __init__(self) -> None:
+            self.closed = 0
+
+        async def close(self):
+            """记录关闭次数。"""
+            self.closed += 1
+
+    monkeypatch.setattr(llm_module, "LLMClient", _FakeClient)
+    monkeypatch.setattr(llm_module, "_global_llm_client", None)
+
+    first = deps_module.get_llm_client()
+    assert deps_module.get_llm_client() is first
+
+    asyncio.run(llm_module.reset_llm_client())
+
+    second = deps_module.get_llm_client()
+    assert second is not first
+    assert first.closed == 1
 
 
 # ---------------------------------------------------------------------------

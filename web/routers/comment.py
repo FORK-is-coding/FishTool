@@ -37,9 +37,10 @@ from typing import List, Optional
 
 from bilibili.api import BilibiliAPI
 from bilibili.cookie_pool import get_cookie_pool
-from llm.client import LLMClient
+from llm.client import LLMClient, get_llm_client as get_global_llm_client
 from core.config import ConfigManager
 from core.database import Comment, Video, get_session
+from core.exceptions import LLMNotConfiguredError
 from core.logger import get_logger
 from modules.comment import CommentCollector, CommentMonitor
 
@@ -47,9 +48,9 @@ router = APIRouter()
 logger = get_logger(__name__)
 
 # ============ 全局实例（延迟初始化模式） ============
-# 采用单例模式管理API、LLM、监控器实例，避免重复初始化
+# 采用单例模式管理API、监控器实例，避免重复初始化
+# LLM客户端不在本模块缓存，每次取 llm.client 全局单例（保存配置后会被重置）
 _api: Optional[BilibiliAPI] = None  # B站API客户端
-_llm_client: Optional[LLMClient] = None  # LLM客户端（可选）
 _monitor: Optional[CommentMonitor] = None  # 评论监控器
 
 
@@ -109,15 +110,18 @@ def get_monitor() -> CommentMonitor:
     - 延迟导入push_alert避免循环依赖
     - 监控器实例贯穿整个应用生命周期
     """
-    global _monitor, _llm_client
+    global _monitor
+    # 每次都取最新的全局LLM客户端（用于AI情感分析）：
+    # 保存LLM配置后旧实例已被重置并关闭，失败结果也不缓存，下次调用会重试
+    llm_client: Optional[LLMClient] = None
+    try:
+        llm_client = get_global_llm_client()
+    except LLMNotConfiguredError as e:
+        # 未配置属于正常状态，监控器仍可使用规则引擎进行基础分析
+        logger.info(f"LLM未配置，评论监控使用规则引擎: {e}")
+    except Exception:
+        logger.exception("LLM客户端初始化失败，评论监控使用规则引擎")
     if _monitor is None:
-        # 尝试初始化LLM客户端（用于AI情感分析）
-        try:
-            _llm_client = LLMClient()
-        except Exception as exc:
-            # LLM初始化失败（如API Key未配置），设为None；规则引擎仍可工作。
-            logger.debug("LLM 初始化失败，评论监控降级为规则引擎: %s", exc, exc_info=True)
-            _llm_client = None
         
         # 延迟导入避免循环依赖
         # push_alert是web.main中定义的预警推送函数
@@ -126,9 +130,13 @@ def get_monitor() -> CommentMonitor:
         # 创建监控器实例
         _monitor = CommentMonitor(
             get_api(),  # B站API客户端
-            _llm_client,  # LLM客户端（可能为None）
+            llm_client,  # LLM客户端（可能为None）
             alert_callback=push_alert  # 预警回调函数
         )
+    elif _monitor.llm_client is not llm_client:
+        # 监控器常驻复用，配置变更后把新客户端同步给监控器与情感分析器
+        _monitor.llm_client = llm_client
+        _monitor.analyzer.llm_client = llm_client
     return _monitor
 
 
