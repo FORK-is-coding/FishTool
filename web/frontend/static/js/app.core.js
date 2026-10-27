@@ -96,6 +96,12 @@ async function apiRequest(url, options = {}, showError = true) {
             let message;
             if (typeof detail === 'string' && detail) {
                 message = detail;
+            } else if (Array.isArray(detail)) {
+                // pydantic 校验错误是 [{loc, msg, type}, ...]：拼接各项 msg，取不到再回退状态码文案。
+                const messages = detail
+                    .map(item => (item && typeof item === 'object' ? item.msg : item))
+                    .filter(msg => typeof msg === 'string' && msg);
+                message = messages.length ? messages.join('；') : `请求失败（HTTP ${response.status}）`;
             } else if (detail && typeof detail === 'object') {
                 message = detail.message || detail.error_code || `请求失败（HTTP ${response.status}）`;
             } else {
@@ -103,6 +109,8 @@ async function apiRequest(url, options = {}, showError = true) {
             }
             const error = new Error(message);
             error.status = response.status;
+            // 保留后端原始 detail，供调用方按 error_code 分支（如 app.events.js 的 eventApiErrorCode）。
+            error.detail = payload ? payload.detail : undefined;
             throw error;
         }
         
