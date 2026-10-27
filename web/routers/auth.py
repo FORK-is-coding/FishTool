@@ -8,8 +8,8 @@ B站登录态管理 API 路由
 2. GET  /api/auth/qrcode   生成登录二维码（B站 passport 官方接口），
                            返回 qrcode_key 与 base64 图片
 3. POST /api/auth/poll     按 qrcode_key 单次查询扫码状态；
-                           code==0 时提取 Cookie、加密落盘、
-                           nav 验证通过后才报"登录成功"
+                           code==0 时提取 Cookie，nav 验证通过后
+                           才加密落盘并报"登录成功"
 4. POST /api/auth/logout   清除本地加密存储的登录态
 
 与桌面端扫码向导的关键区别（保证扫码成功率的设计）：
@@ -201,6 +201,13 @@ async def poll_login(request: QrPollRequest):
                 return {"success": True, "status": "error",
                         "message": "登录成功但Cookie提取失败，请重新扫码", "user": None}
 
+            # 校验3：nav 实测，必须在落盘之前；只用内存中的 cookie，不依赖已保存的 secrets。
+            # 校验不通过时既不写 secrets 也不写 Cookie 池，避免无效 Cookie 覆盖原有登录态。
+            valid = await CookieLoginHelper.validate_cookie(cookie)
+            if not valid:
+                return {"success": True, "status": "error",
+                        "message": "Cookie验证未通过，请重新扫码", "user": None}
+
             # 加密落盘（与桌面端向导共用同一份 secrets，重启不丢）
             config = ConfigManager()
             config.save_secret(COOKIE_SECRET_KEY, cookie)
@@ -213,12 +220,6 @@ async def poll_login(request: QrPollRequest):
                 get_cookie_pool().add_cookie(cookie, persist=True)
             except Exception as _pool_err:
                 logger.warning(f"[auth] 同步 Cookie 到池失败（secrets 已保存，不影响登录）: {_pool_err}")
-
-            # 校验3：nav 实测
-            valid = await CookieLoginHelper.validate_cookie(cookie)
-            if not valid:
-                return {"success": True, "status": "error",
-                        "message": "Cookie验证未通过，请重新扫码", "user": None}
 
             user = await CookieLoginHelper.get_user_info(cookie)
             return {"success": True, "status": "confirmed",

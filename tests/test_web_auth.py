@@ -297,13 +297,67 @@ def test_poll_success_but_cookie_without_sessdata(client):
 
 
 def test_poll_success_but_nav_validation_fails(client):
-    """Cookie 已落盘但 nav 校验失败时应返回 error。"""
+    """nav 校验失败时应返回 error。"""
     _FakeBilibiliAPI.poll_result = ({"code": 0, "data": {"code": 0}}, [])
     _FakeCookieLoginHelper.valid = False
 
     body = client.post("/api/auth/poll", json={"qrcode_key": "k"}).json()
     assert body["status"] == "error"
     assert "验证未通过" in body["message"]
+
+
+def test_poll_nav_validation_fails_does_not_persist_cookie(client, monkeypatch):
+    """nav 校验失败时不得调用 save_secret 与 add_cookie，原有登录态保持不变。"""
+    _FakeBilibiliAPI.poll_result = ({"code": 0, "data": {"code": 0}}, [])
+    _FakeCookieLoginHelper.valid = False
+    _FakeConfig.store[auth_module.COOKIE_SECRET_KEY] = "SESSDATA=old-valid-cookie"
+    saved: list = []
+
+    def spy_save_secret(self, key, value):
+        """记录 save_secret 调用。"""
+        saved.append((key, value))
+
+    monkeypatch.setattr(_FakeConfig, "save_secret", spy_save_secret)
+
+    body = client.post("/api/auth/poll", json={"qrcode_key": "k"}).json()
+
+    assert body == {"success": True, "status": "error",
+                    "message": "Cookie验证未通过，请重新扫码", "user": None}
+    assert saved == []
+    assert _FakeCookiePool.added == []
+    assert _FakeConfig.store[auth_module.COOKIE_SECRET_KEY] == "SESSDATA=old-valid-cookie"
+
+
+def test_poll_success_validates_before_persisting(client, monkeypatch):
+    """成功路径应先用内存 Cookie 做 nav 校验，再落盘 secrets 与 Cookie 池。"""
+    _FakeBilibiliAPI.poll_result = ({"code": 0, "data": {"code": 0}}, [])
+    calls: list = []
+
+    async def spy_validate(cookie: str) -> bool:
+        """记录校验调用与校验时 secrets 的状态。"""
+        calls.append(("validate", cookie, _FakeConfig.store.get(auth_module.COOKIE_SECRET_KEY)))
+        return True
+
+    def spy_save_secret(self, key, value):
+        """记录落盘调用并写入内存字典。"""
+        calls.append(("save_secret", key))
+        type(self).store[key] = value
+
+    def spy_add_cookie(self, cookie, persist: bool = False) -> None:
+        """记录 Cookie 池写入调用。"""
+        calls.append(("add_cookie", persist))
+
+    monkeypatch.setattr(_FakeCookieLoginHelper, "validate_cookie", staticmethod(spy_validate))
+    monkeypatch.setattr(_FakeConfig, "save_secret", spy_save_secret)
+    monkeypatch.setattr(_FakeCookiePool, "add_cookie", spy_add_cookie)
+
+    body = client.post("/api/auth/poll", json={"qrcode_key": "k"}).json()
+
+    assert body["status"] == "confirmed"
+    assert [c[0] for c in calls] == ["validate", "save_secret", "add_cookie"]
+    # 校验用的是本次提取的内存 Cookie，此时 secrets 中尚无该值
+    assert calls[0][1] == _FakeQrCodeLogin.cookie
+    assert calls[0][2] is None
 
 
 def test_poll_cookie_pool_sync_failure_is_tolerated(client, monkeypatch):
