@@ -117,6 +117,14 @@ def test_topic_library_query_failure_returns_500(client):
     assert "查询选题库失败" in response.json()["detail"]
 
 
+def test_topic_library_invalid_status_returns_422(client):
+    """非法 status 应保持 422，不能被兜底 except 改写成 500，也不应查询数据库。"""
+    response = client.get("/api/hotspot/topics", params={"status": "bad"})
+    assert response.status_code == 422
+    assert "非法选题状态" in response.json()["detail"]
+    assert _FakeTopicGenerator.library_calls == []
+
+
 # ---------------------------------------------------------------------------
 # PUT /topics/{topic_id}
 # ---------------------------------------------------------------------------

@@ -117,6 +117,9 @@ async def get_topic_library(
             "count": len(topics)  # 实际返回数量
         }
         
+    except HTTPException:
+        # 重新抛出HTTP异常（如非法 status 的 422），不能被下方兜底改写成 500
+        raise
     except Exception as e:
         # 查询失败（数据库错误等）
         raise HTTPException(status_code=500, detail=f"查询选题库失败: {str(e)}")
