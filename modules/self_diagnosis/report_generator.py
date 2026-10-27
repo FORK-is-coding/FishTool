@@ -787,13 +787,19 @@ class ReportGenerator:
         )
         try:
             import markdown2
+            # 报告含 B 站外部文本（昵称、签名、视频标题等），内嵌 HTML 一律转义，
+            # 防止 <iframe>/<script>/<img src=file://> 进入桌面 Qt 或 pdfkit 渲染。
             body_html = markdown2.markdown(
                 md_content,
                 extras=['tables', 'fenced-code-blocks', 'break-on-newline'],
+                safe_mode='escape',
             )
         except ImportError:
             # 依赖缺失时至少保留可读的纯文本，不让导出直接失败。
             body_html = f"<pre>{html.escape(md_content)}</pre>"
+        # safe_mode 不处理 Markdown 图片语法 ![](file:///...)，Qt 会按本地路径加载；
+        # 报告正文本身不用图片（图表在下方另行插入），故剥离 markdown 产生的全部 <img>。
+        body_html = re.sub(r"<img\b[^>]*>", "", body_html, flags=re.IGNORECASE)
 
         charts_html = self._build_charts_html(charts, benchmark_data)
         if charts_html:
@@ -946,9 +952,10 @@ class ReportGenerator:
             filepath = self.output_dir / filename
             
             # HTML转PDF
+            # 不开启 enable-local-file-access：报告只用内联样式和 data URI 图表，
+            # 无需读取本地文件，开启后外部文本可借 file:// 把本机文件渲染进 PDF。
             pdfkit.from_string(styled_html, str(filepath), options={
                 'encoding': 'UTF-8',
-                'enable-local-file-access': None
             })
             
             logger.info(f"[报告生成] PDF报告已保存: {filepath}")
