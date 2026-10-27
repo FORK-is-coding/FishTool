@@ -788,6 +788,8 @@ async function exportDiagnosisReport() {
             benchmark_data: diagnosisState.result.benchmark,
             creator_ranking: diagnosisState.result.creator_ranking,
             benchmark_status: diagnosisState.result.benchmark_status,
+            // 页面上已生成的 AI 调研报告与运营点评随报告导出，不再重复调用 LLM（#14）
+            ai_report: diagnosisState.result.ai_report,
             // 图形在浏览器里合成同一主题的仪表盘图片，PDF 中不再丢失柱状图/雷达图/词云。
             charts: dashboardImage ? { dashboard: dashboardImage } : {},
         };

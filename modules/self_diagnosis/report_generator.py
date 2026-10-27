@@ -180,6 +180,32 @@ def _format_ranking_metric(value: Any) -> str:
     return '无法计算'
 
 
+def _format_timestamp(value: Any) -> str:
+    """把采集时间格式化为本地时间文本；缺失或非法时返回「未记录」。
+
+    Args:
+        value: ISO 时间字符串（``self_analyzer`` 的 ``fetched_at``），或 Unix 秒级时间戳。
+
+    Returns:
+        ``YYYY-MM-DD HH:MM:SS`` 文本，或「未记录」。
+    """
+    if isinstance(value, bool) or value in (None, ""):
+        return "未记录"
+    if isinstance(value, str):
+        # self_analyzer 写入的是 ``datetime.isoformat()``，统一转成与「生成时间」相同的格式
+        text = value.strip()
+        if not text:
+            return "未记录"
+        try:
+            return datetime.fromisoformat(text).strftime('%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            return text
+    try:
+        return datetime.fromtimestamp(float(value)).strftime('%Y-%m-%d %H:%M:%S')
+    except (TypeError, ValueError, OverflowError, OSError):
+        return "未记录"
+
+
 def _format_ranking_percent(value: Any) -> str:
     """百分位格式化：整数值去掉多余小数（30.0 -> 30%），缺失 -> 「无法计算」。
 
@@ -217,7 +243,8 @@ class ReportGenerator:
                                  self_data: Dict[str, Any],
                                  benchmark_data: Optional[Dict[str, Any]] = None,
                                  *,
-                                 creator_ranking: Optional[Dict[str, Any]] = None) -> str:
+                                 creator_ranking: Optional[Dict[str, Any]] = None,
+                                 ai_report: Optional[Dict[str, Any]] = None) -> str:
         """生成Markdown格式的诊断报告
         
         Args:
@@ -225,6 +252,7 @@ class ReportGenerator:
             benchmark_data: benchmark对比数据（可选）
             creator_ranking: 冻结的同行排名结果（schema=3 / unit=creator，可选）；
                 仅 keyword-only，不破坏旧位置参数调用
+            ai_report: 自诊接口返回的 AI 调研结果（可选）；用于「AI 调研报告」「运营点评」两节
             
         Returns:
             Markdown文本
@@ -253,6 +281,8 @@ class ReportGenerator:
         md_parts.append(f"# B站账号诊断报告\n")
         # 追加到列表
         md_parts.append(f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        # 数据采集时间：导出复用页面快照时，与「生成时间」可能不同，需单独标明
+        md_parts.append(f"**数据采集时间**: {_format_timestamp(self_data.get('fetched_at'))}\n")
         # 追加到列表
         md_parts.append(f"**账号UID**: {uid}\n")
         # 条件分支处理
@@ -523,6 +553,10 @@ class ReportGenerator:
         if creator_ranking:
             self._append_creator_ranking_section(md_parts, creator_ranking)
 
+        # 六之三、AI 调研报告与运营点评（与页面卡片同一份结果；导出不再重复调用 LLM）
+        if ai_report is not None:
+            self._append_ai_report_sections(md_parts, ai_report)
+
         # 七、改进建议
         md_parts.append("## 💡 改进建议\n\n")
         
@@ -712,12 +746,61 @@ class ReportGenerator:
 
         md_parts.append("\n---\n\n")
     
+    def _append_ai_report_sections(self, md_parts: list, ai_report: Any) -> None:
+        """追加「AI 调研报告」「运营点评」两节（字段口径见 AIDiagnosisReporter.generate）。
+
+        成功结果含 ``report`` / ``commentary`` / ``highlights`` / ``model`` / ``generated_at``；
+        降级结果只有 ``success=False`` 与 ``message``。任一正文缺失时该节写明「未生成」及原因，
+        不抛错、不留空节。
+
+        Args:
+            md_parts: Markdown 片段累积列表（原地追加）。
+            ai_report: AI 调研结果（dict）；非 dict 按「未生成」处理。
+
+        Returns:
+            无。
+        """
+        if not isinstance(ai_report, dict):
+            ai_report = {}
+        succeeded = ai_report.get('success') is True
+        report = str(ai_report.get('report') or '').strip() if succeeded else ''
+        commentary = str(ai_report.get('commentary') or '').strip() if succeeded else ''
+        reason = str(ai_report.get('message') or '').strip() or 'AI调研暂不可用'
+        highlights = [
+            str(item).strip() for item in (ai_report.get('highlights') or [])
+            if str(item).strip()
+        ] if succeeded and isinstance(ai_report.get('highlights'), list) else []
+        # 溯源：模型名 + 生成时间，与页面卡片底部一致
+        source_bits = [str(ai_report['model']).strip()] if succeeded and ai_report.get('model') else []
+        if ai_report.get('generated_at'):
+            source_bits.append(f"生成于 {_format_timestamp(ai_report.get('generated_at'))}")
+
+        md_parts.append("## 🤖 AI 调研报告\n\n")
+        if report:
+            md_parts.append(f"{report}\n\n")
+            if highlights:
+                md_parts.append("\n".join(f"- {item}" for item in highlights))
+                md_parts.append("\n\n")
+        else:
+            md_parts.append(f"ℹ️ **未生成**: {reason}\n\n")
+
+        md_parts.append("## 📝 运营点评\n\n")
+        if commentary:
+            md_parts.append(f"{commentary}\n\n")
+        else:
+            md_parts.append(f"ℹ️ **未生成**: {reason}\n\n")
+        if source_bits:
+            md_parts.append(f"> {' · '.join(source_bits)}\n\n")
+
+        md_parts.append("---\n\n")
+
     def save_markdown_report(self, 
                             self_data: Dict[str, Any],
                             benchmark_data: Optional[Dict[str, Any]] = None,
                             filename: Optional[str] = None,
                             *,
-                            creator_ranking: Optional[Dict[str, Any]] = None) -> str:
+                            creator_ranking: Optional[Dict[str, Any]] = None,
+                            ai_report: Optional[Dict[str, Any]] = None) -> str:
         """保存Markdown报告到文件
         # 持久化数据，防止丢失
         
@@ -732,7 +815,8 @@ class ReportGenerator:
             # 持久化数据，防止丢失
         """
         # 生成报告内容
-        md_content = self.generate_markdown_report(self_data, benchmark_data, creator_ranking=creator_ranking)
+        md_content = self.generate_markdown_report(self_data, benchmark_data, creator_ranking=creator_ranking,
+                                                   ai_report=ai_report)
         
         # 确定文件名
         # 默认格式: diagnosis_report_{uid}_{时间戳}.md
@@ -766,7 +850,8 @@ class ReportGenerator:
                              benchmark_data: Optional[Dict[str, Any]] = None,
                              *,
                              creator_ranking: Optional[Dict[str, Any]] = None,
-                             charts: Optional[Dict[str, str]] = None) -> str:
+                             charts: Optional[Dict[str, str]] = None,
+                             ai_report: Optional[Dict[str, Any]] = None) -> str:
         """生成可直接打印/另存为 PDF 的 HTML 报告。
 
         与 Markdown/PDF 使用同一份诊断数据，避免导出时重新抓取账号数据；
@@ -783,7 +868,7 @@ class ReportGenerator:
             str: 完整 HTML 文档。
         """
         md_content = self.generate_markdown_report(
-            self_data, benchmark_data, creator_ranking=creator_ranking
+            self_data, benchmark_data, creator_ranking=creator_ranking, ai_report=ai_report
         )
         try:
             import markdown2
@@ -884,7 +969,8 @@ class ReportGenerator:
                                 benchmark_data: Optional[Dict[str, Any]],
                                 filename: Optional[str],
                                 *,
-                                creator_ranking: Optional[Dict[str, Any]] = None) -> str:
+                                creator_ranking: Optional[Dict[str, Any]] = None,
+                                ai_report: Optional[Dict[str, Any]] = None) -> str:
         """PDF 依赖缺失时的降级：输出 .md 文件，绝不把 Markdown 写成 .pdf（§9-17）。
 
         Args:
@@ -899,14 +985,16 @@ class ReportGenerator:
         md_filename = filename
         if md_filename:
             md_filename = str(Path(md_filename).with_suffix(".md"))
-        return self.save_markdown_report(self_data, benchmark_data, md_filename, creator_ranking=creator_ranking)
+        return self.save_markdown_report(self_data, benchmark_data, md_filename, creator_ranking=creator_ranking,
+                                         ai_report=ai_report)
 
     def generate_pdf_report(self,
                            self_data: Dict[str, Any],
                            benchmark_data: Optional[Dict[str, Any]] = None,
                            filename: Optional[str] = None,
                            *,
-                           creator_ranking: Optional[Dict[str, Any]] = None) -> str:
+                           creator_ranking: Optional[Dict[str, Any]] = None,
+                           ai_report: Optional[Dict[str, Any]] = None) -> str:
         """生成PDF格式的诊断报告
         
         依赖 markdown2 + pdfkit + wkhtmltopdf，
@@ -928,7 +1016,7 @@ class ReportGenerator:
         try:
             # 生成与桌面端保存 PDF 使用同一套 HTML/CSS。
             styled_html = self.generate_html_report(
-                self_data, benchmark_data, creator_ranking=creator_ranking
+                self_data, benchmark_data, creator_ranking=creator_ranking, ai_report=ai_report
             )
 
             try:
@@ -937,7 +1025,7 @@ class ReportGenerator:
             except ImportError:
                 logger.warning("[报告生成] 缺少PDF依赖（pdfkit），降级为Markdown")
                 return self._save_markdown_fallback(self_data, benchmark_data, filename,
-                                                    creator_ranking=creator_ranking)
+                                                    creator_ranking=creator_ranking, ai_report=ai_report)
             
             # 确定文件名
             if not filename:
@@ -965,4 +1053,4 @@ class ReportGenerator:
             logger.error(f"[报告生成] PDF生成失败: {e}，降级为Markdown", exc_info=True)
             # 降级为 Markdown，返回 .md 路径而非伪装成 PDF。
             return self._save_markdown_fallback(self_data, benchmark_data, filename,
-                                                creator_ranking=creator_ranking)
+                                                creator_ranking=creator_ranking, ai_report=ai_report)

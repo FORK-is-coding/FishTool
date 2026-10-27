@@ -208,6 +208,8 @@ class ReportExportRequest(BaseModel):
     creator_ranking: Optional[Dict[str, Any]] = Field(None, description="已完成的冻结同行排名（可选）")
     benchmark_status: Optional[str] = Field(None, description="benchmark 状态（可选）")
     charts: Optional[Dict[str, str]] = Field(None, description="前端捕获的图表 PNG data URI（可选）")
+    # #14：页面上已生成的 AI 调研报告与运营点评；导出直接复用，不再重复调用 LLM
+    ai_report: Optional[Dict[str, Any]] = Field(None, description="已完成的 AI 调研结果（可选）")
 
 
 def _load_creator_ranking(uid: int, run_id: Optional[str]):
@@ -518,14 +520,28 @@ async def _resolve_report_data(request: ReportExportRequest):
         request: 导出请求。
 
     Returns:
-        tuple: ``(self_data, benchmark_data, creator_ranking, benchmark_status)``。
+        tuple: ``(self_data, benchmark_data, creator_ranking, benchmark_status, ai_report)``。
+
+    Raises:
+        HTTPException: 409 页面数据的 uid 与请求 uid 不一致；排名 run 校验失败原样透传。
     """
     if request.self_data:
+        # 页面数据来自客户端：先确认属于请求的账号，避免把上一个账号的诊断导出成当前账号
+        snapshot_uid = request.self_data.get("uid")
+        try:
+            matched = not isinstance(snapshot_uid, bool) and int(snapshot_uid) == int(request.uid)
+        except (TypeError, ValueError):
+            matched = False
+        if not matched:
+            raise HTTPException(status_code=409, detail="diagnosis_uid_mismatch")
+        # 同行排名不采信客户端传入的结果：按 run id 由服务端读取冻结结果，沿用跨 UID 拒绝
+        creator_ranking, ranking_status = _load_creator_ranking(request.uid, request.benchmark_run_id)
         return (
             request.self_data,
             request.benchmark_data,
-            request.creator_ranking,
-            request.benchmark_status or "provided",
+            creator_ranking,
+            request.benchmark_status or ranking_status or "provided",
+            request.ai_report,
         )
 
     init_clients()
@@ -536,20 +552,24 @@ async def _resolve_report_data(request: ReportExportRequest):
         if request.category else None
     )
     creator_ranking, benchmark_status = _load_creator_ranking(request.uid, request.benchmark_run_id)
-    return self_data, benchmark_data, creator_ranking, benchmark_status
+    # 旧调用方未携带页面数据时不重新调用 LLM（费用与结果都可能与页面不一致），AI 两节写明未生成
+    return self_data, benchmark_data, creator_ranking, benchmark_status, request.ai_report
 
 
 @router.post("/report-html")
 async def report_html(request: ReportExportRequest):
     """生成可打印的 HTML 报告，供桌面端选择路径后另存为 PDF。"""
     try:
-        self_data, benchmark_data, creator_ranking, benchmark_status = await _resolve_report_data(request)
+        self_data, benchmark_data, creator_ranking, benchmark_status, ai_report = await _resolve_report_data(request)
         generator = ReportGenerator()
+        # ai_report 只在页面已有结果时以关键字传入，保持原有调用形态
+        extra_kwargs: Dict[str, Any] = {'ai_report': ai_report} if ai_report is not None else {}
         html_content = generator.generate_html_report(
             self_data,
             benchmark_data,
             creator_ranking=creator_ranking,
             charts=request.charts,
+            **extra_kwargs,
         )
         return {
             'success': True,
@@ -584,23 +604,19 @@ async def export_report(request: ReportExportRequest):
         logger.info(f"[API] 导出报告: UID={request.uid}, 格式={request.format}")
 
         # 优先复用前端自诊结果；旧调用方未携带数据时才重新抓取。
-        self_data, benchmark_data, creator_ranking, benchmark_status = await _resolve_report_data(request)
+        self_data, benchmark_data, creator_ranking, benchmark_status, ai_report = await _resolve_report_data(request)
         generator = ReportGenerator()
+        # 可选段只在有值时以关键字传入，保持旧的位置参数调用形态
+        report_kwargs: Dict[str, Any] = {}
+        if creator_ranking is not None:
+            report_kwargs['creator_ranking'] = creator_ranking
+        if ai_report is not None:
+            report_kwargs['ai_report'] = ai_report
 
         if request.format == 'pdf':
-            if creator_ranking is None:
-                filepath = generator.generate_pdf_report(self_data, benchmark_data)
-            else:
-                filepath = generator.generate_pdf_report(
-                    self_data, benchmark_data, creator_ranking=creator_ranking
-                )
+            filepath = generator.generate_pdf_report(self_data, benchmark_data, **report_kwargs)
         else:
-            if creator_ranking is None:
-                filepath = generator.save_markdown_report(self_data, benchmark_data)
-            else:
-                filepath = generator.save_markdown_report(
-                    self_data, benchmark_data, creator_ranking=creator_ranking
-                )
+            filepath = generator.save_markdown_report(self_data, benchmark_data, **report_kwargs)
 
         return {
             'success': True,
