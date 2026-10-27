@@ -47,101 +47,13 @@ import re
 
 # 从 core.logger 导入符号
 from core.logger import get_logger
+# 打印主题（方案 A）：样式 + 封面 / 页眉页脚外壳；正文安全处理仍在本模块完成
+from .report_theme import REPORT_PRINT_CSS, decorate_body, render_document
 
 logger = get_logger(__name__)
 
-#: 打印/PDF 报告样式：暖白底、B 站粉棕强调色、表格与分页友好。
-_REPORT_PRINT_CSS = """
-@page { size: A4; margin: 14mm 14mm 16mm; }
-* { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; background: #ffffff; }
-body {
-    font-family: "Microsoft YaHei", "SimHei", "PingFang SC", sans-serif;
-    color: #3f3a36;
-    font-size: 11pt;
-    line-height: 1.72;
-}
-.report { width: 100%; max-width: none; margin: 0; padding: 4px 2px; }
-h1 {
-    margin: 0 0 14px;
-    padding-bottom: 10px;
-    font-size: 22pt;
-    font-weight: 700;
-    color: #b46f69;
-    border-bottom: 3px solid #d4a373;
-    letter-spacing: 1px;
-}
-h2 {
-    margin: 24px 0 10px;
-    padding: 4px 0 4px 10px;
-    font-size: 15pt;
-    color: #8a5a43;
-    border-left: 5px solid #d4a373;
-    page-break-after: avoid;
-}
-h3 { margin: 16px 0 8px; font-size: 12.5pt; color: #514a45; page-break-after: avoid; }
-p { margin: 6px 0; }
-strong { color: #514a45; }
-ul, ol { margin: 6px 0 10px; padding-left: 22px; }
-li { margin: 3px 0; }
-hr { border: none; border-top: 1px solid #e6d9cc; margin: 18px 0; }
-table {
-    width: 100%;
-    margin: 10px 0 16px;
-    border-collapse: collapse;
-    font-size: 10pt;
-    page-break-inside: avoid;
-}
-th, td {
-    padding: 7px 9px;
-    border: 1px solid #e3d8cc;
-    text-align: left;
-    vertical-align: top;
-    word-break: break-word;
-}
-th { background: #faf7f2; color: #514a45; font-weight: 600; }
-tr:nth-child(even) td { background: #fffdf9; }
-blockquote {
-    margin: 10px 0;
-    padding: 8px 12px;
-    color: #6b625a;
-    background: #faf7f2;
-    border-left: 4px solid #d4a373;
-}
-code {
-    padding: 1px 4px;
-    color: #8a5a43;
-    background: #f5efe8;
-    border-radius: 4px;
-    font-family: Consolas, "Courier New", monospace;
-}
-pre { padding: 10px; background: #faf7f2; border: 1px solid #e3d8cc; white-space: pre-wrap; }
-a { color: #b46f69; text-decoration: none; }
-.report-charts { margin: 18px 0 8px; }
-.report-chart {
-    margin: 0 0 18px;
-    text-align: center;
-    page-break-inside: avoid;
-}
-.report-chart img {
-    width: 100%;
-    max-width: 620px;
-    height: auto;
-    border: 1px solid #ece2d7;
-    border-radius: 8px;
-}
-.report-chart figcaption,
-.report-chart-caption {
-    margin: 6px 0 0;
-    color: #6b625a;
-    font-size: 10pt;
-    text-align: center;
-}
-@media print {
-    body { font-size: 10.5pt; }
-    h2, h3, table, blockquote { page-break-inside: avoid; }
-}
-"""
+#: 打印/PDF 报告样式：方案 A「终端白」，定义见 report_theme；保留旧常量名供外部引用。
+_REPORT_PRINT_CSS = REPORT_PRINT_CSS
 
 
 def _format_metric(value: Any, *, suffix: str = "") -> str:
@@ -886,20 +798,17 @@ class ReportGenerator:
         # 报告正文本身不用图片（图表在下方另行插入），故剥离 markdown 产生的全部 <img>。
         body_html = re.sub(r"<img\b[^>]*>", "", body_html, flags=re.IGNORECASE)
 
+        # 套主题前正文已完成转义与图片剥离；主题只改标题文本与类名，不引入数据标签
+        body_html = decorate_body(body_html)
         charts_html = self._build_charts_html(charts, benchmark_data)
         if charts_html:
             body_html = self._insert_after_first_hr(body_html, charts_html)
 
-        return (
-            "<!DOCTYPE html>\n"
-            "<html lang=\"zh-CN\">\n<head>\n"
-            "<meta charset=\"UTF-8\">\n"
-            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
-            "<title>B站账号诊断报告</title>\n"
-            f"<style>{_REPORT_PRINT_CSS}</style>\n"
-            "</head>\n<body>\n"
-            f"<main class=\"report\">{body_html}</main>\n"
-            "</body>\n</html>"
+        return render_document(
+            body_html,
+            self_data,
+            generated_at=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            fetched_at=_format_timestamp(self_data.get('fetched_at')),
         )
 
     @staticmethod
