@@ -546,6 +546,54 @@ def test_feedback_event_not_in_run_422(env):
     assert resp.status_code == 422
 
 
+def test_feedback_missing_expected_revision_422(env):
+    """前端契约：缺 expected_revision → 422（前端必须带上当前 run.revision）。"""
+    client = env["client"]
+    eid = _create_event(client)
+    run_id = _seed_opportunity(env, eid)
+    body = _feedback_body(event_id=eid)
+    body.pop("expected_revision")
+    resp = client.post(f"/api/hotspot/opportunities/{run_id}/feedback", json=body)
+    assert resp.status_code == 422
+
+
+def test_feedback_empty_topic_id_422(env):
+    """前端契约：topic_id 为空串 → 422（无已保存选题时前端不应渲染反馈按钮）。"""
+    client = env["client"]
+    eid = _create_event(client)
+    run_id = _seed_opportunity(env, eid)
+    resp = client.post(
+        f"/api/hotspot/opportunities/{run_id}/feedback",
+        json=_feedback_body(event_id=eid, topic_id=""),
+    )
+    assert resp.status_code == 422
+
+
+def test_feedback_correct_revision_200_and_revision_increments(env):
+    """前端契约：带正确 expected_revision → 200，响应 revision 递增；用新 revision 可再次反馈。"""
+    client = env["client"]
+    eid = _create_event(client)
+    run_id = _seed_opportunity(env, eid)
+    current = client.get(f"/api/hotspot/opportunities/{run_id}").json()["data"]["revision"]
+
+    first = client.post(
+        f"/api/hotspot/opportunities/{run_id}/feedback",
+        json=_feedback_body(event_id=eid, expected_revision=current),
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["data"]["revision"] == current + 1
+
+    second = client.post(
+        f"/api/hotspot/opportunities/{run_id}/feedback",
+        json=_feedback_body(
+            feedback_id="fb-2", event_id=eid, kind="rejected",
+            expected_revision=first.json()["data"]["revision"],
+        ),
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["data"]["revision"] == current + 2
+
+
 def test_opportunity_not_found_404(env):
     """机会 run 不存在 → 404。"""
     resp = env["client"].post("/api/hotspot/opportunities/opp_missing/feedback", json=_feedback_body())

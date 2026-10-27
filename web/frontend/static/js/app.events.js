@@ -592,12 +592,21 @@ async function createOpportunityForEvent() {
 
 async function submitOpportunityFeedback(runId, payload, elementId) {
     const el = document.getElementById(elementId);
+    // 后端 FeedbackRequest 必填 expected_revision（缺失即 422）：取当前机会 run 的 revision；
+    // 按钮所属 run 与当前 run 不一致（或尚无 revision）时提示刷新，不盲发。
+    const currentRun = __eventCurrentRun;
+    if (!currentRun || currentRun.opportunity_run_id !== runId || !Number.isInteger(currentRun.revision)) {
+        if (el) el.innerHTML = '<p class="event-error">反馈失败：机会列表已过期，请重新点击“生成机会列表”刷新后再反馈。</p>';
+        return;
+    }
     try {
-        const body = Object.assign({ feedback_id: (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : `fb-${Date.now()}` }, payload);
+        const body = Object.assign({ feedback_id: (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : `fb-${Date.now()}`, expected_revision: currentRun.revision }, payload);
         const response = await apiRequest(`/hotspot/opportunities/${encodeURIComponent(runId)}/feedback`, {
             method: 'POST', body: JSON.stringify(body),
         });
         const data = response.data;
+        // 成功后用服务器返回的新 revision 更新本地 run，避免下一次反馈 409。
+        if (data && Number.isInteger(data.revision)) currentRun.revision = data.revision;
         const note = data.idempotent_replay ? '（幂等：复用原记录）' : '';
         if (el) el.innerHTML = `<p>反馈已记录 ${eventStatusBadge('completed')}${escapeHtml(note)}；验证等级：${escapeHtml(data.verification_status || 'user_reported')}（不自动发布）</p>`;
     } catch (error) {
@@ -660,9 +669,10 @@ function renderOpportunityList(run) {
                 ${renderTraceableMetrics(daily, ((candidate.evidence || {}).provenance) || [])}
                 <button class="btn" onclick="generateTopicsForEvent(${runIdArg}, [${eidArg}])">生成针对这个事件的选题</button>
                 <button class="btn" onclick="generateTopicsForEvent(${runIdArg}, [${eidArg}], true)">重新生成（新键）</button>
+                ${topicId ? `
                 <button class="btn" onclick="submitOpportunityFeedback(${runIdArg}, {kind:'adopted', event_id:${eidArg}, topic_id:${topicArg}, reason:'用户采纳'}, 'event-opportunity-result')">采用</button>
                 <button class="btn" onclick="submitOpportunityFeedback(${runIdArg}, {kind:'rejected', event_id:${eidArg}, topic_id:${topicArg}, reason:'用户拒绝'}, 'event-opportunity-result')">不采用</button>
-                <button class="btn" onclick="submitOpportunityFeedback(${runIdArg}, {kind:'published', event_id:${eidArg}, topic_id:${topicArg}, reason:'用户已发布'}, 'event-opportunity-result')">已发布</button>
+                <button class="btn" onclick="submitOpportunityFeedback(${runIdArg}, {kind:'published', event_id:${eidArg}, topic_id:${topicArg}, reason:'用户已发布'}, 'event-opportunity-result')">已发布</button>` : '<p class="event-meta">请先生成并保存选题后再反馈</p>'}
             </div>
         `;
     }).join('');
