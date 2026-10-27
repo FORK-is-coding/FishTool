@@ -173,7 +173,8 @@ def test_report_records_traceback_for_unexpected_error(caplog):
     try:
         raise RuntimeError("boom")
     except RuntimeError as exc:
-        with caplog.at_level(logging.ERROR, logger=logger.name):
+        # LOW 优先级按约定记 WARNING（report_exception 的 level 默认值），捕获级别须覆盖到 WARNING。
+        with caplog.at_level(logging.WARNING, logger=logger.name):
             report_exception(exc, logger=logger, action="执行任务", priority=ErrorPriority.LOW)
 
     records = [record for record in caplog.records if record.name == logger.name]

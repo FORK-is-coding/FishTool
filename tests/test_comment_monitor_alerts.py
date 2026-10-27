@@ -351,20 +351,15 @@ def test_save_monitoring_record_rolls_back_on_commit_error(monkeypatch: pytest.M
     assert session.closed is True
 
 
-def test_save_monitoring_record_get_session_error_raises_unbound_local(monkeypatch: pytest.MonkeyPatch) -> None:
-    """【缺陷固化】get_session 抛异常时 session 未绑定，抛 UnboundLocalError。
-
-    期望应降级为仅记日志，但本方法 except/finally 均直接使用 session 且无 None 保护。
-    此处仅固化当前现状，未修改生产代码。
-    """
+def test_save_monitoring_record_get_session_error_degrades(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_session 抛异常时降级为仅记日志：except/finally 已有 ``session is not None`` 保护。"""
     def _boom():
         """模拟取会话失败。"""
         raise RuntimeError("db down")
 
     monkeypatch.setattr(alerts_module, "get_session", _boom)
 
-    with pytest.raises(UnboundLocalError):
-        _run(_monitor()._save_monitoring_record("BV1", [], [_alert()]))
+    assert _run(_monitor()._save_monitoring_record("BV1", [], [_alert()])) is None
 
 
 def test_save_monitoring_record_empty_alerts_still_commits(db_env) -> None:
@@ -432,16 +427,15 @@ def test_get_alerts_respects_limit(db_env) -> None:
     assert len(rows) == 2
 
 
-def test_get_alerts_get_session_error_raises_unbound_local(monkeypatch: pytest.MonkeyPatch) -> None:
-    """【缺陷固化】get_session 抛异常时 finally 引用未绑定 session，抛 UnboundLocalError。"""
+def test_get_alerts_get_session_error_returns_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_session 抛异常时降级返回空列表，finally 不再引用未绑定的 session。"""
     def _boom():
         """模拟取会话失败。"""
         raise RuntimeError("db down")
 
     monkeypatch.setattr(alerts_module, "get_session", _boom)
 
-    with pytest.raises(UnboundLocalError):
-        _run(_monitor().get_alerts())
+    assert _run(_monitor().get_alerts()) == []
 
 
 # --------------------------------------------------------------------- 已读标记
@@ -462,13 +456,12 @@ def test_mark_alert_read_missing_returns_false(db_env) -> None:
     assert _run(_monitor().mark_alert_read(99999)) is False
 
 
-def test_mark_alert_read_get_session_error_raises_unbound_local(monkeypatch: pytest.MonkeyPatch) -> None:
-    """【缺陷固化】get_session 抛异常时 finally 引用未绑定 session，抛 UnboundLocalError。"""
+def test_mark_alert_read_get_session_error_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_session 抛异常时降级返回 False，finally 不再引用未绑定的 session。"""
     def _boom():
         """模拟取会话失败。"""
         raise RuntimeError("db down")
 
     monkeypatch.setattr(alerts_module, "get_session", _boom)
 
-    with pytest.raises(UnboundLocalError):
-        _run(_monitor().mark_alert_read(1))
+    assert _run(_monitor().mark_alert_read(1)) is False

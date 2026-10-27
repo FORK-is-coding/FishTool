@@ -345,11 +345,10 @@ def test_get_last_rpid_returns_none_when_no_comment_history(db):
     assert run(collector._get_last_rpid(BVID)) is None
 
 
-def test_get_last_rpid_raises_when_session_unavailable(monkeypatch):
-    """固化现状缺陷：会话创建失败时 finally 引用了未初始化的 session，抛 NameError。"""
+def test_get_last_rpid_returns_none_when_session_unavailable(monkeypatch):
+    """会话创建失败时降级返回 None，finally 不再引用未初始化的 session。"""
     monkeypatch.setattr(incremental_module, "get_session",
                         lambda: (_ for _ in ()).throw(RuntimeError("库挂了")))
     collector = build_collector(FakeIncrementalAPI())
 
-    with pytest.raises(NameError):
-        run(collector._get_last_rpid(BVID))
+    assert run(collector._get_last_rpid(BVID)) is None

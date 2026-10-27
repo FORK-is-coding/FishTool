@@ -363,16 +363,15 @@ def test_save_monitoring_record_without_alerts_commits_nothing(manager):
     assert query_alerts(manager) == []
 
 
-def test_save_monitoring_record_raises_when_session_unavailable(tmp_path, monkeypatch):
-    """固化现状缺陷：会话创建失败时 except 引用了未初始化的 session，抛 NameError。"""
+def test_save_monitoring_record_degrades_when_session_unavailable(tmp_path, monkeypatch):
+    """会话创建失败时只记日志降级，不因引用未初始化的 session 抛 NameError / UnboundLocalError。"""
     def broken_session():
         raise RuntimeError("数据库不可用")
 
     monkeypatch.setattr(alerts_module, "get_session", broken_session)
     monitor = make_monitor()
 
-    with pytest.raises(NameError):
-        run(monitor._save_monitoring_record(BVID, [], [{"type": "t", "level": "high", "message": "m"}]))
+    assert run(monitor._save_monitoring_record(BVID, [], [{"type": "t", "level": "high", "message": "m"}])) is None
 
 
 # ---------------------------------------------------------------------------
@@ -457,13 +456,12 @@ def test_get_alerts_filters_unread_and_respects_limit(manager):
     assert [item["type"] for item in limited] == ["new2"]
 
 
-def test_get_alerts_raises_when_session_unavailable(monkeypatch):
-    """固化现状缺陷：会话创建失败时 finally 引用了未初始化的 session，抛 NameError。"""
+def test_get_alerts_returns_empty_when_session_unavailable(monkeypatch):
+    """会话创建失败时降级返回空列表，finally 不再引用未初始化的 session。"""
     monkeypatch.setattr(alerts_module, "get_session", lambda: (_ for _ in ()).throw(RuntimeError("库挂了")))
     monitor = make_monitor()
 
-    with pytest.raises(NameError):
-        run(monitor.get_alerts())
+    assert run(monitor.get_alerts()) == []
 
 
 # ---------------------------------------------------------------------------
@@ -499,10 +497,9 @@ def test_mark_alert_read_is_idempotent(manager):
     assert run(monitor.mark_alert_read(alert_id)) is True
 
 
-def test_mark_alert_read_raises_when_session_unavailable(monkeypatch):
-    """固化现状缺陷：会话创建失败时 except 引用了未初始化的 session，抛 NameError。"""
+def test_mark_alert_read_returns_false_when_session_unavailable(monkeypatch):
+    """会话创建失败时降级返回 False，except / finally 不再引用未初始化的 session。"""
     monkeypatch.setattr(alerts_module, "get_session", lambda: (_ for _ in ()).throw(RuntimeError("库挂了")))
     monitor = make_monitor()
 
-    with pytest.raises(NameError):
-        run(monitor.mark_alert_read(1))
+    assert run(monitor.mark_alert_read(1)) is False

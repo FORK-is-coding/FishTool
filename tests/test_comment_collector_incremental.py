@@ -296,17 +296,12 @@ def test_get_last_rpid_returns_none_without_comments(db_env) -> None:
     assert _run(_collector_for_db()._get_last_rpid("BV1")) is None
 
 
-def test_get_last_rpid_get_session_error_raises_unbound_local(monkeypatch: pytest.MonkeyPatch) -> None:
-    """【缺陷固化】get_session 抛异常时 finally 引用未绑定 session，抛出 UnboundLocalError。
-
-    期望行为本应是降级返回 None（同项目 storage/_alerts 等模块均有 ``if session is not None`` 保护），
-    但本方法缺失该保护。此处仅固化当前现状，未修改生产代码。
-    """
+def test_get_last_rpid_get_session_error_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_session 抛异常时降级返回 None，与 storage/_alerts 等模块的 ``session is not None`` 保护一致。"""
     def _boom():
         """模拟数据库不可用。"""
         raise RuntimeError("db down")
 
     monkeypatch.setattr(incremental_module, "get_session", _boom)
 
-    with pytest.raises(UnboundLocalError):
-        _run(_collector_for_db()._get_last_rpid("BV1"))
+    assert _run(_collector_for_db()._get_last_rpid("BV1")) is None
