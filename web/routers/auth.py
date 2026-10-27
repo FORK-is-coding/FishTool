@@ -252,13 +252,41 @@ async def poll_login(request: QrPollRequest):
 async def logout():
     """清除 B站登录态
 
-    将 secrets 中的 bilibili.cookie 置空并加密落盘，
-    get_secret 返回空串会被 status 接口判定为未登录。
+    清理顺序：
+    1. 先读出 secrets 中的 bilibili.cookie，拿到待撤销账号的
+       SESSDATA / DedeUserID；
+    2. 从 Cookie 池撤销该账号（内存 + cookie_pool 表），
+       避免采集继续轮换到已退出账号、重启后又从表中恢复；
+    3. 最后将 bilibili.cookie 置空并加密落盘，
+       get_secret 返回空串会被 status 接口判定为未登录。
+    Cookie 池清理失败不阻断退出：仍清空 secrets 并返回 200，
+    在响应中附带 warning 提示用户。
     """
     try:
         config = ConfigManager()
+        cookie = config.get_secret(COOKIE_SECRET_KEY, '') or ''
+        warning = None
+        if cookie:
+            try:
+                from bilibili.cookie_pool import get_cookie_pool
+                fields = {}
+                for item in cookie.split(';'):
+                    if '=' in item:
+                        k, v = item.split('=', 1)
+                        fields[k.strip()] = v.strip()
+                get_cookie_pool().remove_account_cookies(
+                    sessdata=fields.get('SESSDATA', ''),
+                    dede_user_id=fields.get('DedeUserID', ''),
+                )
+            except Exception as _pool_err:
+                logger.warning(f"[auth] 从 Cookie 池撤销登录态失败（secrets 仍会清除）: {_pool_err}")
+                # secrets 随后即被清空，单纯重试退出已拿不到账号标识；数据库残留重启后还会被恢复。
+                # 重新扫码同一账号再退出，会按 DedeUserID 把历史会话一并撤销。
+                warning = "Cookie 池清理未完成，采集任务可能仍在使用旧登录态；请重新扫码登录同一账号后再退出一次"
         config.save_secret(COOKIE_SECRET_KEY, '')
         logger.info("[auth] 已清除登录态")
+        if warning:
+            return {"success": True, "message": "已清除登录态", "warning": warning}
         return {"success": True, "message": "已清除登录态"}
     except Exception as e:
         logger.error(f"[auth] 清除登录态失败: {e}", exc_info=True)

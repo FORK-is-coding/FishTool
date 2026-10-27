@@ -508,6 +508,137 @@ def test_add_cookie_falls_back_to_plaintext_when_encrypt_fails(env, monkeypatch)
 
 
 # ---------------------------------------------------------------------------
+# CookiePool.remove_account_cookies
+# ---------------------------------------------------------------------------
+
+
+def _remaining_sessdata(env):
+    """返回 (内存池 sessdata 列表, 数据库 sessdata 列表)。"""
+    session = env.session()
+    try:
+        db_values = sorted(row.sessdata for row in session.query(CookiePoolModel).all())
+    finally:
+        session.close()
+    return sorted(c.sessdata for c in env.pool.cookies), db_values
+
+
+def test_remove_account_cookies_by_sessdata_clears_memory_and_db(env):
+    """按 SESSDATA 撤销：内存与数据库同步删除，其他账号保留。"""
+    env.pool.add_cookie("DedeUserID=1; SESSDATA=mine; bili_jct=j1", persist=True)
+    env.pool.add_cookie("DedeUserID=2; SESSDATA=other; bili_jct=j2", persist=True)
+
+    result = env.pool.remove_account_cookies(sessdata="mine")
+
+    assert result == {"memory": 1, "db": 1}
+    assert _remaining_sessdata(env) == (["other"], ["other"])
+
+
+def test_remove_account_cookies_by_dede_user_id_clears_stale_sessions(env):
+    """按 DedeUserID 撤销同一账号的历史会话（数据库中的旧行也要删）。"""
+    session = env.session()
+    try:
+        # 同账号旧会话：只在数据库里，内存池未加载
+        _add_row(session, env.pool, raw="DedeUserID=7; SESSDATA=old", sessdata="old")
+        # 其他账号
+        _add_row(session, env.pool, raw="DedeUserID=8; SESSDATA=keep", sessdata="keep")
+    finally:
+        session.close()
+    env.pool.add_cookie("DedeUserID=7; SESSDATA=new", persist=True)
+
+    result = env.pool.remove_account_cookies(sessdata="new", dede_user_id="7")
+
+    assert result == {"memory": 1, "db": 2}
+    assert _remaining_sessdata(env) == ([], ["keep"])
+
+
+def test_remove_account_cookies_matches_legacy_plaintext_row(env):
+    """数据库中的旧版明文行同样能按 DedeUserID 识别并删除。"""
+    session = env.session()
+    try:
+        session.add(CookiePoolModel(account_id=1, cookie_data="DedeUserID=9; SESSDATA=plain", sessdata="plain"))
+        session.commit()
+    finally:
+        session.close()
+
+    result = env.pool.remove_account_cookies(dede_user_id="9")
+
+    assert result == {"memory": 0, "db": 1}
+    assert _remaining_sessdata(env) == ([], [])
+
+
+def test_remove_account_cookies_ignores_empty_arguments(env, monkeypatch):
+    """两个参数都为空时不得删除任何记录，也不访问数据库。"""
+    env.pool.add_cookie("DedeUserID=1; SESSDATA=stay", persist=True)
+
+    def _should_not_be_called():
+        """若被调用说明空参数保护失效。"""
+        raise AssertionError("空参数不应访问数据库")
+
+    monkeypatch.setattr(cookie_pool_module, "get_session", _should_not_be_called)
+
+    assert env.pool.remove_account_cookies(sessdata="  ", dede_user_id="") == {"memory": 0, "db": 0}
+    assert [c.sessdata for c in env.pool.cookies] == ["stay"]
+
+
+def test_remove_account_cookies_raises_after_clearing_memory_when_db_fails(env, monkeypatch):
+    """数据库不可用时内存池仍先清理，异常交给调用方提示。"""
+    env.pool.add_cookie("SESSDATA=gone", persist=False)
+
+    def _boom():
+        """模拟数据库不可用。"""
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(cookie_pool_module, "get_session", _boom)
+
+    with pytest.raises(RuntimeError):
+        env.pool.remove_account_cookies(sessdata="gone")
+    assert env.pool.cookies == []
+
+
+def test_removed_cookie_is_not_revived_by_check_or_reload(env, monkeypatch, risk_log):
+    """撤销后巡检判定"有效"也不能复活，重启重新加载也不能恢复。"""
+    env.pool.add_cookie("DedeUserID=5; SESSDATA=bye", persist=True)
+    env.pool.remove_account_cookies(sessdata="bye")
+
+    async def _valid(_cookie_data):
+        """模拟接口认为 Cookie 仍然有效。"""
+        return True
+
+    monkeypatch.setattr(env.pool, "_check_cookie_validity", _valid)
+    session = env.session()
+    try:
+        asyncio.run(env.pool.check_all_cookies(session))
+        env.pool.load_from_db(session)
+    finally:
+        session.close()
+
+    assert env.pool.cookies == []
+    assert asyncio.run(env.pool.get_cookie()) is None
+    assert _remaining_sessdata(env) == ([], [])
+
+
+def test_remove_during_running_check_does_not_revive(env, monkeypatch, risk_log):
+    """巡检进行中撤销 Cookie：巡检结束后内存池与数据库都不能出现该记录。"""
+    env.pool.add_cookie("DedeUserID=5; SESSDATA=racing", persist=True)
+    session = env.session()
+
+    async def _remove_then_valid(_cookie_data):
+        """在巡检等待网络期间执行退出登录，再返回"有效"。"""
+        env.pool.remove_account_cookies(sessdata="racing")
+        return True
+
+    env.pool.cookies[0].is_valid = False
+    monkeypatch.setattr(env.pool, "_check_cookie_validity", _remove_then_valid)
+    try:
+        asyncio.run(env.pool.check_all_cookies(session))
+    finally:
+        session.close()
+
+    assert env.pool.cookies == []
+    assert _remaining_sessdata(env) == ([], [])
+
+
+# ---------------------------------------------------------------------------
 # CookiePool.load_from_secrets
 # ---------------------------------------------------------------------------
 

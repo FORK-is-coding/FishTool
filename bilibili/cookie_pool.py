@@ -278,6 +278,74 @@ class CookiePool:
 
         return cookie
 
+    def remove_account_cookies(self, sessdata: str = '', dede_user_id: str = '') -> Dict[str, int]:
+        """撤销指定账号的 Cookie：同时删除内存池与 cookie_pool 表中的记录。
+
+        退出登录时调用。只调用 mark_invalid 不够，巡检 check_all_cookies
+        会把失效记录恢复为有效；因此这里直接删除，而不是标记失效。
+        匹配规则（任一命中即删除）：
+        - SESSDATA 等于 sessdata：当前这次登录的会话；
+        - Cookie 中的 DedeUserID 等于 dede_user_id：同一账号历史遗留的旧会话。
+        其他账号的记录不受影响。两个参数都为空时不做任何删除。
+
+        Args:
+            sessdata: 待撤销会话的 SESSDATA。
+            dede_user_id: 待撤销账号的 DedeUserID（B站 UID）。
+
+        Returns:
+            删除条数，形如 {'memory': 内存条数, 'db': 数据库条数}。
+
+        Raises:
+            Exception: 数据库删除失败时向上抛出（内存池已先行清理），
+                由调用方决定如何提示。
+        """
+        sessdata = (sessdata or '').strip()
+        dede_user_id = (dede_user_id or '').strip()
+        # 空参数保护：绝不能因为参数缺失而清空整个池
+        if not sessdata and not dede_user_id:
+            return {'memory': 0, 'db': 0}
+
+        def _matches(row_sessdata: str, cookie_str: str) -> bool:
+            """判断一条 Cookie 是否属于待撤销的账号。"""
+            if sessdata and row_sessdata == sessdata:
+                return True
+            fields = self._parse_cookie(cookie_str or '')
+            if sessdata and fields.get('SESSDATA') == sessdata:
+                return True
+            return bool(dede_user_id) and fields.get('DedeUserID') == dede_user_id
+
+        # 先清内存：整体替换列表而不是原地删除，
+        # 正在遍历旧列表的巡检不会跳项，也不会把已删除的对象放回池中。
+        kept = [c for c in self.cookies if not _matches(c.sessdata, c.cookie_data)]
+        memory_removed = len(self.cookies) - len(kept)
+        self.cookies = kept
+
+        # 再清数据库，避免重启后 load_from_db 把记录恢复
+        db_removed = 0
+        db = get_session()
+        try:
+            for row in db.query(CookiePoolModel).all():
+                raw = row.cookie_data
+                try:
+                    cookie_str = self._cipher.decrypt(raw.encode('utf-8')).decode('utf-8')
+                except Exception as decrypt_error:
+                    # 兼容旧版明文 / BLOB 记录，与 load_from_db 的回退口径一致；
+                    # 撤销时逐行解密属预期内的降级，记 debug 即可，不刷屏
+                    logger.debug(f"Cookie ID={row.id} 解密失败，按旧版明文匹配: {decrypt_error}")
+                    cookie_str = raw.decode('utf-8', errors='replace') if isinstance(raw, bytes) else (raw or '')
+                if _matches(row.sessdata, cookie_str):
+                    db.delete(row)
+                    db_removed += 1
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+        logger.info(f"已撤销账号 Cookie: 内存 {memory_removed} 条, 数据库 {db_removed} 条")
+        return {'memory': memory_removed, 'db': db_removed}
+
     def load_from_secrets(self) -> int:
         """回退加载：从 ConfigManager secrets 读取扫码登录保存的 Cookie。
 
