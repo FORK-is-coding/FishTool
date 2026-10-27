@@ -337,3 +337,46 @@ def test_export_invalid_type_returns_400(client):
     """非 full 模式下非法 log_type 应返回 400。"""
     response = client.get("/api/logs/export", params={"log_type": "bad"})
     assert response.status_code == 400
+
+
+@pytest.mark.parametrize("log_type", ["bad", "../outside", "..\\outside", "C:/outside", "/tmp/outside"])
+def test_export_full_mode_rejects_unlisted_type(client, log_env, tmp_path, log_type):
+    """full=true 也必须校验 log_type 白名单，不得读取日志目录外文件。"""
+    (tmp_path / "outside.log").write_text("SECRET", encoding="utf-8")
+    calls = []
+    logs_module.logger_module.logger_manager.export_logs = lambda log_types=None: calls.append(log_types)
+
+    response = client.get("/api/logs/export", params={"full": "true", "log_type": log_type})
+    assert response.status_code == 400
+    assert "SECRET" not in response.text
+    assert calls == []
+
+
+def test_export_full_mode_accepts_listed_type(client, log_env, tmp_path):
+    """白名单内的单一类型仍可全量导出，并按原样传给 LoggerManager。"""
+    export_file = tmp_path / "full_export.txt"
+    export_file.write_text("错误日志全量", encoding="utf-8")
+    calls = []
+
+    def fake_export(log_types=None):
+        """记录调用参数并返回预置导出文件。"""
+        calls.append(log_types)
+        return export_file
+
+    logs_module.logger_module.logger_manager.export_logs = fake_export
+
+    response = client.get("/api/logs/export", params={"full": "true", "log_type": "error"})
+    assert response.status_code == 200
+    assert calls == [["error"]]
+
+
+def test_export_full_mode_removes_intermediate_file(client, log_env, tmp_path):
+    """全量导出的中转文件读取后即删除，不在日志目录残留 export_*.log。"""
+    export_file = tmp_path / "export_20260101_000000.log"
+    export_file.write_text("全量导出内容", encoding="utf-8")
+    logs_module.logger_module.logger_manager.export_logs = lambda log_types=None: str(export_file)
+
+    response = client.get("/api/logs/export", params={"full": "true", "log_type": "all"})
+    assert response.status_code == 200
+    assert "全量导出内容" in response.text
+    assert not export_file.exists()

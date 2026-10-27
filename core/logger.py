@@ -436,6 +436,14 @@ class LoggerManager:
     - get_crawler_logger 判断 handlers 为空才添加，避免重复
     """
 
+    #: 导出用日志类型 → 文件名（不含 .log）。也是 export_logs 接受的类型白名单。
+    LOG_TYPE_FILES = {
+        'app': 'app',
+        'error': 'error',
+        'crawler': 'crawler',
+        'risk': 'risk_control',
+    }
+
     def __init__(self, log_dir: str = "data/logs", log_level: str = "INFO"):
         """初始化日志管理器
         
@@ -625,7 +633,11 @@ class LoggerManager:
         # 默认导出全部类型
         # None 时兜底为四种日志，保证调用方不传参也能用
         if log_types is None:
-            log_types = ['app', 'error', 'crawler', 'risk']
+            log_types = list(self.LOG_TYPE_FILES)
+        # 类型会被拼成文件名，必须限定在白名单内，防止 ../ 或绝对路径读到日志目录外的文件
+        unknown = [t for t in log_types if t not in self.LOG_TYPE_FILES]
+        if unknown:
+            raise ValueError(f"无效的日志类型: {unknown}")
         
         # 未指定输出路径时按时间戳生成
         # 默认导出目录为 data/logs
@@ -643,7 +655,8 @@ class LoggerManager:
         with open(output_path, 'w', encoding='utf-8') as outfile:
             for log_type in log_types:
                 # 按类型逐个处理，保证导出文件顺序稳定
-                log_file = self.log_dir / f"{log_type}.log"
+                # risk 类型的实际文件是 RiskControlLogger 写入的 risk_control.log
+                log_file = self.log_dir / f"{self.LOG_TYPE_FILES.get(log_type, log_type)}.log"
                 # 跳过不存在的日志文件
                 if not log_file.exists():
                     continue

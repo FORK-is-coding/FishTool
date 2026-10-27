@@ -264,13 +264,21 @@ async def export_problem_logs(log_type: str = "all", full: bool = False) -> Plai
     """
     # full 模式复用 logger 层导出能力，读取导出文件内容后以附件返回。
     if full:
+        # log_type 会被 export_logs 拼成日志文件名，必须先按白名单校验，
+        # 否则 ../ 或绝对路径可读取日志目录外的任意 .log 文件。
+        if log_type != "all" and log_type not in _get_log_files():
+            raise HTTPException(status_code=400, detail=f"无效的日志类型: {log_type}")
         if logger_module.logger_manager is None:
             # 单例未初始化时用默认配置初始化，保证导出可用。
             logger_module.init_logger()
         log_types = None if log_type == "all" else [log_type]
-        export_path = logger_module.logger_manager.export_logs(log_types=log_types)
-        with open(export_path, "r", encoding="utf-8") as f:
-            body = f.read()
+        export_path = Path(logger_module.logger_manager.export_logs(log_types=log_types))
+        try:
+            with open(export_path, "r", encoding="utf-8") as f:
+                body = f.read()
+        finally:
+            # 导出文件只是中转，读完即删，避免每次导出都在日志目录残留 export_*.log
+            export_path.unlink(missing_ok=True)
         filename = f"bili_ops_full_{datetime.now():%Y%m%d_%H%M%S}.txt"
         return PlainTextResponse(
             body,

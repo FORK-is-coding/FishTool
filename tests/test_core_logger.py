@@ -315,6 +315,29 @@ def test_export_logs_merges_and_filters_by_date(isolated_logging, tmp_path):
     assert "crawl-line-without-timestamp" in text
 
 
+def test_export_logs_includes_risk_control_file(isolated_logging, tmp_path):
+    """risk 类型应读取 RiskControlLogger 实际写入的 risk_control.log（原实现找 risk.log 永远为空）。"""
+    log_dir = tmp_path / "logs"
+    manager = logger_module.LoggerManager(log_dir=str(log_dir))
+    (log_dir / "risk_control.log").write_text('{"event": "rate_limited"}\n', encoding="utf-8")
+
+    output = manager.export_logs(output_path=str(tmp_path / "out.log"))
+    text = Path(output).read_text(encoding="utf-8")
+    assert "日志类型: RISK" in text
+    assert "rate_limited" in text
+
+
+@pytest.mark.parametrize("bad_type", ["../outside", "..\\outside", "C:/outside", "unknown"])
+def test_export_logs_rejects_unknown_type(isolated_logging, tmp_path, bad_type):
+    """日志类型会拼进文件名，白名单外的类型必须拒绝，不能读到日志目录外的文件。"""
+    (tmp_path / "outside.log").write_text("SECRET", encoding="utf-8")
+    manager = logger_module.LoggerManager(log_dir=str(tmp_path / "logs"))
+
+    with pytest.raises(ValueError):
+        manager.export_logs(log_types=[bad_type], output_path=str(tmp_path / "out.log"))
+    assert not (tmp_path / "out.log").exists()
+
+
 def test_export_logs_default_output_path(isolated_logging, tmp_path):
     """未指定 output_path 时导出到 log_dir 内。"""
     log_dir = tmp_path / "logs"
