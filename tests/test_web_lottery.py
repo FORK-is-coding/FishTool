@@ -425,8 +425,8 @@ def test_spawn_holds_strong_reference_until_done(monkeypatch):
     assert lottery_module._tasks[task_id]["finished_monotonic"] is not None
 
 
-def test_spawn_marks_cancelled_task_failed(monkeypatch):
-    """协程被取消仍停在 running 时应落 failed，避免同参请求复用已死任务。"""
+def test_spawn_marks_cancelled_task_cancelled(monkeypatch):
+    """协程被取消仍停在 running 时应落 cancelled（不再记为失败），且同参请求不复用已死任务。"""
     monkeypatch.setattr(lottery_module, "_tasks", {})
     monkeypatch.setattr(lottery_module, "_background_tasks", {})
 
@@ -442,9 +442,26 @@ def test_spawn_marks_cancelled_task_failed(monkeypatch):
         return task_id
 
     task_id = asyncio.run(scenario())
-    assert lottery_module._tasks[task_id]["status"] == "failed"
+    assert lottery_module._tasks[task_id]["status"] == "cancelled"
     assert lottery_module._find_running_task("fp") is None
     assert task_id not in lottery_module._background_tasks
+
+
+def test_spawn_marks_unexpected_exit_failed(monkeypatch):
+    """协程非取消的意外结束（未写终态即返回）仍落 failed，保持 PR-08 的兜底语义。"""
+    monkeypatch.setattr(lottery_module, "_tasks", {})
+    monkeypatch.setattr(lottery_module, "_background_tasks", {})
+
+    async def scenario():
+        task_id = lottery_module._create_task("filter", "fp2")
+        lottery_module._spawn(task_id, _noop_async())
+        await lottery_module._background_tasks[task_id]
+        await asyncio.sleep(0)
+        return task_id
+
+    task_id = asyncio.run(scenario())
+    assert lottery_module._tasks[task_id]["status"] == "failed"
+    assert lottery_module._find_running_task("fp2") is None
 
 
 def test_create_task_prunes_finished_tasks_after_ttl(monkeypatch):
@@ -577,3 +594,129 @@ def test_run_draw_task_success_updates_latest_winners(monkeypatch):
     assert kwargs["min_level"] == 2
     assert kwargs["date_start"] is None
     assert kwargs["date_end"] is None
+
+
+# ---------------------------------------------------------------------------
+# POST /tasks/{task_id}/cancel（issue #13 后续：取消后台任务）
+# ---------------------------------------------------------------------------
+
+
+def test_cancel_running_task_marks_cancelled_and_is_idempotent(client, spawned):
+    """运行中任务可取消；重复取消幂等返回 200，查询接口显示已取消。"""
+    task_id = client.post("/api/lottery/filter/tasks", json={"target": "BV1xx411c7mD"}).json()["task_id"]
+
+    first = client.post(f"/api/lottery/tasks/{task_id}/cancel")
+    again = client.post(f"/api/lottery/tasks/{task_id}/cancel")
+
+    assert first.status_code == 200
+    assert first.json() == {"success": True, "task_id": task_id, "status": "cancelled"}
+    assert again.status_code == 200
+    assert client.get(f"/api/lottery/tasks/{task_id}").json()["data"]["status"] == "cancelled"
+
+
+@pytest.mark.parametrize("status", ["completed", "failed"])
+def test_cancel_finished_task_returns_409(client, spawned, status):
+    """已完成或已失败的任务不可取消，状态保持不变。"""
+    task_id = client.post("/api/lottery/filter/tasks", json={"target": "BV1xx411c7mD"}).json()["task_id"]
+    lottery_module._tasks[task_id].update(status=status)
+
+    response = client.post(f"/api/lottery/tasks/{task_id}/cancel")
+    assert response.status_code == 409
+    assert lottery_module._tasks[task_id]["status"] == status
+
+
+def test_cancel_missing_task_returns_404(client):
+    """不存在的任务（含服务重启后）返回 404。"""
+    response = client.post("/api/lottery/tasks/not-exist/cancel")
+    assert response.status_code == 404
+
+
+def test_cancelled_task_is_not_reused_by_same_body(client, spawned):
+    """取消后同参请求应新建任务，不复用已取消的任务。"""
+    body = {"target": "BV1xx411c7mD", "winner_count": 1}
+    first = client.post("/api/lottery/draw/tasks", json=body).json()
+    client.post(f"/api/lottery/tasks/{first['task_id']}/cancel")
+
+    second = client.post("/api/lottery/draw/tasks", json=body).json()
+    assert second["reused"] is False
+    assert second["task_id"] != first["task_id"]
+
+
+def test_cancel_stops_running_draw_and_keeps_latest_winners(monkeypatch):
+    """真实后台协程卡在等待中时取消：协程收到 CancelledError、强引用释放、中奖名单快照不变。"""
+    previous = [{"uid": 1, "uname": "上一轮中奖者"}]
+    monkeypatch.setattr(lottery_module, "_tasks", {})
+    monkeypatch.setattr(lottery_module, "_background_tasks", {})
+    monkeypatch.setattr(lottery_module, "_latest_winners", list(previous))
+    monkeypatch.setattr(lottery_module, "fetch_target_metadata", _fake_fetch_target)
+    reached = {}
+
+    class _BlockingService(_FakeLotteryService):
+        """抽奖时卡住等待，模拟仍在采集或调用 LLM 的长任务。"""
+
+        async def draw(self, target, winner_count, unique_users, progress_callback=None, **kwargs):
+            reached["draw"] = True
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(lottery_module, "get_service", lambda: _BlockingService())
+    request = type(
+        "Req",
+        (),
+        {
+            "target": "BV1xx411c7mD", "winner_count": 1, "unique_users": True,
+            "vip_only": False, "min_level": 0, "real_only": False, "include_indeterminate": False,
+            "focus_template": None, "date_start": None, "date_end": None,
+        },
+    )()
+
+    async def scenario():
+        task_id = lottery_module._create_task("draw", "fp-draw")
+        lottery_module._spawn(task_id, lottery_module._run_draw_task(task_id, request))
+        held = lottery_module._background_tasks[task_id]
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert reached.get("draw") is True and not held.done()
+
+        response = await lottery_module.cancel_task(task_id)
+        assert response == {"success": True, "task_id": task_id, "status": "cancelled"}
+        with pytest.raises(asyncio.CancelledError):
+            await held
+        await asyncio.sleep(0)
+        return task_id
+
+    task_id = asyncio.run(scenario())
+    task = lottery_module._tasks[task_id]
+    assert task["status"] == "cancelled"
+    assert task["stage"] == "cancelled"
+    assert task_id not in lottery_module._background_tasks
+    assert lottery_module._latest_winners == previous
+    assert lottery_module._find_running_task("fp-draw") is None
+
+
+def test_run_filter_task_cancel_reraises_and_marks_cancelled(monkeypatch):
+    """筛选协程被取消时应落 cancelled 并继续抛出 CancelledError，不被 except Exception 吞成失败。"""
+    monkeypatch.setattr(lottery_module, "_tasks", {})
+    monkeypatch.setattr(lottery_module, "fetch_target_metadata", _fake_fetch_target)
+
+    class _BlockingService(_FakeLotteryService):
+        """筛选时卡住等待。"""
+
+        async def filter_real_users(self, target, focus_template, progress_callback=None):
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(lottery_module, "get_service", lambda: _BlockingService())
+    request = type("Req", (), {"target": "BV1xx411c7mD", "focus_template": None})()
+
+    async def scenario():
+        task_id = lottery_module._create_task("filter")
+        runner = asyncio.ensure_future(lottery_module._run_filter_task(task_id, request))
+        for _ in range(5):
+            await asyncio.sleep(0)
+        runner.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await runner
+        return task_id
+
+    task_id = asyncio.run(scenario())
+    assert lottery_module._tasks[task_id]["status"] == "cancelled"
+    assert lottery_module._tasks[task_id]["message"] == "任务已取消"

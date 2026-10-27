@@ -181,6 +181,7 @@ function sleep(milliseconds) {
 // 轮询后台任务状态直到完成/失败：每次轮询都刷新加载 UI，默认最多 1800 次、间隔 1 秒（约 30 分钟）。
 // options: { maxAttempts: 最大轮询次数, intervalMs: 轮询间隔毫秒 }，不传时保持原默认值。
 // 达到上限时任务可能仍在后台运行：抛出的错误带 code='TASK_STILL_RUNNING'，调用方可据此保留任务继续查看。
+// 任务被取消时抛出 code='TASK_CANCELLED' 的错误。
 async function pollTask(statusUrl, elementId, options = {}) {
     const maxAttempts = options.maxAttempts ?? 1800;
     const intervalMs = options.intervalMs ?? 1000;
@@ -194,6 +195,12 @@ async function pollTask(statusUrl, elementId, options = {}) {
         });
         if (task.status === 'completed') return task.result || {};
         if (task.status === 'failed') throw new Error(task.message || '任务执行失败');
+        if (task.status === 'cancelled') {
+            // 用户已取消：带 code 供调用方区分「取消」与「失败」，其他任务类型不会出现该状态。
+            const cancelledError = new Error(task.message || '任务已取消');
+            cancelledError.code = 'TASK_CANCELLED';
+            throw cancelledError;
+        }
         await sleep(intervalMs);
     }
     // 文案保持不变，其他调用方行为不受影响；code 供需要区分“仍在运行”的调用方使用。

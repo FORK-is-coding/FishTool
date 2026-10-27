@@ -169,9 +169,20 @@ def _prune_finished_tasks() -> None:
         _tasks.pop(task_id, None)
 
 
+# 把任务标记为已取消。
+def _mark_cancelled(task_id: str) -> None:
+    """把仍在运行的任务落为已取消；已是终态的任务保持不变。"""
+    # 任务状态可能已被清理。
+    task = _tasks.get(task_id)
+    # 只改写仍在运行的任务，避免覆盖已完成或失败的结果。
+    if task is not None and task.get("status") == "running":
+        # 取消属于用户主动操作，与失败区分开。
+        task.update(status="cancelled", stage="cancelled", message="任务已取消", estimated_seconds=0)
+
+
 # 后台协程结束时的收尾。
-def _on_background_task_done(task_id: str) -> None:
-    """释放强引用，记录结束时间；协程被取消等意外结束时把任务标记为失败。"""
+def _on_background_task_done(task_id: str, background: "asyncio.Task[None]") -> None:
+    """释放强引用，记录结束时间；被取消的落为已取消，其他意外结束标记为失败。"""
     # 释放强引用，避免已结束协程常驻内存。
     _background_tasks.pop(task_id, None)
     # 任务状态可能已被清理，此时无需收尾。
@@ -180,7 +191,11 @@ def _on_background_task_done(task_id: str) -> None:
     if task is None:
         # 无状态可更新。
         return
-    # 协程已结束却仍是 running（如被取消），落为失败，避免同参请求一直复用一个已死任务。
+    # 协程在首次调度前就被取消时不会进入 _run_* 的取消分支，这里补落已取消。
+    if background.cancelled():
+        # 与运行中取消保持同一状态。
+        _mark_cancelled(task_id)
+    # 协程已结束却仍是 running，落为失败，避免同参请求一直复用一个已死任务。
     if task.get("status") == "running":
         # 意外中止统一提示重新发起。
         task.update(status="failed", stage="failed", message="任务意外中止，请重新发起", estimated_seconds=0)
@@ -196,7 +211,7 @@ def _spawn(task_id: str, coroutine: Coroutine[Any, Any, None]) -> None:
     # 事件循环只弱引用任务，必须自行持有强引用。
     _background_tasks[task_id] = background
     # 结束后释放引用并完成状态收尾。
-    background.add_done_callback(lambda _done, tid=task_id: _on_background_task_done(tid))
+    background.add_done_callback(lambda done, tid=task_id: _on_background_task_done(tid, done))
 
 
 # 创建后台任务状态。
@@ -267,6 +282,10 @@ async def _run_filter_task(task_id: str, request: FilterTaskRequest) -> None:
             status="completed", stage="completed", progress=100,
             message="真人筛选完成，结果已按可信类别整理", estimated_seconds=0, result=result,
         )
+    except asyncio.CancelledError:
+        # 用户取消：CancelledError 继承 BaseException，下方 except Exception 拦不住，需单独落状态后继续抛出。
+        _mark_cancelled(task_id)
+        raise
     except Exception as exc:
         # 任何异常都落到失败状态，错误信息返回给前端展示。
         logger.exception("真人筛选任务失败: %s", task_id)
@@ -312,6 +331,10 @@ async def _run_draw_task(task_id: str, request: DrawTaskRequest) -> None:
             status="completed", stage="completed", progress=100,
             message="抽奖完成，中奖名单已生成", estimated_seconds=0, result=result,
         )
+    except asyncio.CancelledError:
+        # 用户取消：中奖名单只在上方成功分支写入，取消时 _latest_winners 保持上一次结果，不会出现半份名单。
+        _mark_cancelled(task_id)
+        raise
     except Exception as exc:
         # 任何异常都落到失败状态，错误信息返回给前端展示。
         logger.exception("随机抽奖任务失败: %s", task_id)
@@ -432,3 +455,37 @@ async def get_task(task_id: str) -> Dict[str, Any]:
     public_task = {key: value for key, value in task.items() if key not in _INTERNAL_TASK_KEYS}
     # 返回任务进度与结果。
     return {"success": True, "data": public_task}
+
+
+@router.post("/tasks/{task_id}/cancel")
+# 取消后台任务接口。
+async def cancel_task(task_id: str) -> Dict[str, Any]:
+    """取消运行中的筛选或抽奖任务；已取消时幂等返回，已结束的任务不可取消。"""
+    # 按任务 ID 查找内存状态。
+    task = _tasks.get(task_id)
+    # 任务不存在时返回 404。
+    if not task:
+        # 与查询接口保持同一提示。
+        raise HTTPException(status_code=404, detail="任务不存在或服务已重启")
+    # 当前状态决定是否允许取消。
+    status = task.get("status")
+    # 已取消直接返回，重复点击不报错。
+    if status == "cancelled":
+        # 幂等返回。
+        return {"success": True, "task_id": task_id, "status": "cancelled"}
+    # 已完成或已失败的任务没有可取消的工作。
+    if status != "running":
+        # 409 表示与当前状态冲突。
+        raise HTTPException(status_code=409, detail=f"任务已{'完成' if status == 'completed' else '结束'}，无法取消")
+    # 先落状态再取消协程：轮询方立即看到已取消，同参请求也不会再复用这个任务。
+    _mark_cancelled(task_id)
+    # 协程会在下一个 await 处收到 CancelledError，后续收尾由 _on_background_task_done 完成。
+    background = _background_tasks.get(task_id)
+    # 协程可能刚好结束，此时只需保留已取消状态。
+    if background is not None and not background.done():
+        # 发出取消信号。
+        background.cancel()
+    # 记录用户取消，便于排查。
+    logger.info("抽奖后台任务已取消: %s", task_id)
+    # 返回取消结果。
+    return {"success": True, "task_id": task_id, "status": "cancelled"}
