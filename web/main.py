@@ -61,6 +61,8 @@ from bilibili.rate_limiter import get_rate_limiter
 from core.database import get_session
 from modules.self_diagnosis.benchmark.service import BenchmarkService
 from modules.self_diagnosis.benchmark.store import BenchmarkStore
+# 跨站来源判定与 benchmark 的 local_guard 共用同一套规则（含 FISHTOOL_ALLOWED_HOSTS 覆盖）
+from web.local_guard import is_cross_site_origin
 # 从 routers 导入符号
 from .routers import (
     hotspot, comment, config as config_router, logs, analysis,
@@ -489,6 +491,27 @@ async def no_cache_static_assets(request: Request, call_next):
     return response
 
 
+# 跨站写请求拦截
+# CORS 白名单只阻止跨站页面「读取响应」，并不阻止请求被执行：任意网页都能用
+# fetch(..., {mode: 'no-cors'}) 发出不带 Content-Type 的 POST，而 FastAPI 仍会按 JSON
+# 解析请求体，于是可以跨站改写 LLM 配置、退出登录、增删监控目标等。
+# 浏览器跨站请求一定带 Origin 头；这里对 /api/ 下的非安全方法，只要 Origin 不属于
+# 本机允许集合就直接 403。无 Origin 的请求（同源 GET、CLI、桌面内嵌页、测试客户端）不受影响。
+_UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+@app.middleware("http")
+async def block_cross_site_writes(request: Request, call_next):
+    if (
+        request.method in _UNSAFE_METHODS
+        and request.url.path.startswith("/api/")
+        and is_cross_site_origin(request.headers.get("origin"))
+    ):
+        logger.warning("已拦截跨站写请求: %s %s origin=%s", request.method, request.url.path, request.headers.get("origin"))
+        return JSONResponse(status_code=403, content={"detail": "cross_site_request_blocked"})
+    return await call_next(request)
+
+
 # 静态文件
 # web/frontend 下存放前端页面，存在则挂载 /static 供浏览器加载。
 # PyInstaller onefile 会把数据解压到 sys._MEIPASS，而 web.main.py 可能仍来自 PYZ，
@@ -690,6 +713,12 @@ async def websocket_endpoint(websocket: WebSocket):
 
     业务侧通过 push_alert() 向此端点广播预警
     """
+    # WebSocket 不受 CORS 约束：跨站页面可直接连接并订阅预警（含评论原文），握手前校验 Origin。
+    # 桌宠客户端（websocket-client）不带 Origin，不受影响。
+    if is_cross_site_origin(websocket.headers.get("origin")):
+        logger.warning("已拒绝跨站 WebSocket 连接: origin=%s", websocket.headers.get("origin"))
+        await websocket.close(code=1008)
+        return
     await manager.connect(websocket)
     # 异常保护：局部失败不影响主流程
     try:

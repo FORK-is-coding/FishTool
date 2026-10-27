@@ -112,11 +112,25 @@ class LocalGuard:
         Raises:
             HTTPException: 403 跨站 Origin。
         """
-        origin = request.headers.get('origin')
-        if not origin:
-            return
-        if _host_only(origin) not in _allowed_hosts():
+        if is_cross_site_origin(request.headers.get('origin')):
             raise HTTPException(status_code=403, detail='cross_site_request_blocked')
+
+
+def is_cross_site_origin(origin: Optional[str]) -> bool:
+    """判断 Origin 是否为跨站来源。
+
+    浏览器发起的跨站请求（含 ``mode: 'no-cors'`` 的 fetch 与 WebSocket 握手）一定携带 Origin；
+    无 Origin 的请求（同源 GET、CLI、桌宠 websocket-client）视为非跨站。
+
+    Args:
+        origin: 请求头 ``Origin`` 的值。
+
+    Returns:
+        bool: Origin 存在且主机不在允许集合时为 True。
+    """
+    if not origin:
+        return False
+    return _host_only(origin) not in _allowed_hosts()
 
 
 #: 进程内单例
