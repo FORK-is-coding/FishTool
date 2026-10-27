@@ -40,7 +40,7 @@ from datetime import datetime
 # httpx 用于异步请求 OpenAI 兼容服务的模型列表
 import httpx
 # URL 处理工具用于规范化 /v1/models 请求路径
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 # 从 core.config 导入符号
 from core.config import ConfigManager
@@ -53,6 +53,27 @@ from sqlalchemy import func
 # 独立的路由实例，由 web/main.py 挂载到 /api/config 前缀
 router = APIRouter()
 logger = get_logger(__name__)
+
+# 不允许经通用单键接口 PUT /api/config/ 写入的配置路径：
+# LLM 地址与已保存密钥是绑定关系，改地址必须走 POST /llm 同时提交密钥，
+# 否则调用方可先改 api_base 再借 /llm/models 把已保存密钥发往任意地址。
+_PROTECTED_CONFIG_KEYS = {"llm", "llm.api_base", "llm.api_key"}
+
+
+def _normalize_base_url(url: str) -> str:
+    """规范化 Base URL，用于判断请求地址是否就是已保存的地址。
+
+    只消除书写差异（scheme/host 大小写、末尾斜杠、fragment），
+    端口、userinfo、路径等任何实质差异都视为不同地址。
+    """
+    parts = urlsplit(url.strip())
+    return urlunsplit((
+        parts.scheme.lower(),
+        parts.netloc.lower(),
+        parts.path.rstrip('/'),
+        parts.query,
+        '',
+    ))
 
 
 # ============ 请求/响应模型 ============
@@ -214,11 +235,22 @@ async def get_llm_models(request: LLMModelsRequest):
     try:
         # 优先使用前端当前输入值，保证切换地址后无需先保存配置。
         config = ConfigManager()
-        # None 表示请求未提供字段，空字符串则表示用户明确未填写，不能回退旧密钥。
-        api_key = (config.get_secret('llm_api_key') if request.api_key is None else request.api_key or '').strip()
-        base_url = (config.get('llm.api_base', '') if request.base_url is None else request.base_url or '').strip()
+        saved_base_url = (config.get('llm.api_base', '') or '').strip()
+        base_url = (saved_base_url if request.base_url is None else request.base_url or '').strip()
         if not base_url:
             return {"success": False, "models": [], "message": "请先填写 Base URL"}
+        if request.api_key is None:
+            # None 表示请求未提供密钥，回退已保存密钥；此时只允许访问已保存的地址，
+            # 防止调用方指定任意 base_url 把已保存密钥随 Authorization 头发出去。
+            api_key = (config.get_secret('llm_api_key') or '').strip()
+            if api_key and _normalize_base_url(base_url) != _normalize_base_url(saved_base_url):
+                raise HTTPException(
+                    status_code=400,
+                    detail="使用已保存的 API Key 时只能查询已保存的 Base URL；切换地址请同时填写 API Key",
+                )
+        else:
+            # 空字符串表示用户明确未填写，不能回退旧密钥。
+            api_key = request.api_key.strip()
         if not api_key:
             return {"success": False, "models": [], "message": "请先填写 API Key"}
 
@@ -247,6 +279,9 @@ async def get_llm_models(request: LLMModelsRequest):
         if not models:
             return {"success": False, "models": [], "message": "接口返回为空或格式不兼容"}
         return {"success": True, "models": models, "message": f"已获取 {len(models)} 个模型"}
+    except HTTPException:
+        # 参数校验类拒绝需原样返回状态码，不能被下方兜底转成 success=False 的 200
+        raise
     except httpx.TimeoutException as exc:
         logger.warning("获取模型列表超时: %s", exc, exc_info=True)
         return {"success": False, "models": [], "message": "获取模型列表超时，请检查 Base URL"}
@@ -414,7 +449,12 @@ async def update_config(request: ConfigUpdateRequest):
 
     注意：此接口不处理密钥，密钥请走 POST /llm。
     # 对数据进行加工/分发
+    LLM 地址（llm / llm.api_base / llm.api_key）与 secrets.* 拒绝写入，
+    避免绕过 POST /llm 把已保存密钥与新地址拼接。
     """
+    key = request.key.strip()
+    if key in _PROTECTED_CONFIG_KEYS or key.split('.')[0] == 'secrets':
+        raise HTTPException(status_code=400, detail="LLM 地址与密钥请通过 POST /api/config/llm 修改")
     try:
         # 赋值并准备后续使用
         config = ConfigManager()

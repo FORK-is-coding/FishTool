@@ -366,6 +366,87 @@ def test_llm_models_falls_back_to_saved_config(client, monkeypatch):
     assert body["models"] == ["m"]
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"base_url": "https://evil.example/v1"},
+        {"base_url": "https://evil.example/v1", "api_key": None},
+        {"base_url": "https://saved:8443/v1"},
+        {"base_url": "https://saved@evil.example/v1"},
+    ],
+)
+def test_llm_models_rejects_saved_key_to_other_base_url(client, monkeypatch, payload):
+    """未提供密钥时，已保存密钥不得被发往与已保存地址不同的 Base URL（#5-1）。"""
+    _FakeConfig.secrets["llm_api_key"] = "saved-key"
+    _FakeConfig.plain = {"llm": {"api_base": "https://saved/v1"}}
+    calls = []
+
+    def handler(url, headers):
+        """记录外发请求；本用例要求一次都不发生。"""
+        calls.append((url, headers))
+        return _FakeResponse(200, {"data": [{"id": "m"}]})
+
+    _install_httpx(monkeypatch, handler)
+
+    response = client.post("/api/config/llm/models", json=payload)
+    assert response.status_code == 400
+    assert "已保存的 Base URL" in response.json()["detail"]
+    assert calls == []
+
+
+def test_llm_models_saved_key_allows_equivalent_saved_base_url(client, monkeypatch):
+    """仅大小写与末尾斜杠不同的已保存地址仍可使用已保存密钥。"""
+    _FakeConfig.secrets["llm_api_key"] = "saved-key"
+    _FakeConfig.plain = {"llm": {"api_base": "https://Saved.Example/v1"}}
+    captured = {}
+
+    def handler(url, headers):
+        """记录外发请求地址与鉴权头。"""
+        captured["url"] = url
+        captured["headers"] = headers
+        return _FakeResponse(200, {"data": [{"id": "m"}]})
+
+    _install_httpx(monkeypatch, handler)
+
+    body = client.post("/api/config/llm/models", json={"base_url": "https://saved.example/v1/"}).json()
+    assert body["success"] is True
+    assert captured["headers"]["Authorization"] == "Bearer saved-key"
+
+
+def test_llm_models_saved_key_rejected_when_no_saved_base_url(client, monkeypatch):
+    """已保存密钥但未保存地址时，不得把密钥发往请求方指定地址。"""
+    _FakeConfig.secrets["llm_api_key"] = "saved-key"
+    calls = []
+    _install_httpx(monkeypatch, lambda url, headers: calls.append(url))
+
+    response = client.post("/api/config/llm/models", json={"base_url": "https://any/v1"})
+    assert response.status_code == 400
+    assert calls == []
+
+
+def test_llm_models_explicit_key_allows_any_base_url(client, monkeypatch):
+    """请求自带密钥时可探测任意地址，且不会混入已保存密钥。"""
+    _FakeConfig.secrets["llm_api_key"] = "saved-key"
+    _FakeConfig.plain = {"llm": {"api_base": "https://saved/v1"}}
+    captured = {}
+
+    def handler(url, headers):
+        """记录外发请求地址与鉴权头。"""
+        captured["url"] = url
+        captured["headers"] = headers
+        return _FakeResponse(200, {"data": [{"id": "m"}]})
+
+    _install_httpx(monkeypatch, handler)
+
+    body = client.post(
+        "/api/config/llm/models",
+        json={"api_key": "new-key", "base_url": "https://other/v1"},
+    ).json()
+    assert body["success"] is True
+    assert captured["url"] == "https://other/v1/models"
+    assert captured["headers"]["Authorization"] == "Bearer new-key"
+
+
 # ---------------------------------------------------------------------------
 # POST /llm
 # ---------------------------------------------------------------------------
@@ -491,6 +572,15 @@ def test_update_single_config_failure_returns_500(client, monkeypatch):
     monkeypatch.setattr(config_module, "ConfigManager", boom)
     response = client.put("/api/config/", json={"key": "a", "value": 1})
     assert response.status_code == 500
+
+
+@pytest.mark.parametrize("key", ["llm.api_base", " llm.api_base ", "llm", "llm.api_key", "secrets.llm_api_key"])
+def test_update_single_config_rejects_protected_keys(client, key):
+    """LLM 地址与密钥不得经通用接口写入，防止绕过地址-密钥绑定（#5-1）。"""
+    response = client.put("/api/config/", json={"key": key, "value": "https://evil.example/v1"})
+    assert response.status_code == 400
+    assert _FakeConfig.plain == {}
+    assert _FakeConfig.saved == 0
 
 
 # ---------------------------------------------------------------------------
