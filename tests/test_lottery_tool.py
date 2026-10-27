@@ -225,8 +225,10 @@ def test_lottery_routes_are_mounted() -> None:
     from web.routers import lottery
 
     router_paths = {route.path for route in lottery.router.routes}
-    included = [route for route in app.routes if getattr(route, "original_router", None) is lottery.router]
-    assert included and included[0].include_context.prefix == "/api"
+    # include_router 会把子路由按前缀展开复制进 app.routes；不依赖 FastAPI 私有属性
+    # （original_router / include_context 在 requirements 锁定的 fastapi==0.108.0 中不存在）。
+    app_paths = {route.path for route in app.routes}
+    assert router_paths and {f"/api{path}" for path in router_paths} <= app_paths
     assert "/lottery/preview" in router_paths
     assert "/lottery/quick-filter" in router_paths
     assert "/lottery/verify-winners" in router_paths
