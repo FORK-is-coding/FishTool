@@ -1117,3 +1117,120 @@ def _candidate(uid: int, rpid: str, *, level: int, ctime: str, is_vip: bool = Tr
         "vip_label": "大会员" if is_vip else "非会员",
         "ctime": ctime,
     }
+
+
+# ================================================================ 断点续跑（issue #13 后续）
+
+def _full_profile(uid: int, level: int = 6) -> dict:
+    """构造四个判定字段齐全、字段状态均为 ok 的画像。"""
+    return {
+        "uid": uid, "name": f"用户{uid}", "level": level, "is_vip": False, "vip_type": 0,
+        "follower": 10, "following": 5, "video_count": 3,
+        "recent_activity_count": 4, "lottery_repost_count": 0, "lottery_repost_ratio": 0.0,
+        "observable_account_days": 200,
+        "field_status": {
+            "level": "ok", "recent_activity_count": "ok", "lottery_repost_ratio": "ok", "video_count": "ok",
+        },
+    }
+
+
+def _comments_for(uids) -> list:
+    """按 UID 构造评论列表。"""
+    return [{"uid": uid, "uname": f"用户{uid}", "rpid": f"r{uid}"} for uid in uids]
+
+
+def test_filter_real_users_resume_skips_cached_profiles_and_assessments(
+    service: LotteryService, monkeypatch
+) -> None:
+    """第一次在 AI 判定中途中断；再次执行时已采画像不再请求、已判定用户不再调 LLM。"""
+    uids = list(range(1, 26))  # 25 人：画像 20 + 5 两批，判定 12 + 12 + 1 三批
+    comments = _comments_for(uids)
+
+    async def fake_get_comments(target, progress=None):
+        return comments, "local"
+
+    service.get_comments = fake_get_comments
+    seen = _install_profile_fetch(service, {uid: _full_profile(uid) for uid in uids})
+
+    class _InterruptAfterFirstBatch(_ContractClassify):
+        """第二批判定时模拟进程被打断。"""
+
+        async def __call__(self, profiles, focus_template=None):
+            if len(self.batches) == 1:
+                raise asyncio.CancelledError()
+            return await super().__call__(profiles, focus_template)
+
+    first = _InterruptAfterFirstBatch()
+    monkeypatch.setattr("modules.lottery.service.classify_profiles", first)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(service.filter_real_users(_video_target(), "模板"))
+    assert seen == uids
+    assert first.batches == [uids[:12]]
+
+    seen.clear()
+    second = _ContractClassify()
+    monkeypatch.setattr("modules.lottery.service.classify_profiles", second)
+    result = asyncio.run(asyncio.wait_for(service.filter_real_users(_video_target(), "模板"), timeout=5))
+
+    # 画像全部来自缓存，不再发起任何画像请求。
+    assert seen == []
+    # 已判定的前 12 人不再调用 LLM，只补剩下的 13 人。
+    assert sorted(uid for batch in second.batches for uid in batch) == uids[12:]
+    assert len(result["real_users"]) == 25
+
+
+def test_filter_real_users_does_not_cache_rule_fallback(service: LotteryService, monkeypatch) -> None:
+    """LLM 不可用时的规则兜底结果不缓存，下次执行会重新调用 LLM。"""
+    uids = [1, 2]
+
+    async def fake_get_comments(target, progress=None):
+        return _comments_for(uids), "local"
+
+    service.get_comments = fake_get_comments
+    _install_profile_fetch(service, {uid: _full_profile(uid) for uid in uids})
+
+    async def fallback_classify(profiles, focus_template=None):
+        return [
+            {"uid": int(p["uid"]), "classification": "indeterminate", "confidence": None,
+             "reasons": ["规则兜底"], "analysis_text": "规则兜底", "source": "heuristic"}
+            for p in profiles
+        ]
+
+    monkeypatch.setattr("modules.lottery.service.classify_profiles", fallback_classify)
+    asyncio.run(service.filter_real_users(_video_target(), None))
+
+    retry = _ContractClassify()
+    monkeypatch.setattr("modules.lottery.service.classify_profiles", retry)
+    asyncio.run(service.filter_real_users(_video_target(), None))
+    assert sorted(uid for batch in retry.batches for uid in batch) == uids
+
+
+def test_assessment_cache_invalidated_when_profile_or_focus_changes(service: LotteryService, monkeypatch) -> None:
+    """判定缓存绑定画像判定字段与侧重点：画像变化或换模板都要重新判定。"""
+    async def fake_get_comments(target, progress=None):
+        return _comments_for([1]), "local"
+
+    service.get_comments = fake_get_comments
+    profiles = {1: _full_profile(1, level=6)}
+    _install_profile_fetch(service, profiles)
+    first = _ContractClassify()
+    monkeypatch.setattr("modules.lottery.service.classify_profiles", first)
+    asyncio.run(service.filter_real_users(_video_target(), "模板A"))
+    assert first.batches == [[1]]
+
+    # 同模板、画像未变：命中缓存。
+    hit = _ContractClassify()
+    monkeypatch.setattr("modules.lottery.service.classify_profiles", hit)
+    asyncio.run(service.filter_real_users(_video_target(), "模板A"))
+    assert hit.batches == []
+
+    # 换模板：重新判定。
+    other_focus = _ContractClassify()
+    monkeypatch.setattr("modules.lottery.service.classify_profiles", other_focus)
+    asyncio.run(service.filter_real_users(_video_target(), "模板B"))
+    assert other_focus.batches == [[1]]
+
+    # 画像判定字段变化：键不同，重新判定。
+    key_before = service._assessment_key(_full_profile(1, level=6), "模板A")
+    key_after = service._assessment_key(_full_profile(1, level=2), "模板A")
+    assert key_before != key_after

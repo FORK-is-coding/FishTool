@@ -181,8 +181,45 @@ function handleLotteryTaskError(kind, error, elementId, failurePrefix) {
         document.getElementById(elementId).innerHTML = LOTTERY_CANCELLED_NOTICE;
         return;
     }
+    if (error.code === 'TASK_INTERRUPTED') {
+        // 保留活动任务，用户确认后才续跑（会消耗请求配额与 token），已完成部分由后端缓存跳过。
+        renderLotteryTaskInterrupted(kind, elementId, error.message);
+        return;
+    }
     lotteryWriteActiveTask(kind, '');
     document.getElementById(elementId).innerHTML = `<p class="analysis-error">${failurePrefix}：${escapeHtml(error.message)}</p>`;
+}
+
+// 服务重启打断的任务：提供「继续执行」与「取消任务」两个入口。
+function renderLotteryTaskInterrupted(kind, elementId, message) {
+    // 处理函数按 kind 取固定字面量，不把变量插进内联事件的 JS 字符串（与 PR-04 的内联事件规则一致）。
+    const resumeHandler = kind === 'filter' ? "resumeLotteryTask('filter')" : "resumeLotteryTask('draw')";
+    const cancelHandler = kind === 'filter' ? "cancelLotteryTask('filter')" : "cancelLotteryTask('draw')";
+    document.getElementById(elementId).innerHTML = `
+        <div class="analysis-notice" role="status">
+            <p>${escapeHtml(message || '服务重启，任务已中断')}</p>
+            <button class="btn btn-primary" type="button" onclick="${resumeHandler}">继续执行</button>
+            <button class="btn btn-secondary" type="button" onclick="${cancelHandler}">取消任务</button>
+        </div>`;
+}
+
+// 继续执行已中断任务：后端沿用原句柄与原参数，前端接着轮询同一个任务。
+async function resumeLotteryTask(kind) {
+    const taskId = lotteryReadActiveTask(kind);
+    if (!taskId) return;
+    try {
+        const started = await apiRequest(`/lottery/tasks/${encodeURIComponent(taskId)}/resume`, { method: 'POST' }, false);
+        // 后端若发现同参任务已在运行，会返回那个任务的 ID。
+        if (started.task_id && started.task_id !== taskId) lotteryWriteActiveTask(kind, started.task_id);
+    } catch (error) {
+        // 任务已结束或已过期：不再保留活动任务，提示用户重新发起。
+        lotteryWriteActiveTask(kind, '');
+        document.getElementById(LOTTERY_ACTIVE_TASKS[kind].resultId).innerHTML = `<p class="analysis-error">继续执行失败：${escapeHtml(error.message)}</p>`;
+        return;
+    }
+    // 复用既有入口：有活动任务时它们只轮询、不新建任务。
+    if (kind === 'filter') return startRealUserFilter();
+    return resumeLotteryDraw();
 }
 
 // 页面就绪后按会话中记录的活动任务恢复按钮文案。

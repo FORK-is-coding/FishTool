@@ -32,6 +32,8 @@ from core.logger import get_logger
 from modules.lottery import LotteryService
 # 目标元数据获取工具。
 from modules.lottery.target import fetch_target_metadata
+# 任务持久化：服务重启后仍可查询结果，中断任务可继续执行。
+from web.routers import lottery_store
 
 # 抽奖模块路由前缀与标签。
 router = APIRouter(prefix="/lottery", tags=["lottery"])
@@ -201,6 +203,8 @@ def _on_background_task_done(task_id: str, background: "asyncio.Task[None]") -> 
         task.update(status="failed", stage="failed", message="任务意外中止，请重新发起", estimated_seconds=0)
     # 记录结束时间，供过期清理使用。
     task["finished_monotonic"] = time.monotonic()
+    # 所有终态（完成 / 失败 / 取消）都从这里统一落库，服务重启后仍可查询。
+    _persist_final(task_id)
 
 
 # 启动后台协程并保存强引用。
@@ -215,12 +219,22 @@ def _spawn(task_id: str, coroutine: Coroutine[Any, Any, None]) -> None:
 
 
 # 创建后台任务状态。
-def _create_task(kind: Literal["filter", "draw"], fingerprint: Optional[str] = None) -> str:
-    """创建后台任务状态并返回不可预测任务 ID。"""
+def _create_task(
+    kind: Literal["filter", "draw"],
+    fingerprint: Optional[str] = None,
+    request: Optional[BaseModel] = None,
+    task_id: Optional[str] = None,
+) -> str:
+    """创建后台任务状态并返回不可预测任务 ID。
+
+    传入 ``request`` 时同步持久化，供服务重启后查询结果或继续执行；
+    传入 ``task_id`` 表示继续执行一个已中断的任务，沿用原句柄。
+    """
     # 新建任务前顺带清理过期的已结束任务，控制内存任务表规模。
     _prune_finished_tasks()
     # 用随机 UUID 作为任务句柄，避免顺序 ID 被前端猜测。
-    task_id = uuid.uuid4().hex
+    resumed = task_id is not None
+    task_id = task_id or uuid.uuid4().hex
     # 初始化任务状态，进度从排队阶段开始。
     _tasks[task_id] = {
         "task_id": task_id,
@@ -234,8 +248,27 @@ def _create_task(kind: Literal["filter", "draw"], fingerprint: Optional[str] = N
         "result": None,
         "fingerprint": fingerprint,
     }
+    # 生命周期节点写库：新任务落一条 running 记录，继续执行则把原记录改回 running。
+    if request is not None:
+        if resumed:
+            lottery_store.finish(task_id, "running", "")
+        else:
+            lottery_store.create(task_id, kind, request.model_dump(mode="json"))
     # 返回新任务 ID 供前端轮询。
     return task_id
+
+
+# 把任务终态同步到持久化存储。
+def _persist_final(task_id: str) -> None:
+    """把内存中任务的终态写入数据库；只在终态时写，进度百分比不落库。"""
+    # 任务状态可能已被清理。
+    task = _tasks.get(task_id)
+    # 只同步终态。
+    if task is None or task.get("status") == "running":
+        # 运行中不写库。
+        return
+    # 完成时连同结果一次写入。
+    lottery_store.finish(task_id, task["status"], task.get("message") or "", task.get("result"))
 
 
 # 更新任务进度与剩余时间估算。
@@ -414,7 +447,7 @@ async def start_filter_task(request: FilterTaskRequest) -> Dict[str, Any]:
         # 返回原任务 ID 并标记为复用。
         return {"success": True, "task_id": running_id, "reused": True}
     # 创建任务状态并立即返回 ID。
-    task_id = _create_task("filter", fingerprint)
+    task_id = _create_task("filter", fingerprint, request)
     # 将耗时工作交给后台协程，接口立即返回任务 ID 供前端轮询。
     _spawn(task_id, _run_filter_task(task_id, request))
     # 返回任务 ID 供前端轮询。
@@ -434,7 +467,7 @@ async def start_draw_task(request: DrawTaskRequest) -> Dict[str, Any]:
         # 返回原任务 ID 并标记为复用。
         return {"success": True, "task_id": running_id, "reused": True}
     # 创建任务状态并立即返回 ID。
-    task_id = _create_task("draw", fingerprint)
+    task_id = _create_task("draw", fingerprint, request)
     # 将耗时工作交给后台协程，接口立即返回任务 ID 供前端轮询。
     _spawn(task_id, _run_draw_task(task_id, request))
     # 返回任务 ID 供前端轮询。
@@ -444,13 +477,21 @@ async def start_draw_task(request: DrawTaskRequest) -> Dict[str, Any]:
 @router.get("/tasks/{task_id}")
 # 查询任务进度接口。
 async def get_task(task_id: str) -> Dict[str, Any]:
-    """返回筛选或抽奖任务的实时进度与最终结果。"""
+    """返回筛选或抽奖任务的实时进度与最终结果；内存中没有时回查持久化记录。"""
     # 按任务 ID 查找内存状态。
     task = _tasks.get(task_id)
-    # 任务不存在时返回 404。
+    # 内存没有（服务重启或已被清理）时回查数据库：已完成可直接取结果，中断的可继续执行。
     if not task:
-        # 任务不存在或服务重启后内存表已清空。
-        raise HTTPException(status_code=404, detail="任务不存在或服务已重启")
+        # 数据库里的记录不含请求体以外的内部字段。
+        stored = lottery_store.load(task_id)
+        # 两边都没有才算不存在。
+        if stored is None:
+            # 任务不存在或已超过保留期。
+            raise HTTPException(status_code=404, detail="任务不存在或服务已重启")
+        # 请求体只用于继续执行，不对外返回。
+        stored.pop("request", None)
+        # 返回持久化状态。
+        return {"success": True, "data": stored}
     # 剔除内部计时与指纹字段，避免把实现细节暴露给前端。
     public_task = {key: value for key, value in task.items() if key not in _INTERNAL_TASK_KEYS}
     # 返回任务进度与结果。
@@ -463,10 +504,26 @@ async def cancel_task(task_id: str) -> Dict[str, Any]:
     """取消运行中的筛选或抽奖任务；已取消时幂等返回，已结束的任务不可取消。"""
     # 按任务 ID 查找内存状态。
     task = _tasks.get(task_id)
-    # 任务不存在时返回 404。
+    # 内存没有时回查持久化记录：重启后中断的任务没有可取消的协程。
     if not task:
-        # 与查询接口保持同一提示。
-        raise HTTPException(status_code=404, detail="任务不存在或服务已重启")
+        # 读取持久化状态。
+        stored = lottery_store.load(task_id)
+        # 两边都没有才是不存在。
+        if stored is None:
+            # 与查询接口保持同一提示。
+            raise HTTPException(status_code=404, detail="任务不存在或服务已重启")
+        # 已中断的任务直接标记为取消，前端不再提示继续执行。
+        if stored.get("status") == "interrupted":
+            # 落库为已取消。
+            lottery_store.finish(task_id, "cancelled", "任务已取消")
+            # 与运行中取消返回同一结构。
+            return {"success": True, "task_id": task_id, "status": "cancelled"}
+        # 已取消幂等返回；其余持久化状态（完成 / 失败）没有可取消的工作。
+        if stored.get("status") == "cancelled":
+            # 幂等返回。
+            return {"success": True, "task_id": task_id, "status": "cancelled"}
+        # 持久化记录不会以 running 存在（启动时已统一改为 interrupted），这里只剩已结束的任务。
+        raise HTTPException(status_code=409, detail="任务已结束，无法取消")
     # 当前状态决定是否允许取消。
     status = task.get("status")
     # 已取消直接返回，重复点击不报错。
@@ -489,3 +546,93 @@ async def cancel_task(task_id: str) -> Dict[str, Any]:
     logger.info("抽奖后台任务已取消: %s", task_id)
     # 返回取消结果。
     return {"success": True, "task_id": task_id, "status": "cancelled"}
+
+
+@router.post("/tasks/{task_id}/resume", status_code=202)
+# 继续执行已中断任务接口。
+async def resume_task(task_id: str) -> Dict[str, Any]:
+    """按原参数、沿用原句柄继续执行一个因服务重启而中断的任务。
+
+    评论快照、用户画像与 AI 判定都会从缓存命中，已完成的部分不会重复采集或重复调用 LLM。
+    只接受 ``interrupted`` 状态：已完成的任务不重跑，避免重新抽出另一份中奖名单。
+    """
+    # 内存中已有该任务（本次进程内创建或已继续执行）时直接按其状态判断。
+    if task_id in _tasks:
+        # 运行中的任务无需继续执行，交给前端直接轮询。
+        if _tasks[task_id].get("status") == "running":
+            # 幂等返回。
+            return {"success": True, "task_id": task_id, "resumed": False}
+        # 其余终态不可继续执行。
+        raise HTTPException(status_code=409, detail="任务已结束，无法继续执行，请重新发起")
+    # 内存里没有时只能来自持久化记录。
+    stored = lottery_store.load(task_id)
+    # 记录不存在或已过保留期。
+    if stored is None:
+        # 与查询接口保持同一提示。
+        raise HTTPException(status_code=404, detail="任务不存在或已过期，请重新发起")
+    # 只有被服务重启打断的任务可以继续执行。
+    if stored.get("status") != "interrupted":
+        # 已完成 / 失败 / 取消的任务不重跑。
+        raise HTTPException(status_code=409, detail="任务已结束，无法继续执行，请重新发起")
+    # 按原请求体重建请求模型，参数校验与新建任务一致。
+    kind = stored.get("kind")
+    try:
+        # 筛选与抽奖使用各自的请求模型。
+        request = (FilterTaskRequest if kind == "filter" else DrawTaskRequest).model_validate(stored.get("request") or {})
+    except Exception as exc:
+        # 旧记录参数缺失或不再合法时无法续跑。
+        raise HTTPException(status_code=409, detail="任务参数已失效，请重新发起") from exc
+    # 同参任务若已在运行（例如用户已重新发起），直接复用它，避免两份并行采集。
+    fingerprint = _request_fingerprint(kind, request)
+    # 查找运行中的同参任务。
+    running_id = _find_running_task(fingerprint)
+    # 命中则返回运行中的任务。
+    if running_id:
+        # 前端改为轮询返回的任务 ID。
+        return {"success": True, "task_id": running_id, "resumed": False, "reused": True}
+    # 沿用原句柄登记为运行中，并把持久化记录改回 running。
+    _create_task(kind, fingerprint, request, task_id=task_id)
+    # 交给后台协程执行，已完成部分由缓存跳过。
+    _spawn(task_id, _run_filter_task(task_id, request) if kind == "filter" else _run_draw_task(task_id, request))
+    # 记录继续执行，便于排查。
+    logger.info("抽奖后台任务继续执行: %s", task_id)
+    # 返回继续执行结果。
+    return {"success": True, "task_id": task_id, "resumed": True}
+
+
+# 服务启动时恢复任务状态。
+def recover_tasks_on_startup(retention_days: Optional[int] = None) -> Dict[str, Any]:
+    """把上次进程遗留的运行中任务标为已中断、清理过期记录，并恢复最近一次中奖名单。
+
+    不自动续跑：续跑会消耗 B 站请求配额与 LLM token，须由用户在页面上点「继续执行」。
+
+    Args:
+        retention_days: 已结束任务保留天数；``None`` 时读取 ``lottery.task_retention_days``。
+
+    Returns:
+        ``lottery_store.recover_on_startup`` 的统计结果。
+    """
+    # 修改模块级最近中奖名单。
+    global _latest_winners
+    # 未显式传入时读取配置，非法值回退默认。
+    if retention_days is None:
+        try:
+            # 延迟导入，避免测试环境读取真实配置。
+            from core.config import config as _config
+
+            raw = _config.get("lottery.task_retention_days")
+            retention_days = int(raw) if raw is not None and not isinstance(raw, bool) else lottery_store.DEFAULT_RETENTION_DAYS
+        except (TypeError, ValueError):
+            retention_days = lottery_store.DEFAULT_RETENTION_DAYS
+    # 执行持久化层收尾。
+    outcome = lottery_store.recover_on_startup(retention_days)
+    # 重启后「校验中奖名单」仍能使用上一次的结果。
+    if outcome.get("latest_winners") and not _latest_winners:
+        # 只在内存为空时恢复，不覆盖本次进程内的新结果。
+        _latest_winners = list(outcome["latest_winners"])
+    # 有中断任务时记一条日志。
+    if outcome.get("interrupted"):
+        # 便于排查。
+        logger.info("服务重启：%s 个抽奖任务已标记为中断，可在页面上继续执行", outcome["interrupted"])
+    # 返回统计结果。
+    return outcome

@@ -22,6 +22,67 @@ def cache(tmp_path: Path) -> LotteryCache:
 
 # ------------------------------------------------- 路径推导
 
+def test_batch_merge_and_lookup_match_single_path(cache: LotteryCache) -> None:
+    """批量写入的分组结果与单条 begin/merge 路径同一命中规则：成功即 hit，失败保留旧值但不命中。"""
+    now = 1_700_000_000
+    cache.merge_profiles_batch(
+        {1: {"info": {"level": 6}, "videos": {"video_count": 3}}, 2: None},
+        namespace="full", groups=["info", "videos"], now_s=now,
+    )
+    lookups = cache.get_profiles_batch([1, 2, 3], namespace="full", now_s=now + 10, required_groups=["info", "videos"])
+
+    assert lookups[1].cache_state == "hit"
+    assert lookups[1].profile == {"level": 6, "video_count": 3}
+    assert lookups[2].cache_state == "stale"
+    assert lookups[3].cache_state == "miss"
+    # 与单条查询结果一致。
+    single = cache.get_profile(1, namespace="full", now_s=now + 10, required_groups=["info", "videos"])
+    assert single == lookups[1]
+
+
+def test_batch_merge_failure_keeps_previous_success(cache: LotteryCache) -> None:
+    """批量登记失败时保留历史成功值（不命中），与 merge_attempt 失败分支一致。"""
+    now = 1_700_000_000
+    cache.merge_profiles_batch({1: {"info": {"level": 5}}}, namespace="full", groups=["info"], now_s=now)
+    cache.merge_profiles_batch({1: None}, namespace="full", groups=["info"], now_s=now + 5)
+    lookup = cache.get_profiles_batch([1], namespace="full", now_s=now + 6, required_groups=["info"])[1]
+
+    assert lookup.cache_state == "stale"
+    assert lookup.profile == {"level": 5}
+
+
+def test_batch_merge_writes_file_once_per_batch(cache: LotteryCache, monkeypatch) -> None:
+    """一批多用户只写一次画像文件，避免真人筛选时整份文件被反复重写。"""
+    writes = []
+    original = cache._write_profile_doc
+
+    def counting_write(doc):
+        writes.append(1)
+        original(doc)
+
+    monkeypatch.setattr(cache, "_write_profile_doc", counting_write)
+    cache.merge_profiles_batch(
+        {uid: {"info": {"level": 6}} for uid in range(1, 21)}, namespace="full", groups=["info"], now_s=1_700_000_000
+    )
+    assert writes == [1]
+
+
+def test_assessments_round_trip_and_expire(cache: LotteryCache, monkeypatch) -> None:
+    """AI 判定按键保存与读取；过期判定读不到，并在下次写入时清理。"""
+    import modules.lottery.cache as cache_module
+
+    clock = {"now": 1_700_000_000}
+    monkeypatch.setattr(cache_module.time, "time", lambda: clock["now"])
+    cache.save_assessments({"k1": {"uid": 1, "classification": "real", "source": "llm"}})
+
+    assert cache.load_assessments(["k1", "k2"]) == {"k1": {"uid": 1, "classification": "real", "source": "llm"}}
+    clock["now"] += cache_module._ASSESSMENT_TTL_S + 1
+    assert cache.load_assessments(["k1"]) == {}
+    cache.save_assessments({"k2": {"uid": 2, "classification": "suspicious", "source": "llm"}})
+    stored = json.loads(cache.profile_path().read_text(encoding="utf-8"))["assessments"]
+    assert set(stored) == {"k2"}
+
+
 def test_paths_are_derived_from_cache_dir(cache: LotteryCache, tmp_path: Path) -> None:
     """动态路径与画像路径应稳定挂载在注入的缓存目录下。"""
     root = tmp_path / "lottery_cache"

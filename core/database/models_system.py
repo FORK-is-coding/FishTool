@@ -25,6 +25,8 @@ class Task(Base):
     __tablename__ = 'tasks'
     
     id = Column(Integer, primary_key=True, autoincrement=True)
+    # 对外任务句柄（如抽奖任务的随机 UUID）；为空表示内部任务（如评论采集断点），唯一索引由迁移创建。
+    task_key = Column(String(64), comment='对外任务句柄')
     
     task_type = Column(String(50), comment='任务类型')
     # 赋值并准备后续使用

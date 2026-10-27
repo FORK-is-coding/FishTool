@@ -293,6 +293,33 @@ def test_lottery_page_can_cancel_background_task() -> None:
     assert "LOTTERY_CANCELLED_NOTICE" in error_body
 
 
+def test_lottery_page_offers_resume_for_interrupted_task() -> None:
+    """服务重启打断的任务：pollTask 以 TASK_INTERRUPTED 抛出，页面给出「继续执行」且需用户点击才续跑（issue #13 后续）。"""
+    from pathlib import Path
+
+    core_js = Path("web/frontend/static/js/app.core.js").read_text(encoding="utf-8")
+    poll_body = core_js.split("async function pollTask", 1)[1].split("\n}\n", 1)[0]
+    assert "task.status === 'interrupted'" in poll_body
+    assert "code = 'TASK_INTERRUPTED'" in poll_body
+
+    lottery_js = Path("web/frontend/static/js/app.lottery.js").read_text(encoding="utf-8")
+    error_body = lottery_js.split("function handleLotteryTaskError", 1)[1].split("\n}\n", 1)[0]
+    interrupted_branch = error_body.split("error.code === 'TASK_INTERRUPTED'", 1)[1].split("return;", 1)[0]
+    # 中断时保留活动任务，只渲染入口，不自动续跑。
+    assert "renderLotteryTaskInterrupted(" in interrupted_branch
+    assert "lotteryWriteActiveTask(kind, '')" not in interrupted_branch
+    assert "resumeLotteryTask(" not in interrupted_branch
+    # 入口提供继续执行与取消，处理函数为固定字面量。
+    notice = lottery_js.split("function renderLotteryTaskInterrupted", 1)[1].split("\n}\n", 1)[0]
+    assert "resumeLotteryTask('filter')" in notice and "resumeLotteryTask('draw')" in notice
+    assert "cancelLotteryTask('filter')" in notice and "cancelLotteryTask('draw')" in notice
+    # 继续执行调用 resume 接口后沿用既有入口轮询同一任务。
+    resume_body = lottery_js.split("async function resumeLotteryTask", 1)[1].split("\n}\n", 1)[0]
+    assert "/lottery/tasks/${encodeURIComponent(taskId)}/resume`" in resume_body
+    assert "method: 'POST'" in resume_body
+    assert "startRealUserFilter()" in resume_body and "resumeLotteryDraw()" in resume_body
+
+
 def test_lottery_routes_are_mounted() -> None:
     """主应用必须挂载预览、筛选、抽奖和任务查询路由。"""
     from web.main import app

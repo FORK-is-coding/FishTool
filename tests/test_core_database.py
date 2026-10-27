@@ -228,3 +228,28 @@ def test_package_exports_are_available():
     assert set(expected) <= set(db_package.__all__)
     for name in expected:
         assert hasattr(db_package, name)
+
+
+def test_task_key_migration_is_idempotent_and_keeps_existing_rows(tmp_path):
+    """旧库 tasks 表缺 task_key：迁移补列 + 唯一索引，旧记录保留且可重复迁移。"""
+    legacy_path = tmp_path / "legacy_tasks.db"
+    connection = sqlite3.connect(legacy_path)
+    try:
+        connection.execute(
+            "CREATE TABLE tasks (id INTEGER PRIMARY KEY, task_type VARCHAR(50), task_name VARCHAR(200), "
+            "params JSON, status VARCHAR(20), progress FLOAT, result JSON, error TEXT, checkpoint JSON, "
+            "started_at DATETIME, completed_at DATETIME, created_at DATETIME)"
+        )
+        connection.execute("INSERT INTO tasks (task_type, status) VALUES ('comment_collect', 'completed')")
+        connection.commit()
+    finally:
+        connection.close()
+
+    manager = DatabaseManager(str(legacy_path))
+    manager._migrate_task_key_column()  # 再跑一次仍无异常
+    inspector = inspect(manager.engine)
+    assert "task_key" in {column["name"] for column in inspector.get_columns("tasks")}
+    assert "ux_tasks_task_key" in {index["name"] for index in inspector.get_indexes("tasks")}
+    with sqlite3.connect(legacy_path) as raw:
+        assert raw.execute("SELECT COUNT(*) FROM tasks WHERE task_key IS NULL").fetchone()[0] == 1
+    manager.engine.dispose()

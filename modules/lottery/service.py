@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import hashlib
 import secrets
 import json
 import time
@@ -43,6 +44,18 @@ ProgressCallback = Optional[Callable[[str, int, str], None]]
 _FULL_REQUIRED_GROUPS = ("info", "dynamics", "videos")
 #: full 命中必须四字段真实可用，不是旧版“三键存在”。
 _FULL_REQUIRED_FIELDS = ("level", "recent_activity_count", "lottery_repost_ratio", "video_count")
+#: 真人筛选画像按批读写缓存的批大小：中断后最多重采这一批。
+_RESUME_BATCH_SIZE = 20
+#: 真人筛选复用画像时要求齐全的来源组：在 full 命中所需三组之外加上 relation，
+#: 因为粉丝 / 关注数也会交给 AI 判定，缺了它续跑时的判定证据会比首次少。
+_RESUME_PROFILE_GROUPS = ("info", "relation", "dynamics", "videos")
+#: AI 判定每批用户数（沿用原 12 人一批）。
+_CLASSIFY_BATCH_SIZE = 12
+#: AI 判定缓存键依据的画像字段；采集时间、昵称等不影响判定的字段不参与，保证重采同值时可复用。
+_ASSESSMENT_EVIDENCE_FIELDS = (
+    "level", "is_vip", "vip_type", "follower", "following", "video_count",
+    "recent_activity_count", "lottery_repost_count", "lottery_repost_ratio", "observable_account_days",
+)
 #: draw 资格只需来源可确认的等级/会员字段，对应 info 组。
 _DRAW_REQUIRED_GROUPS = ("info",)
 #: source-group 到画像字段的映射，用于按组读写 v3 缓存。
@@ -363,6 +376,103 @@ class LotteryService:
             "results": results,
         }
 
+    async def _profile_and_classify(
+        self,
+        users: Dict[int, str],
+        focus_template: Optional[str],
+        progress: ProgressCallback,
+        *,
+        profile_stage: tuple,
+        classify_stage: Optional[tuple],
+    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """采集画像并做 AI 判定；两步都按批读写缓存，中断后再次执行只补缺失部分。
+
+        画像复用 ``full`` 空间、与中奖校验同一套 v3 命中规则：四个判定字段齐全且各来源组新鲜才算命中，
+        否则重新采集并按批回写。AI 判定只缓存 LLM 实际返回的结果（``source == "llm"``），
+        键绑定 UID、判定侧重点与本次画像的判定字段，画像变化后旧判定自动失效。
+
+        Args:
+            users: ``{uid: 评论昵称}``，按评论出现顺序。
+            focus_template: AI 判定侧重点。
+            progress: 进度回调。
+            profile_stage: ``(阶段名, 起始百分比, 跨度, 文案前缀)``。
+            classify_stage: 同上；``None`` 表示判定阶段不推送进度。
+
+        Returns:
+            按 ``users`` 顺序的画像列表与判定列表。
+        """
+        uids = list(users)
+        total = len(uids)
+        profiles: List[Dict[str, Any]] = []
+        stage, base, span, label = profile_stage
+        for start in range(0, total, _RESUME_BATCH_SIZE):
+            batch = uids[start:start + _RESUME_BATCH_SIZE]
+            lookups = self._cache.get_profiles_batch(
+                batch, namespace="full", now_s=int(time.time()), required_groups=list(_RESUME_PROFILE_GROUPS)
+            )
+            fetched_plans: Dict[int, Optional[Dict[str, Dict[str, Any]]]] = {}
+            for offset, uid in enumerate(batch, start=start + 1):
+                lookup = lookups[uid]
+                if (
+                    lookup.cache_state == "hit"
+                    and isinstance(lookup.profile, dict)
+                    and all(lookup.profile.get(field) is not None for field in _FULL_REQUIRED_FIELDS)
+                ):
+                    # 缓存只保存分组值，不含字段级状态；命中即四个判定字段都来自成功采集。
+                    profile = {**lookup.profile, "uid": uid, "field_status": {field: "ok" for field in _FULL_REQUIRED_FIELDS}}
+                else:
+                    profile = await self.fetch_user_profile(uid)
+                    fetched_plans[uid] = self._split_profile_groups(profile)
+                profile["name"] = str(profile.get("name") or users[uid])
+                profiles.append(profile)
+                if progress:
+                    percent = base + int(offset / max(total, 1) * span)
+                    progress(stage, percent, f"{label}：{offset}/{total}")
+                await asyncio.sleep(0)
+            # 每批落盘一次：中断时最多重采这一批。
+            self._cache.merge_profiles_batch(
+                fetched_plans, namespace="full", groups=list(_RESUME_PROFILE_GROUPS), now_s=int(time.time())
+            )
+
+        assessments: List[Dict[str, Any]] = []
+        for start in range(0, len(profiles), _CLASSIFY_BATCH_SIZE):
+            batch_profiles = profiles[start:start + _CLASSIFY_BATCH_SIZE]
+            keys = [self._assessment_key(profile, focus_template) for profile in batch_profiles]
+            cached = self._cache.load_assessments(keys)
+            pending = [profile for profile, key in zip(batch_profiles, keys) if key not in cached]
+            fresh = await classify_profiles(pending, focus_template) if pending else []
+            fresh_by_uid = {int(item["uid"]): item for item in fresh}
+            to_save: Dict[str, Dict[str, Any]] = {}
+            for profile, key in zip(batch_profiles, keys):
+                if key in cached:
+                    assessments.append(cached[key])
+                    continue
+                item = fresh_by_uid.get(int(profile["uid"]))
+                if item is None:
+                    # 判定函数未返回该用户（契约外情况）：与原逻辑一致，不凭空补结果。
+                    continue
+                assessments.append(item)
+                # LLM 不可用时的规则兜底不缓存，避免一次短暂故障把这批用户永久判成资料不足。
+                if item.get("source") == "llm":
+                    to_save[key] = item
+            self._cache.save_assessments(to_save)
+            if progress and classify_stage:
+                stage, base, span, label = classify_stage
+                done = min(start + _CLASSIFY_BATCH_SIZE, len(profiles))
+                percent = base + int(done / max(len(profiles), 1) * span)
+                progress(stage, percent, f"{label}：{done}/{len(profiles)}")
+        return profiles, assessments
+
+    @staticmethod
+    def _assessment_key(profile: Dict[str, Any], focus_template: Optional[str]) -> str:
+        """生成 AI 判定缓存键：UID + 侧重点 + 判定所依据的画像字段，任何一项变化都不复用。"""
+        evidence = {field: profile.get(field) for field in _ASSESSMENT_EVIDENCE_FIELDS}
+        payload = json.dumps(
+            {"uid": int(profile["uid"]), "focus": (focus_template or "").strip(), "evidence": evidence},
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
     async def filter_real_users(
         self,
         target: LotteryTarget,
@@ -376,29 +486,14 @@ class LotteryService:
             uid = int(comment.get("uid") or 0)
             if uid:
                 users.setdefault(uid, str(comment.get("uname") or f"UID {uid}"))
-        profiles: List[Dict[str, Any]] = []
-        total = len(users)
-        for index, uid in enumerate(users, start=1):
-            profiles.append(await self.fetch_user_profile(uid))
-            if progress:
-                # 画像采集阶段进度 52-80%。
-                percent = 52 + int(index / max(total, 1) * 28)
-                # 推送当前进度与提示文案。
-                progress("profiling_users", percent, f"正在核验账号等级、活跃轨迹与抽奖转发：{index}/{total}")
-                # 让出事件循环避免阻塞。
-            await asyncio.sleep(0)
-
-        assessments: List[Dict[str, Any]] = []
-        batch_size = 12
-        for start in range(0, len(profiles), batch_size):
-            assessments.extend(await classify_profiles(profiles[start:start + batch_size], focus_template))
-            if progress:
-                # 计算本批完成数。
-                done = min(start + batch_size, len(profiles))
-                # AI 判定阶段进度 80-98%。
-                percent = 80 + int(done / max(len(profiles), 1) * 18)
-                # 推送判定进度。
-                progress("ai_classifying", percent, f"AI 正在受限于已采集数据进行交叉判断：{done}/{len(profiles)}")
+        # 画像与 AI 判定都走缓存：任务中断（取消 / 服务重启）后再次执行只补未完成的部分。
+        profiles, assessments = await self._profile_and_classify(
+            users,
+            focus_template,
+            progress,
+            profile_stage=("profiling_users", 52, 28, "正在核验账号等级、活跃轨迹与抽奖转发"),
+            classify_stage=("ai_classifying", 80, 18, "AI 正在受限于已采集数据进行交叉判断"),
+        )
         profile_by_uid = {item["uid"]: item for item in profiles}
         results = [
             {**assessment, "profile": profile_by_uid.get(assessment["uid"], {})}
@@ -648,19 +743,14 @@ class LotteryService:
             if uid:
                 users.setdefault(uid, str(item.get("uname") or f"UID {uid}"))
 
-        profiles: List[Dict[str, Any]] = []
-        for index, (uid, uname) in enumerate(users.items(), start=1):
-            profile = await self.fetch_user_profile(uid)
-            profile["name"] = str(profile.get("name") or uname)
-            profiles.append(profile)
-            if progress:
-                percent = 72 + int(index / max(len(users), 1) * 16)
-                progress("real_filter_profiles", percent, f"正在执行真人筛选画像采集：{index}/{len(users)}")
-            await asyncio.sleep(0)
-
-        assessments: List[Dict[str, Any]] = []
-        for start in range(0, len(profiles), 12):
-            assessments.extend(await classify_profiles(profiles[start:start + 12], focus_template))
+        # 与真人筛选共用可续跑的画像 + 判定流程；判定阶段沿用原逻辑不推送进度。
+        profiles, assessments = await self._profile_and_classify(
+            users,
+            focus_template,
+            progress,
+            profile_stage=("real_filter_profiles", 72, 16, "正在执行真人筛选画像采集"),
+            classify_stage=None,
+        )
         assessment_by_uid = {int(item["uid"]): item for item in assessments}
         stats = {
             "real": sum(item.get("classification") == "real" for item in assessments),

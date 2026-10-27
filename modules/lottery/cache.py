@@ -62,6 +62,9 @@ _DEFAULT_TTL_S = 6 * 3600
 #: 当前 schema 版本。
 _SCHEMA_VERSION = 3
 
+#: AI 判定缓存保留时长（秒）：与画像最短 TTL 一致，过期后断点续跑会重新判定。
+_ASSESSMENT_TTL_S = 6 * 3600
+
 #: 每个缓存文件的进程内锁，避免同进程并发写互相覆盖（跨进程不支持）。
 _FILE_LOCKS: Dict[str, "threading.RLock"] = {}
 _FILE_LOCKS_GUARD = threading.Lock()
@@ -253,43 +256,9 @@ class LotteryCache:
             ``CacheLookup``：全部 group 新鲜 -> hit；有需刷新 -> stale；
             旧迁移条目 -> legacy；无条目 -> miss；读取异常 -> error。
         """
-        uid_key = str(int(uid))
-        groups_required = list(required_groups or [])
-        doc = self._read_profile_doc()
-        if not doc:
-            return CacheLookup(None, "miss", ["missing_entry"], groups_required)
-        if doc.get("schema_version") != _SCHEMA_VERSION:
-            # 纯旧扁平文件：整份视为 legacy，需重采。
-            return CacheLookup(None, "legacy", ["legacy_unverified"], groups_required)
-        space = (doc.get("profiles") or {}).get(namespace) or {}
-        entry = space.get(uid_key) if isinstance(space, dict) else None
-        if not isinstance(entry, dict):
-            return CacheLookup(None, "miss", ["missing_entry"], groups_required)
-        if entry.get("_legacy"):
-            return CacheLookup(None, "legacy", ["legacy_unverified"], groups_required)
-        groups = entry.get("groups") if isinstance(entry.get("groups"), dict) else {}
-        now = int(now_s) if type(now_s) is int else int(time.time())
-        refresh: List[str] = []
-        values: Dict[str, Any] = {}
-        stale_values: Dict[str, Any] = {}
-        for name in groups_required:
-            group = groups.get(name)
-            if isinstance(group, dict):
-                vals = (group.get("last_success") or {}).get("values")
-                if isinstance(vals, dict):
-                    stale_values.update(vals)
-            ttl = self._ttl_for(name)
-            if not group_is_fresh(group, now, ttl):
-                refresh.append(name)
-            else:
-                success = group.get("last_success") or {}
-                vals = success.get("values")
-                if isinstance(vals, dict):
-                    values.update(vals)
-        if refresh:
-            # 有新刷新未结束/过期时，可展示旧值但不作本次自动资格判断。
-            return CacheLookup(stale_values or None, "stale", ["stale_group"], refresh)
-        return CacheLookup(values or None, "hit", [], [])
+        # 有新刷新未结束/过期时，可展示旧值但不作本次自动资格判断；
+        # 纯旧扁平文件整份视为 legacy 需重采。规则与批量查询共用 _lookup_in_doc。
+        return self._lookup_in_doc(self._read_profile_doc(), int(uid), namespace, now_s, required_groups)
 
     def begin_attempt(
         self,
@@ -377,6 +346,167 @@ class LotteryCache:
                 }
                 grp["retry_after_s"] = now + 60
             self._write_profile_doc(doc)
+
+    # ------------------------------------------------------------------ 批量读写（真人筛选断点续跑）
+
+    def get_profiles_batch(
+        self,
+        uids: List[int],
+        *,
+        namespace: str = "full",
+        now_s: Optional[int] = None,
+        required_groups: Optional[List[str]] = None,
+    ) -> Dict[int, CacheLookup]:
+        """一次读盘查询多个 UID，命中规则与 ``get_profile`` 完全一致。
+
+        真人筛选按批处理数千用户，逐个 ``get_profile`` 会反复读取整份画像文件；
+        这里只读一次文档，再逐个套用同一套 group 新鲜度判断。
+
+        Args:
+            uids: 待查询的 UID 列表。
+            namespace: 缓存空间。
+            now_s: 当前 UTC 秒级时间戳；缺省取系统时间。
+            required_groups: 该业务需要的 source-group 列表。
+
+        Returns:
+            ``{uid: CacheLookup}``。
+        """
+        doc = self._read_profile_doc()
+        return {int(uid): self._lookup_in_doc(doc, int(uid), namespace, now_s, required_groups) for uid in uids}
+
+    def merge_profiles_batch(
+        self,
+        results: Dict[int, Optional[Dict[str, Dict[str, Any]]]],
+        *,
+        namespace: str = "full",
+        groups: List[str],
+        now_s: Optional[int] = None,
+    ) -> None:
+        """在一次加锁读写内为多个 UID 记录一轮完整的 attempt 结果。
+
+        等价于对每个 UID、每个 group 依次 ``begin_attempt`` + ``merge_attempt``，
+        但整批只读写一次文件。``results[uid]`` 为 ``{group: values}`` 表示采集成功，
+        为 ``None`` 表示本次采集失败（保留历史成功、登记失败 attempt）。
+
+        Args:
+            results: UID 到分组结果的映射。
+            namespace: 缓存空间。
+            groups: 本轮刷新的 source-group 列表。
+            now_s: 本轮结束时间 UTC 秒；缺省取系统时间。
+        """
+        if not results:
+            return
+        now = int(now_s) if type(now_s) is int else int(time.time())
+        with _lock_for(self.profile_path()):
+            doc = self._read_profile_doc()
+            if not isinstance(doc, dict) or doc.get("schema_version") != _SCHEMA_VERSION:
+                doc = self._migrate_to_v3(doc)
+            for uid, plan in results.items():
+                entry = self._ensure_entry(doc, namespace, str(int(uid)))
+                for group in groups:
+                    grp = self._ensure_group(entry, group)
+                    seq = int(grp.get("latest_started_seq") or 0) + 1
+                    grp["latest_started_seq"] = seq
+                    if isinstance(plan, dict):
+                        grp["last_success"] = {"fetched_s": now, "values": dict(plan.get(group) or {}), "field_status": {}}
+                        grp["last_attempt"] = {"seq": seq, "started_s": now, "at_s": now, "status": "ok", "reason_code": None}
+                        grp["retry_after_s"] = None
+                    else:
+                        grp["last_attempt"] = {
+                            "seq": seq, "started_s": now, "at_s": now,
+                            "status": "error", "reason_code": "fetch_failed",
+                        }
+                        grp["retry_after_s"] = now + 60
+            self._write_profile_doc(doc)
+
+    def load_assessments(self, keys: List[str]) -> Dict[str, Dict[str, Any]]:
+        """按判定键读取已缓存的 AI 判定结果。
+
+        Args:
+            keys: ``assessment_key`` 生成的判定键列表。
+
+        Returns:
+            命中的 ``{key: assessment}``；缺失、损坏或已过期的键不返回。
+        """
+        doc = self._read_profile_doc()
+        store = doc.get("assessments") if isinstance(doc.get("assessments"), dict) else {}
+        now = int(time.time())
+        hits: Dict[str, Dict[str, Any]] = {}
+        for key in keys:
+            record = store.get(key)
+            if not isinstance(record, dict) or not isinstance(record.get("result"), dict):
+                continue
+            saved_s = record.get("saved_s")
+            if type(saved_s) is not int or not 0 <= now - saved_s <= _ASSESSMENT_TTL_S:
+                continue
+            hits[key] = dict(record["result"])
+        return hits
+
+    def save_assessments(self, results: Dict[str, Dict[str, Any]]) -> None:
+        """在一次加锁读写内保存一批 AI 判定结果，并顺带清理过期判定。
+
+        Args:
+            results: ``{assessment_key: assessment}``。
+        """
+        if not results:
+            return
+        now = int(time.time())
+        with _lock_for(self.profile_path()):
+            doc = self._read_profile_doc()
+            if not isinstance(doc, dict) or doc.get("schema_version") != _SCHEMA_VERSION:
+                doc = self._migrate_to_v3(doc)
+            store = doc.get("assessments") if isinstance(doc.get("assessments"), dict) else {}
+            # 过期判定不再可用，写入时顺带移除，避免文件无界增长。
+            store = {
+                key: record for key, record in store.items()
+                if isinstance(record, dict) and type(record.get("saved_s")) is int
+                and 0 <= now - record["saved_s"] <= _ASSESSMENT_TTL_S
+            }
+            for key, result in results.items():
+                store[key] = {"saved_s": now, "result": dict(result)}
+            doc["assessments"] = store
+            self._write_profile_doc(doc)
+
+    def _lookup_in_doc(
+        self,
+        doc: Dict[str, Any],
+        uid: int,
+        namespace: str,
+        now_s: Optional[int],
+        required_groups: Optional[List[str]],
+    ) -> CacheLookup:
+        """在已读入的文档上执行单个 UID 的命中判断（与 ``get_profile`` 同一规则）。"""
+        groups_required = list(required_groups or [])
+        if not doc:
+            return CacheLookup(None, "miss", ["missing_entry"], groups_required)
+        if doc.get("schema_version") != _SCHEMA_VERSION:
+            return CacheLookup(None, "legacy", ["legacy_unverified"], groups_required)
+        space = (doc.get("profiles") or {}).get(namespace) or {}
+        entry = space.get(str(int(uid))) if isinstance(space, dict) else None
+        if not isinstance(entry, dict):
+            return CacheLookup(None, "miss", ["missing_entry"], groups_required)
+        if entry.get("_legacy"):
+            return CacheLookup(None, "legacy", ["legacy_unverified"], groups_required)
+        groups = entry.get("groups") if isinstance(entry.get("groups"), dict) else {}
+        now = int(now_s) if type(now_s) is int else int(time.time())
+        refresh: List[str] = []
+        values: Dict[str, Any] = {}
+        stale_values: Dict[str, Any] = {}
+        for name in groups_required:
+            group = groups.get(name)
+            if isinstance(group, dict):
+                vals = (group.get("last_success") or {}).get("values")
+                if isinstance(vals, dict):
+                    stale_values.update(vals)
+            if not group_is_fresh(group, now, self._ttl_for(name)):
+                refresh.append(name)
+            else:
+                vals = (group.get("last_success") or {}).get("values")
+                if isinstance(vals, dict):
+                    values.update(vals)
+        if refresh:
+            return CacheLookup(stale_values or None, "stale", ["stale_group"], refresh)
+        return CacheLookup(values or None, "hit", [], [])
 
     # ------------------------------------------------------------------ 路径与写入
 

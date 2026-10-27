@@ -282,6 +282,8 @@ async def lifespan(app: FastAPI):
     config_manager = ConfigManager()
     # Web 入口独立运行时也必须初始化数据库全局管理器
     init_database()
+    # 抽奖任务：上次进程遗留的运行中任务标为已中断（等用户点「继续执行」，不自动续跑），并清理过期记录。
+    lottery.recover_tasks_on_startup()
     # 仅接线评论区常驻监控；动态采集没有常驻任务入口。
     global monitor_service
     monitor_service = ResidentCommentMonitor(comment.get_monitor, config_manager)

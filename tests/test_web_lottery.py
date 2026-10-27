@@ -720,3 +720,157 @@ def test_run_filter_task_cancel_reraises_and_marks_cancelled(monkeypatch):
     task_id = asyncio.run(scenario())
     assert lottery_module._tasks[task_id]["status"] == "cancelled"
     assert lottery_module._tasks[task_id]["message"] == "任务已取消"
+
+
+# ---------------------------------------------------------------------------
+# 任务持久化与继续执行（issue #13 后续）
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def task_db(tmp_path, monkeypatch):
+    """把持久化层指向 tmp 库（真实 SQLite + 迁移），返回 DatabaseManager。"""
+    from core.database import DatabaseManager
+    from web.routers import lottery_store
+
+    manager = DatabaseManager(str(tmp_path / "lottery_tasks.db"))
+    monkeypatch.setattr(lottery_store, "get_session", manager.get_session)
+    yield manager
+    manager.engine.dispose()
+
+
+def _row(manager, task_id):
+    """按句柄读取 tasks 表记录。"""
+    from core.database import Task
+
+    session = manager.get_session()
+    try:
+        return session.query(Task).filter(Task.task_key == task_id).first()
+    finally:
+        session.close()
+
+
+def test_task_lifecycle_is_persisted_and_queryable_after_restart(client, spawned, task_db):
+    """创建落 running；完成时连同结果写库；清空内存（模拟重启）后仍可查询到结果。"""
+    task_id = client.post("/api/lottery/filter/tasks", json={"target": "BV1xx411c7mD"}).json()["task_id"]
+    row = _row(task_db, task_id)
+    assert row.status == "running" and row.task_type == "lottery_filter"
+    assert row.params["request"]["target"] == "BV1xx411c7mD"
+
+    lottery_module._tasks[task_id].update(status="completed", message="完成", result={"real_users": [1]})
+    lottery_module._persist_final(task_id)
+    lottery_module._tasks.clear()
+
+    data = client.get(f"/api/lottery/tasks/{task_id}").json()["data"]
+    assert data["status"] == "completed"
+    assert data["result"] == {"real_users": [1]}
+    assert "request" not in data
+
+
+def test_startup_marks_running_interrupted_and_restores_winners(client, spawned, task_db, monkeypatch):
+    """启动收尾：遗留 running 标为 interrupted，不自动续跑；并恢复最近一次中奖名单。"""
+    from web.routers import lottery_store
+
+    lottery_store.create("done-draw", "draw", {"target": "BV1", "winner_count": 1})
+    lottery_store.finish("done-draw", "completed", "完成", {"winners": [{"uid": 9}]})
+    lottery_store.create("left-running", "filter", {"target": "BV1xx411c7mD"})
+    monkeypatch.setattr(lottery_module, "_latest_winners", [])
+
+    outcome = lottery_module.recover_tasks_on_startup(retention_days=7)
+
+    assert outcome["interrupted"] == 1
+    assert _row(task_db, "left-running").status == "interrupted"
+    assert lottery_module._latest_winners == [{"uid": 9}]
+    assert spawned == []  # 不自动续跑
+    data = client.get("/api/lottery/tasks/left-running").json()["data"]
+    assert data["status"] == "interrupted"
+
+
+def test_resume_interrupted_task_reuses_same_id_and_params(client, spawned, task_db):
+    """继续执行沿用原句柄与原参数，持久化记录改回 running；已运行中再点幂等。"""
+    from web.routers import lottery_store
+
+    lottery_store.create("t-resume", "draw", {"target": "BV1xx411c7mD", "winner_count": 2})
+    lottery_store.finish("t-resume", "interrupted", "服务重启")
+
+    response = client.post("/api/lottery/tasks/t-resume/resume")
+    assert response.status_code == 202
+    assert response.json() == {"success": True, "task_id": "t-resume", "resumed": True}
+    assert spawned == ["t-resume"]
+    assert lottery_module._tasks["t-resume"]["status"] == "running"
+    assert _row(task_db, "t-resume").status == "running"
+
+    again = client.post("/api/lottery/tasks/t-resume/resume").json()
+    assert again == {"success": True, "task_id": "t-resume", "resumed": False}
+    assert spawned == ["t-resume"]
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
+def test_resume_rejects_finished_tasks(client, spawned, task_db, status):
+    """已完成 / 失败 / 取消的任务不可继续执行，避免重新抽出另一份中奖名单。"""
+    from web.routers import lottery_store
+
+    lottery_store.create("t-end", "draw", {"target": "BV1xx411c7mD", "winner_count": 1})
+    lottery_store.finish("t-end", status, "结束", {"winners": []} if status == "completed" else None)
+
+    assert client.post("/api/lottery/tasks/t-end/resume").status_code == 409
+    assert spawned == []
+
+
+def test_resume_missing_task_returns_404(client, task_db):
+    """不存在或已过保留期的任务返回 404。"""
+    assert client.post("/api/lottery/tasks/nope/resume").status_code == 404
+
+
+def test_cancel_interrupted_task_marks_cancelled(client, task_db):
+    """重启后中断的任务可直接取消，之后不再允许继续执行。"""
+    from web.routers import lottery_store
+
+    lottery_store.create("t-int", "filter", {"target": "BV1xx411c7mD"})
+    lottery_store.finish("t-int", "interrupted", "服务重启")
+
+    response = client.post("/api/lottery/tasks/t-int/cancel")
+    assert response.json() == {"success": True, "task_id": "t-int", "status": "cancelled"}
+    assert _row(task_db, "t-int").status == "cancelled"
+    assert client.post("/api/lottery/tasks/t-int/resume").status_code == 409
+
+
+def test_startup_prunes_expired_finished_tasks_only(task_db):
+    """过期清理只删已结束的抽奖任务，不碰评论采集等其他任务类型。"""
+    from datetime import datetime, timedelta
+    from core.database import Task
+    from web.routers import lottery_store
+
+    old = datetime.now() - timedelta(days=30)
+    session = task_db.get_session()
+    try:
+        session.add(Task(task_key="old-lottery", task_type="lottery_draw", status="completed", completed_at=old))
+        session.add(Task(task_type="comment_collect", status="completed", completed_at=old, params={"bvid": "BV1"}))
+        session.commit()
+    finally:
+        session.close()
+
+    outcome = lottery_store.recover_on_startup(retention_days=7)
+
+    assert outcome["pruned"] == 1
+    assert _row(task_db, "old-lottery") is None
+    session = task_db.get_session()
+    try:
+        assert session.query(Task).filter(Task.task_type == "comment_collect").count() == 1
+    finally:
+        session.close()
+
+
+def test_persistence_failure_does_not_break_task(client, spawned, monkeypatch):
+    """数据库不可用时降级：任务照常创建运行，查询内存状态不受影响。"""
+    from web.routers import lottery_store
+
+    def broken_session():
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(lottery_store, "get_session", broken_session)
+    created = client.post("/api/lottery/filter/tasks", json={"target": "BV1xx411c7mD"})
+    assert created.status_code == 202
+    task_id = created.json()["task_id"]
+    assert client.get(f"/api/lottery/tasks/{task_id}").json()["data"]["status"] == "running"
+    assert client.get("/api/lottery/tasks/unknown").status_code == 404

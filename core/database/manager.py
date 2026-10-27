@@ -104,11 +104,38 @@ class DatabaseManager:
         已存在的表自动跳过（SQLAlchemy 默认行为）。
         """
         Base.metadata.create_all(bind=self.engine)
+        # tasks 表迁移与其余迁移互不依赖，放在最前，避免与其他分支在序列末尾追加的迁移相邻冲突
+        self._migrate_task_key_column()
         self._migrate_comment_member_columns()
         self._migrate_up_master_charge_count()
         self._migrate_video_stats_columns()
         self._migrate_hotspot_watch_event_columns()
         logger.info(f"数据库表创建完成: {self.db_path}")
+
+    def _migrate_task_key_column(self) -> None:
+        """为旧数据库幂等补充 ``tasks.task_key`` 列及其唯一索引。
+
+        抽奖后台任务用随机 UUID 作对外句柄，持久化后需按它查询；
+        已有的评论采集断点记录 ``task_key`` 为 NULL，SQLite 唯一索引允许多个 NULL，互不影响。
+
+        Args:
+            无。
+
+        Returns:
+            无；缺失列通过 SQLite ALTER TABLE 原位新增，索引用 IF NOT EXISTS 创建。
+        """
+        try:
+            existing = {column["name"] for column in inspect(self.engine).get_columns("tasks")}
+            with self.engine.begin() as connection:
+                if "task_key" not in existing:
+                    connection.execute(text("ALTER TABLE tasks ADD COLUMN task_key VARCHAR(64)"))
+                    logger.info("数据库迁移完成: tasks.task_key")
+                connection.execute(
+                    text("CREATE UNIQUE INDEX IF NOT EXISTS ux_tasks_task_key ON tasks (task_key)")
+                )
+        except Exception:
+            logger.exception("任务句柄字段迁移失败")
+            raise
 
     def _migrate_comment_member_columns(self) -> None:
         """为旧数据库幂等补充评论用户等级和会员 JSON 列。
