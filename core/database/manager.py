@@ -110,6 +110,7 @@ class DatabaseManager:
         self._migrate_up_master_charge_count()
         self._migrate_video_stats_columns()
         self._migrate_hotspot_watch_event_columns()
+        self._migrate_cookie_pool_plaintext_credentials()
         logger.info(f"数据库表创建完成: {self.db_path}")
 
     def _migrate_task_key_column(self) -> None:
@@ -271,6 +272,68 @@ class DatabaseManager:
                         logger.info("数据库迁移完成: hotspot_watch.%s", column_name)
         except Exception:
             logger.exception("hotspot_watch 事件字段迁移失败")
+            raise
+
+    def _migrate_cookie_pool_plaintext_credentials(self) -> None:
+        """幂等清理 ``cookie_pool`` 表中历史遗留的明文凭据列（issue #5 第 3 点）。
+
+        旧版本把 SESSDATA / bili_jct 明文写进独立列，只拿到库文件即可读取会话凭据。
+        本迁移：
+        - ``sessdata`` 明文改写为 ``sha256:<hex>`` 摘要（仍可用于去重）；
+          已带 ``sha256:`` 前缀的行跳过，重复启动不会二次摘要；
+        - ``bili_jct`` 非空值一律置为空串；
+        - 单行无法计算摘要时清空该列，宁可失去去重也不保留明文。
+
+        完整 Cookie 只保存在加密的 ``cookie_data`` 中，运行时字段由 Cookie 池解密后解析，
+        因此改写这两列不影响加载。注意：UPDATE 后旧明文仍可能残留在 SQLite 空闲页与备份文件中，
+        需要用户自行执行 VACUUM 并处理备份（见 CHANGELOG 发布说明）。
+
+        Args:
+            无。
+
+        Returns:
+            无；明文列原位改写，表不存在时直接跳过。
+        """
+        from .models_account import SESSDATA_DIGEST_PREFIX, sessdata_digest
+
+        try:
+            inspector = inspect(self.engine)
+            if not inspector.has_table("cookie_pool"):
+                return
+            existing = {column["name"] for column in inspector.get_columns("cookie_pool")}
+            migrated = 0
+            with self.engine.begin() as connection:
+                if "sessdata" in existing:
+                    rows = connection.execute(text(
+                        "SELECT id, sessdata FROM cookie_pool "
+                        "WHERE sessdata IS NOT NULL AND sessdata != ''"
+                    )).fetchall()
+                    for row_id, value in rows:
+                        if isinstance(value, str) and value.startswith(SESSDATA_DIGEST_PREFIX):
+                            continue
+                        try:
+                            if isinstance(value, bytes):
+                                value = value.decode("utf-8")
+                            digest = sessdata_digest(str(value).strip())
+                        except Exception:
+                            # 无法解析的值不能原样保留，直接清空
+                            logger.warning("cookie_pool id=%s 的 sessdata 无法计算摘要，已清空", row_id)
+                            digest = ""
+                        connection.execute(
+                            text("UPDATE cookie_pool SET sessdata = :digest WHERE id = :row_id"),
+                            {"digest": digest, "row_id": row_id},
+                        )
+                        migrated += 1
+                if "bili_jct" in existing:
+                    result = connection.execute(text(
+                        "UPDATE cookie_pool SET bili_jct = '' "
+                        "WHERE bili_jct IS NOT NULL AND bili_jct != ''"
+                    ))
+                    migrated += result.rowcount or 0
+            if migrated:
+                logger.info("数据库迁移完成: cookie_pool 明文凭据列已清理 %s 处", migrated)
+        except Exception:
+            logger.exception("cookie_pool 明文凭据列清理失败")
             raise
 
     def get_session(self) -> Session:

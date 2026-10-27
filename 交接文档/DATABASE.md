@@ -32,7 +32,7 @@
 
 ## 3. Cookie 安全
 
-`cookie_pool.cookie_data` 是加密文本。旧明文记录在加载时会尝试自动加密回写；`sessdata/bili_jct/buvid3` 字段存在于当前 schema，维护时同样按敏感数据处理。
+`cookie_pool.cookie_data` 是加密文本。旧明文记录在加载时会尝试自动加密回写；`sessdata` 列只存 `sha256:<hex>` 摘要（用于去重），`bili_jct` 列恒为空串，运行时字段从解密后的 `cookie_data` 解析。旧库的明文列由 `DatabaseManager.create_tables()` 幂等迁移清理，迁移后建议执行 `VACUUM`，历史备份文件仍可能含明文。加密失败时 Cookie 只保留在内存，不落库。`buvid3` 仍为明文设备指纹，维护时同样按敏感数据处理。
 
 Fernet 密钥位于 `config/.key`。仅有数据库而没有原密钥时，已有密文不能解密；备份/迁移必须把数据库、`.key`、`.secrets` 作为同一组，但不得公开分发。
 

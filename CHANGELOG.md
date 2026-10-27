@@ -240,6 +240,20 @@
 
 - live 网络、真实 B 站、H 层真实发包计数、跨进程 / 跨重启持久；桌面 Qt 交互单跑未做。
 
+### Cookie 池凭据不再明文落库（issue #5 第 3 点）
+
+- `cookie_pool.sessdata` 列改存 `sha256:<hex>` 摘要，仅用于去重；`bili_jct` 列恒为空串。
+  完整 Cookie 只保存在 Fernet 加密的 `cookie_data` 中，运行时字段由 `load_from_db` 解密后解析。
+- 加密失败时**不再降级写明文**：本次登录态只保留在内存池并记 warning，重启后需重新登录。
+- `DatabaseManager.create_tables()` 新增幂等迁移：已有明文 `sessdata` 改写为摘要、
+  `bili_jct` 清空；已是 `sha256:` 前缀的行跳过，重复启动零改动。
+
+**发布说明**
+
+- 迁移用 UPDATE 原位改写，旧明文**可能残留在 SQLite 空闲页 / WAL 文件**中。升级并启动一次后，
+  建议关闭程序再对 `data/bili_ops.db` 执行 `VACUUM`（例如 `sqlite3 data/bili_ops.db "VACUUM;"`）。
+- 迁移只处理当前库文件；`data/backup_*.db` 等**历史备份仍含明文凭据**，需用户自行删除或妥善保管。
+
 ## [0.2.4] - 2026-10-02
 
 **主题：02 单视频时序跟踪上线；06 发现通道接通常驻调度与 watch 候选入池。**

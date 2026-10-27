@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib
 from datetime import datetime
 
@@ -172,18 +173,26 @@ def risk_log(monkeypatch):
     return recorder
 
 
+def sessdata_digest(sessdata: str) -> str:
+    """独立计算 cookie_pool.sessdata 列应存的摘要（不复用生产实现）。"""
+    return "sha256:" + hashlib.sha256(sessdata.encode("utf-8")).hexdigest()
+
+
 def _encrypt(pool, raw: str) -> str:
     """用池内真实 Fernet 加密，构造入库密文。"""
     return pool._cipher.encrypt(raw.encode("utf-8")).decode("utf-8")
 
 
 def _add_row(session, pool, *, raw="SESSDATA=abc", sessdata="abc", is_valid=True, fail_count=0):
-    """向 cookie_pool 表插入一行并返回主键。"""
+    """按当前落库格式向 cookie_pool 表插入一行并返回主键。
+
+    sessdata 列只存摘要、bili_jct 列为空串，与 add_cookie 的落库口径一致。
+    """
     row = CookiePoolModel(
         account_id=1,
         cookie_data=_encrypt(pool, raw),
-        sessdata=sessdata,
-        bili_jct="jct",
+        sessdata=sessdata_digest(sessdata),
+        bili_jct="",
         buvid3="buvid",
         is_valid=is_valid,
         fail_count=fail_count,
@@ -289,8 +298,8 @@ def test_load_from_db_decrypts_rows_and_keeps_failure_state(env):
     assert cookie.cookie_data == "SESSDATA=plain1"
     assert cookie.is_valid is False
     assert cookie.fail_count == 4
-    # 失效记录也必须留在内存池中，供巡检恢复
-    assert env.pool.cookies[0].sessdata == "abc"
+    # 失效记录也必须留在内存池中，供巡检恢复；sessdata 从解密后的 Cookie 串解析
+    assert env.pool.cookies[0].sessdata == "plain1"
 
 
 def test_load_from_db_migrates_plaintext_row_to_ciphertext(env):
@@ -343,6 +352,41 @@ def test_load_from_db_keeps_plaintext_when_migration_fails(env):
 
     assert len(env.pool.cookies) == 1
     assert env.pool.cookies[0].cookie_data == "SESSDATA=broken"
+
+
+def test_load_from_db_still_works_after_plaintext_migration(env, tmp_path):
+    """旧库明文列经迁移改写为摘要/空串后，load_from_db 仍能从密文解析出完整字段。"""
+    session = env.session()
+    try:
+        # 旧版落库格式：cookie_data 已加密，但 sessdata/bili_jct 列是明文
+        session.add(CookiePoolModel(
+            account_id=1,
+            cookie_data=_encrypt(env.pool, "DedeUserID=6; SESSDATA=old-sess; bili_jct=old-jct; buvid3=bv"),
+            sessdata="old-sess",
+            bili_jct="old-jct",
+            buvid3="bv",
+            is_valid=True,
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+    # 重启：重新构造 DatabaseManager 触发 create_tables 中的迁移
+    DatabaseManager(str(tmp_path / "cookie_pool.db"))
+
+    session = env.session()
+    try:
+        session.expire_all()
+        row = session.query(CookiePoolModel).one()
+        assert (row.sessdata, row.bili_jct) == (sessdata_digest("old-sess"), "")
+        env.pool.load_from_db(session)
+    finally:
+        session.close()
+
+    cookie = env.pool.cookies[0]
+    assert (cookie.sessdata, cookie.bili_jct, cookie.buvid3) == ("old-sess", "old-jct", "bv")
+    # 迁移后的行仍可按 SESSDATA / DedeUserID 撤销
+    assert env.pool.remove_account_cookies(sessdata="old-sess") == {"memory": 1, "db": 1}
 
 
 def test_load_from_db_clears_previous_pool_content(env):
@@ -484,8 +528,8 @@ def test_add_cookie_degrades_to_memory_when_persist_fails(env, monkeypatch):
     assert len(env.pool.cookies) == 1
 
 
-def test_add_cookie_falls_back_to_plaintext_when_encrypt_fails(env, monkeypatch):
-    """加密失败时降级明文入库，避免登录态丢失。"""
+def test_add_cookie_skips_db_when_encrypt_fails(env, caplog):
+    """加密失败时不得落库（不再降级明文），登录态只保留在内存池并告警。"""
     session = env.session()
     try:
 
@@ -497,14 +541,54 @@ def test_add_cookie_falls_back_to_plaintext_when_encrypt_fails(env, monkeypatch)
                 raise RuntimeError("kms down")
 
         env.pool._cipher = _EncryptFail()
-        cookie = env.pool.add_cookie("SESSDATA=plainfallback", persist=True)
+        with caplog.at_level("WARNING", logger="bilibili.cookie_pool"):
+            cookie = env.pool.add_cookie("SESSDATA=plainfallback; bili_jct=jf", persist=True)
         session.expire_all()
-        stored = session.query(CookiePoolModel).one().cookie_data
+        count = session.query(CookiePoolModel).count()
     finally:
         session.close()
 
-    assert cookie.id > 0
-    assert stored == "SESSDATA=plainfallback"
+    assert count == 0
+    assert cookie.id == -1
+    assert env.pool.cookies == [cookie]
+    assert (cookie.sessdata, cookie.bili_jct) == ("plainfallback", "jf")
+    assert any("加密失败" in record.getMessage() for record in caplog.records)
+
+
+def test_add_cookie_persist_stores_digest_instead_of_plaintext(env):
+    """落库行的 sessdata 列只存 sha256 摘要、bili_jct 列为空，库内不出现凭据明文。"""
+    env.pool.add_cookie("DedeUserID=3; SESSDATA=secret-sess; bili_jct=secret-jct", persist=True)
+
+    session = env.session()
+    try:
+        row = session.query(CookiePoolModel).one()
+    finally:
+        session.close()
+
+    assert row.sessdata == sessdata_digest("secret-sess")
+    assert row.sessdata.startswith("sha256:")
+    assert row.bili_jct == ""
+    for value in (row.cookie_data, row.sessdata, row.bili_jct):
+        assert "secret-sess" not in value
+        assert "secret-jct" not in value
+
+
+def test_add_cookie_dedupes_by_digest_across_restart(env):
+    """重启后内存池为空时，同一 SESSDATA 再次入库应按摘要命中已有行，不新增记录。"""
+    first = env.pool.add_cookie("SESSDATA=same; bili_jct=a", persist=True)
+    # 模拟重启：内存池清空，只剩数据库
+    env.pool.cookies = []
+
+    second = env.pool.add_cookie("SESSDATA=same; bili_jct=b", persist=True)
+
+    session = env.session()
+    try:
+        count = session.query(CookiePoolModel).count()
+    finally:
+        session.close()
+
+    assert count == 1
+    assert second.id == first.id
 
 
 # ---------------------------------------------------------------------------
@@ -513,10 +597,16 @@ def test_add_cookie_falls_back_to_plaintext_when_encrypt_fails(env, monkeypatch)
 
 
 def _remaining_sessdata(env):
-    """返回 (内存池 sessdata 列表, 数据库 sessdata 列表)。"""
+    """返回 (内存池 sessdata 列表, 数据库 sessdata 列表)。
+
+    数据库 sessdata 列只存摘要，这里从解密后的 cookie_data 解析 SESSDATA 再比较。
+    """
     session = env.session()
     try:
-        db_values = sorted(row.sessdata for row in session.query(CookiePoolModel).all())
+        db_values = sorted(
+            env.pool._parse_cookie(env.pool._cipher.decrypt(row.cookie_data.encode()).decode()).get("SESSDATA", "")
+            for row in session.query(CookiePoolModel).all()
+        )
     finally:
         session.close()
     return sorted(c.sessdata for c in env.pool.cookies), db_values
@@ -564,6 +654,31 @@ def test_remove_account_cookies_matches_legacy_plaintext_row(env):
 
     assert result == {"memory": 0, "db": 1}
     assert _remaining_sessdata(env) == ([], [])
+
+
+def test_remove_account_cookies_matches_db_row_by_digest(env):
+    """数据库行 cookie_data 无法用当前密钥解密时，按 sessdata 摘要列仍能命中并删除。"""
+    from cryptography.fernet import Fernet
+
+    other_cipher = Fernet(Fernet.generate_key())
+    session = env.session()
+    try:
+        # 用另一把密钥加密：解密兜底匹配失效，只能靠摘要列命中
+        session.add(CookiePoolModel(
+            account_id=1,
+            cookie_data=other_cipher.encrypt(b"SESSDATA=db-only").decode(),
+            sessdata=sessdata_digest("db-only"),
+            bili_jct="",
+        ))
+        session.commit()
+        _add_row(session, env.pool, raw="SESSDATA=keep", sessdata="keep")
+    finally:
+        session.close()
+
+    result = env.pool.remove_account_cookies(sessdata="db-only")
+
+    assert result == {"memory": 0, "db": 1}
+    assert _remaining_sessdata(env) == ([], ["keep"])
 
 
 def test_remove_account_cookies_ignores_empty_arguments(env, monkeypatch):
@@ -963,9 +1078,13 @@ def test_get_cookie_pool_is_lazy_singleton_loading_db_and_secrets(env, monkeypat
     finally:
         session.close()
 
+    # 新池须与入库时使用同一密钥，才能从解密后的 cookie_data 解析出 SESSDATA
+    config_stub = _SecretConfigManager("SESSDATA=secret-row")
+    config_stub._cipher = env.pool._cipher
+
     monkeypatch.setattr(cookie_pool_module, "_global_cookie_pool", None)
     monkeypatch.setattr(cookie_pool_module, "get_session", env.manager.get_session)
-    monkeypatch.setattr(CONFIG_MODULE, "ConfigManager", lambda: _SecretConfigManager("SESSDATA=secret-row"))
+    monkeypatch.setattr(CONFIG_MODULE, "ConfigManager", lambda: config_stub)
 
     first = cookie_pool_module.get_cookie_pool()
     second = cookie_pool_module.get_cookie_pool()
