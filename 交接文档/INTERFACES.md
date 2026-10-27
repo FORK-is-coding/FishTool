@@ -152,7 +152,7 @@
 
 ### `GET passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key=...`
 
-无登录态；轮询间隔由桌面向导控制，成功时从响应跳转 URL 解析 Cookie。不要把返回 Cookie 写入日志。
+无登录态；轮询由 WebUI 欢迎页发起（`web/frontend/static/js/app.auth.js` 每 2 秒调用一次 `POST /api/auth/poll`，180 秒本地倒计时），后端每次请求只调一次 B 站 poll，成功时从响应跳转 URL 解析 Cookie。不要把返回 Cookie 写入日志。
 
 ### `GET /x/web-interface/nav`（登录态校验）
 

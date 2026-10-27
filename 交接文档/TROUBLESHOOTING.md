@@ -87,13 +87,14 @@
 
 ## 11. exe 打包后启动失败
 
-- 当前应执行 `pyinstaller --clean --noconfirm build.spec`，不是 README 中不存在的 `build.py`。
-- 查 `build/build/warn-build.txt`、`dist/PACKAGE_BUILD_LOG*.txt` 和 exe 旁 `data/logs/error.log`。
+- 打包命令是 `pyinstaller --clean --noconfirm build.spec`（需先 `pip install pyinstaller`），与 README 快速开始一致；项目没有 `build.py`。
+- 打包阶段报图标格式错误：环境里缺 Pillow（`assets/图标.png` 需要它转换），先执行 `pip install -r requirements.txt`。
+- 查 `build/build/warn-build.txt` 和 exe 旁 `data/logs/error.log`。
 - 检查 frontend 静态资源、PyQtWebEngine hidden import、可写 config/data 目录。
 - PDF 单独失败时检查系统 `wkhtmltopdf`，不是重装整个程序。
 
 ## 12. 测试与归档
 
-当前有效脚本优先使用 `tools/test_logs_api.py`、`tools/test_web.ps1`、`tools/run_packaging_test.ps1`。`tools/archive/` 是历史验证资料；运行前必须读源码确认端口、数据写入和依赖，`dead_*.py` 禁止作为生产测试。
+当前有效脚本优先使用 `tools/test_logs_api.py`、`tools/test_web.ps1`；`tools/run_packaging_test.ps1` 调用的 `run_packaging.py` 不在仓库中，不能直接使用。`tools/archive/` 是历史验证资料；运行前必须读源码确认端口、数据写入和依赖，`dead_*.py` 禁止作为生产测试。
 
 故障修复后至少记录：触发条件、接口/错误码、改动文件、数据库是否迁移、验证命令、日志位置和回滚方法。
