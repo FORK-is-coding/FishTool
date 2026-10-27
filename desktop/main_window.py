@@ -660,76 +660,23 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(2000, self.check_and_load_web)
     
     def _on_web_load_finished(self, ok: bool):
-        """检查桌面端页面加载结果及弹窗入口是否成功导出。
+        """记录桌面端页面加载结果，并为业务页补标记桌面环境。
+
+        生产页面不得注入模拟点击：此前这里的弹窗验收探针会点击「加入群聊」
+        「校验中奖名单」并删除 ``.app-modal-backdrop``，会误删加载时真实弹出的
+        提示，并让每次加载都走一遍中奖名单校验入口（#10）。弹窗回归请改用
+        ``tools/verify_desktop_regressions.py``，它使用独立页面，不影响主窗口。
 
         Args:
             ok: QWebEngine 页面加载是否成功。
         """
         logger.info("[桌面Web] 页面加载完成: ok=%s url=%s", ok, self.web_view.url().toString())
         if not ok or not self.web_view.url().toString().startswith(self.web_url):
-            # init_ui 的内嵌加载页也会触发 loadFinished；只验收真实 HTTP 业务页。
+            # init_ui 的内嵌加载页也会触发 loadFinished；只处理真实 HTTP 业务页。
             return
 
         # 双保险：DocumentCreation 脚本之外，页面加载完成后再标记一次桌面环境。
         self.web_view.page().runJavaScript("window.__FISHTOOL_DESKTOP__ = true;")
-
-        # 通过实际按钮 click() 创建两类弹窗，再检查布局尺寸和 z-index。
-        # 这比直接调用函数更接近用户操作，可捕获 onclick 未导出、遮罩不可见等问题。
-        probe_script = """
-            (() => {
-                const result = {
-                    pageUrl: window.location.href,
-                    groupEntry: typeof window.showGroupQrModal === 'function',
-                    verifyEntry: typeof window.verifyLotteryWinners === 'function',
-                    alertEntry: typeof window.showAppAlert === 'function',
-                    groupButton: false,
-                    verifyButton: false,
-                    groupModal: false,
-                    groupImage: false,
-                    groupVisible: false,
-                    verifyModal: false,
-                    verifyVisible: false
-                };
-                const isVisible = element => {
-                    if (!element) return false;
-                    const style = window.getComputedStyle(element);
-                    const rect = element.getBoundingClientRect();
-                    return style.display !== 'none' && style.visibility !== 'hidden' &&
-                        Number(style.opacity || 1) > 0 && rect.width > 0 && rect.height > 0 &&
-                        Number(style.zIndex || 0) >= 1000;
-                };
-                try {
-                    const groupButton = document.querySelector('button[onclick="showGroupQrModal()"]');
-                    result.groupButton = Boolean(groupButton);
-                    groupButton?.click();
-                    result.groupModal = Boolean(document.querySelector('.group-qr-modal'));
-                    const groupBackdrop = document.querySelector('.app-modal-backdrop');
-                    const image = document.querySelector('.group-qr-image');
-                    result.groupImage = Boolean(image && image.src.includes('/static/'));
-                    result.groupVisible = isVisible(groupBackdrop);
-                    groupBackdrop?.remove();
-
-                    const verifyButton = document.getElementById('lottery-verify-winners-button');
-                    result.verifyButton = Boolean(verifyButton);
-                    verifyButton?.click();
-                    const verifyBackdrop = document.querySelector('.app-modal-backdrop');
-                    result.verifyModal = Boolean(verifyBackdrop);
-                    result.verifyVisible = isVisible(verifyBackdrop);
-                    verifyBackdrop?.remove();
-                    // 自检只验证弹窗入口，不得改变桌面端启动默认页。
-                    if (typeof window.navigateTo === 'function') {
-                        window.navigateTo('welcome');
-                    }
-                } catch (error) {
-                    result.error = String(error && error.stack ? error.stack : error);
-                }
-                return result;
-            })();
-        """
-        self.web_view.page().runJavaScript(
-            probe_script,
-            lambda result: logger.info("[桌面Web] 弹窗实测探针: %s", result),
-        )
 
     def load_web_ui(self):
         """加载 WebUI 页面。
