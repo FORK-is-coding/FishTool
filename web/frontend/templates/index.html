@@ -223,6 +223,7 @@
                         <input id="hotspot-watch-interval" class="form-control" type="number" min="60" placeholder="采样间隔(秒，可选)">
                         <button class="btn btn-primary" type="button" onclick="submitHotspotWatch()">加入跟踪</button>
                     </div>
+                    <div id="hotspot-watch-collector-hint" class="hotspot-lifecycle-meta" role="status" hidden></div>
                     <div id="hotspot-watch-list"><p class="text-muted">加载中...</p></div>
                 </section>
 
@@ -858,7 +859,41 @@
         tracking: '跟踪中',
         expired: '已到期',
         released: '已释放',
+        // 展示态（后端 display_state 下发）：记录在跟踪中，但后台 watch 采样任务未运行。
+        pending_enable: '待启用',
     };
+
+    // 秒级 epoch 转本地时间文本；缺失/非法时返回「暂无」，不用 0 或本地 now 顶替。
+    function hotspotWatchEpochText(epoch) {
+        if (typeof epoch !== 'number' || !Number.isFinite(epoch) || epoch <= 0) return '暂无';
+        return new Date(epoch * 1000).toLocaleString('zh-CN');
+    }
+
+    // 采集运行态提示：采样任务未运行时说明开启方式（monitor.watch_enable）与预计请求量。
+    function renderHotspotWatchCollectorHint(items, collector) {
+        const hint = document.getElementById('hotspot-watch-collector-hint');
+        if (!hint) return;
+        const status = collector || {};
+        const pending = items.filter(item => item.display_state === 'pending_enable');
+        if (status.running || !pending.length) {
+            hint.hidden = true;
+            hint.innerHTML = '';
+            return;
+        }
+        // 每个目标每次采样发 1 次详情请求，按各自采样间隔折算每日请求量。
+        const dailyRequests = pending.reduce((sum, item) => {
+            const interval = Number(item.sample_interval_s);
+            return sum + (Number.isFinite(interval) && interval > 0 ? Math.ceil(86400 / interval) : 0);
+        }, 0);
+        const configKey = escapeHtml(status.enable_config_key || 'monitor.watch_enable');
+        const reason = status.status_known
+            ? '后台持续采集未运行，以下目标只保存了记录，还不会定期采样。'
+            : '无法确认后台持续采集是否在运行，以下目标可能还不会定期采样。';
+        hint.innerHTML = `<p><strong>待启用：</strong>${reason}</p>
+            <p>开启方式：在配置目录的 config.yaml（或 user_config.yaml）中设置 <code>${configKey}: true</code>（即 monitor 段下 watch_enable: true），然后重启 FishTool。</p>
+            <p>预计请求量：当前列表 ${pending.length} 个待启用目标按各自采样间隔约 ${dailyRequests} 次/天，实际发送受 config/budget.yaml 中 watch 类别配额限制。</p>`;
+        hint.hidden = false;
+    }
 
     // 读取当前筛选状态；空字符串表示不筛选（后端默认返回全部）。
     function hotspotWatchSelectedState() {
@@ -876,6 +911,7 @@
             const result = await apiRequest(`/hotspot/watch${query}`);
             const payload = (result && result.data) || {};
             renderHotspotWatchList(payload.items || [], payload);
+            renderHotspotWatchCollectorHint(payload.items || [], payload.collector);
         } catch (error) {
             container.innerHTML = `<p style="color:red;">加载跟踪列表失败: ${escapeHtml(error.message)}</p>`;
         }
@@ -890,7 +926,9 @@
             return;
         }
         const rows = items.map(item => {
-            const label = HOTSPOT_WATCH_STATE_LABELS[item.state] || item.state;
+            // 标签优先用后端 display_state（tracking 但采样未运行 → 待启用），缺省回退三态 state。
+            const shownState = item.display_state || item.state;
+            const label = HOTSPOT_WATCH_STATE_LABELS[shownState] || shownState;
             // 已确认阶段 / 覆盖度由后端现算下发（routes_watch.py: last_confirmed_stage /
             // coverage_ratio / coverage_state），前端只展示不推断；缺字段留空，
             // 不把「未知」渲染成 0。
@@ -907,7 +945,7 @@
             return `<div class="hotspot-watch-item">
                 <span class="hotspot-stage-pill">${escapeHtml(label)}</span>
                 <strong>${escapeHtml(item.bvid)}</strong>
-                <span class="hotspot-lifecycle-meta">失败 ${Number(item.failure_count) || 0} 次 · 下次应采 ${Number(item.next_due_epoch_s) || 0}${stage}${coverage}</span>
+                <span class="hotspot-lifecycle-meta">失败 ${Number(item.failure_count) || 0} 次 · 下次应采 ${Number(item.next_due_epoch_s) || 0} · 最近成功采样 ${escapeHtml(hotspotWatchEpochText(item.last_success_epoch_s))}${stage}${coverage}</span>
                 ${action}
             </div>`;
         }).join('');
@@ -930,10 +968,14 @@
         const interval = intervalInput ? Number(intervalInput.value) : NaN;
         if (Number.isFinite(interval) && interval > 0) body.sample_interval_s = interval;
         try {
-            await apiRequest('/hotspot/watch', { method: 'POST', body: JSON.stringify(body) });
+            const result = await apiRequest('/hotspot/watch', { method: 'POST', body: JSON.stringify(body) });
             if (bvidInput) bvidInput.value = '';
             if (intervalInput) intervalInput.value = '';
             await loadHotspotWatch();
+            // 创建响应带 display_state：采样任务未运行时明确告知「待启用」，避免误以为已在采集。
+            if (result && result.data && result.data.display_state === 'pending_enable') {
+                showAppAlert('已加入跟踪，状态为「待启用」：后台持续采集未运行，开启方式见列表上方说明。');
+            }
         } catch (error) {
             showAppAlert(`加入跟踪失败: ${error.message}`);
         }

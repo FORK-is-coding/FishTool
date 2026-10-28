@@ -286,6 +286,9 @@ async def lifespan(app: FastAPI):
     global monitor_service
     monitor_service = ResidentCommentMonitor(comment.get_monitor, config_manager)
     await monitor_service.start()
+    # 单视频跟踪接口需要知道 watch 采样任务是否真在运行（复用 snapshot 的 watch_task_running）。
+    from web.routers.hotspot import routes_watch as _routes_watch
+    _routes_watch.configure_runtime(lambda: monitor_service.snapshot())
 
     # 排名服务：由 Web 层组装 client + service 再注入；启动期不读 config/、不连库。
     global benchmark_service, benchmark_client
@@ -393,6 +396,7 @@ async def lifespan(app: FastAPI):
                 await benchmark_service.shutdown()
             except Exception as exc:  # noqa: BLE001 - 关闭失败不阻塞进程退出
                 logger.error("排名服务关闭失败: %s", exc, exc_info=True)
+        _routes_watch.configure_runtime(None)
         if monitor_service is not None:
             await monitor_service.shutdown()
         if benchmark_client is not None:
