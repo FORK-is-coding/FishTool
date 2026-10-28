@@ -17,6 +17,8 @@
   本文件一行不碰，故自动到期行的原因码不受手动路径影响（重复调用为幂等空操作）；
 - 列表每项带**算好的** ``state`` 字段（由 ``classify_state(row, now)`` 现算下发），
   前端不自行判断三态；
+- 列表 / 详情 / 创建响应另带 ``collector``（watch 采样任务运行态）与 ``display_state``：
+  tracking 但采样任务未运行时为 ``pending_enable``，``state`` 三态本身不变；
 - 时间字段一律 ``*_epoch_s`` 原样透出，本层**不做任何格式化 / 时区换算**。
 
 事务口径：读路径只查不改；写路径由本文件 ``commit``（``watch_store`` 只 ``flush``，
@@ -25,7 +27,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, Callable, Optional
 
 from fastapi import HTTPException, Query
 from sqlalchemy import update
@@ -48,6 +50,75 @@ _WATCH_ALGORITHM_VERSION = "lifecycle_v2"
 
 #: state 过滤合法取值：唯一来源是 watch_store 的 ``WatchState`` 枚举，不在此另造态名。
 _WATCH_STATE_VALUES = frozenset(state.value for state in WatchState)
+
+#: watch 采样循环的开启配置项（与 ``core/monitor_service.py`` 中 ``start()`` 的判断同名）。
+_WATCH_ENABLE_CONFIG_KEY = "monitor.watch_enable"
+
+#: 展示态：记录处于 tracking，但后台 watch 采样任务未运行（state 三态本身不变）。
+_DISPLAY_PENDING_ENABLE = "pending_enable"
+
+#: 常驻服务运行态提供者（由 ``web/main.py`` lifespan 注入，返回 ``snapshot()`` 结构）。
+_runtime_provider: Optional[Callable[[], dict]] = None
+
+
+def configure_runtime(provider: Optional[Callable[[], dict]]) -> None:
+    """注入常驻服务运行态提供者（由 ``web/main.py`` lifespan 或测试调用）。
+
+    Args:
+        provider: 无参可调用对象，返回含 ``watch_task_running`` 的 dict
+            （即 ``ResidentCommentMonitor.snapshot()``）；传 None 表示解除注入。
+    """
+    global _runtime_provider
+    _runtime_provider = provider
+
+
+def _collector_status() -> dict[str, Any]:
+    """读取 watch 采样任务的运行态；未注入或读取异常时按「未运行」降级，绝不抛出。
+
+    Returns:
+        ``{"running": bool, "status_known": bool, "enable_config_key": str}``；
+        ``status_known=False`` 表示无法确认运行态（未注入 / 读取失败）。
+    """
+    status = {"running": False, "status_known": False, "enable_config_key": _WATCH_ENABLE_CONFIG_KEY}
+    if _runtime_provider is None:
+        return status
+    try:
+        snapshot = _runtime_provider() or {}
+        status["running"] = bool(snapshot.get("watch_task_running", False))
+        status["status_known"] = "watch_task_running" in snapshot
+    except Exception as exc:  # noqa: BLE001 - 运行态只用于展示，读取失败不阻断 watch 接口
+        logger.warning("读取 watch 采样任务运行态失败，按未运行展示: %s", exc)
+    return status
+
+
+def _display_state(state: str, collector: dict[str, Any]) -> str:
+    """计算展示态：tracking 且采集任务未运行时为 ``pending_enable``，其余原样透传 state。
+
+    Args:
+        state: ``classify_state`` 算好的三态值。
+        collector: :func:`_collector_status` 的结果。
+
+    Returns:
+        展示态字符串。
+    """
+    if state == WatchState.TRACKING.value and not collector.get("running"):
+        return _DISPLAY_PENDING_ENABLE
+    return state
+
+
+def _with_collector(dto: dict[str, Any]) -> dict[str, Any]:
+    """给单目标 DTO 附上 ``collector`` 运行态与 ``display_state``（详情 / 创建接口用）。
+
+    Args:
+        dto: :func:`_serialize_watch_dto` 的结果。
+
+    Returns:
+        同一个 dict，追加 ``collector`` 与 ``display_state`` 两个字段。
+    """
+    collector = _collector_status()
+    dto["collector"] = collector
+    dto["display_state"] = _display_state(dto["state"], collector)
+    return dto
 
 
 def _now_epoch_s() -> int:
@@ -132,7 +203,8 @@ async def list_watch(
 
     Returns:
         ``{"success": True, "data": {"items": [...], "total": N, "limit": L, "offset": O}}``。
-        其中 ``total`` 是**过滤后**的匹配总数，``items`` 是「先过滤、后分页」的切片。
+        其中 ``total`` 是**过滤后**的匹配总数，``items`` 是「先过滤、后分页」的切片；
+        data 另带 ``collector``（采样任务运行态），每项另带 ``display_state``。
 
     Raises:
         HTTPException: state 非法 400；库读取失败 500。
@@ -145,10 +217,13 @@ async def list_watch(
     try:
         # 三态过滤一律走 classify_state（逐行现算），不在 SQL 里另写一套 active/ttl 判断。
         rows = session.query(HotspotWatch).order_by(HotspotWatch.id.asc()).all()
+        # 采集任务运行态整页只读一次；state 过滤仍只按三态，不受展示态影响。
+        collector = _collector_status()
         matched: list[dict[str, Any]] = []
         for row in rows:
             item = _serialize_watch(row, now_epoch_s)
             if state is None or item["state"] == state:
+                item["display_state"] = _display_state(item["state"], collector)
                 matched.append(item)
         # 先按 state 过滤，再对逻辑结果集做分页，避免「SQL 先分页后过滤」造成漏项。
         page = matched[offset: offset + limit]
@@ -161,6 +236,7 @@ async def list_watch(
                 "offset": offset,
                 # 来源字段：与本页每个目标所用算法同源（watch 链路恒 LifecycleV2）。
                 "algorithm_version": _WATCH_ALGORITHM_VERSION,
+                "collector": collector,
             },
         }
     except HTTPException:
@@ -192,7 +268,7 @@ async def get_watch(bvid: str):
         row = session.query(HotspotWatch).filter(HotspotWatch.bvid == bvid).first()
         if row is None:
             raise HTTPException(status_code=404, detail=f"跟踪目标不存在: {bvid}")
-        return {"success": True, "data": _serialize_watch_dto(row, now_epoch_s)}
+        return {"success": True, "data": _with_collector(_serialize_watch_dto(row, now_epoch_s))}
     except HTTPException:
         raise
     except Exception as exc:
@@ -229,7 +305,7 @@ async def create_watch(payload: WatchCreateRequest):
         row = upsert_watch(session, **kwargs)
         session.commit()
         session.refresh(row)
-        return {"success": True, "data": _serialize_watch_dto(row, now_epoch_s)}
+        return {"success": True, "data": _with_collector(_serialize_watch_dto(row, now_epoch_s))}
     except ValueError as exc:
         session.rollback()
         logger.warning("加入跟踪参数非法 bvid=%s: %s", payload.bvid, exc)
