@@ -2,6 +2,10 @@
 
 # 后台协程调度任务执行。
 import asyncio
+# 计算请求体指纹，用于复用运行中的同参任务。
+import hashlib
+# 请求体规范化序列化，保证指纹稳定。
+import json
 # 用单调时钟计算任务耗时与剩余时间。
 import time
 # 生成不可预测的任务 ID。
@@ -9,7 +13,7 @@ import uuid
 # 日期与时间处理，用于抽奖区间过滤。
 from datetime import date, datetime, time as datetime_time
 # 类型标注保证接口一致性与 IDE 提示。
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Coroutine, Dict, List, Literal, Optional
 
 # FastAPI 路由与 HTTP 异常。
 from fastapi import APIRouter, HTTPException
@@ -37,6 +41,12 @@ logger = get_logger(__name__)
 _service: Optional[LotteryService] = None
 # 内存任务表：task_id -> 任务状态，服务重启后任务即失效。
 _tasks: Dict[str, Dict[str, Any]] = {}
+# 已结束任务在内存表中的保留时长（秒），超时后在创建新任务时清理，避免内存无限增长。
+_FINISHED_TASK_TTL_SECONDS = 3600
+# 任务状态中仅供服务端使用的字段，查询接口不对外返回。
+_INTERNAL_TASK_KEYS = frozenset({"started_monotonic", "finished_monotonic", "fingerprint"})
+# 运行中后台协程的强引用（task_id -> asyncio.Task），防止事件循环只持弱引用导致任务被回收；完成后自动释放。
+_background_tasks: Dict[str, "asyncio.Task[None]"] = {}
 # 最近一次抽奖的中奖名单快照，供校验接口复用。
 _latest_winners: List[Dict[str, Any]] = []
 
@@ -116,9 +126,84 @@ def get_service() -> LotteryService:
     return _service
 
 
+# 计算请求体指纹。
+def _request_fingerprint(kind: Literal["filter", "draw"], request: BaseModel) -> str:
+    """按任务类型与规范化请求体生成指纹，参数完全一致的请求得到相同指纹。"""
+    # 日期等字段先转成 JSON 友好形式，再按键排序序列化，保证同参同指纹。
+    payload = json.dumps(
+        {"kind": kind, "request": request.model_dump(mode="json")},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    )
+    # 只保留摘要，避免在任务表里留存完整请求体。
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+# 查找参数相同且仍在运行的任务。
+def _find_running_task(fingerprint: str) -> Optional[str]:
+    """返回指纹相同且状态仍为 running 的任务 ID，没有则返回 None。"""
+    # 遍历内存任务表，只复用尚未结束的任务。
+    for task_id, task in _tasks.items():
+        # 指纹一致且仍在运行时直接复用。
+        if task.get("status") == "running" and task.get("fingerprint") == fingerprint:
+            # 返回可复用的任务 ID。
+            return task_id
+    # 没有可复用的运行中任务。
+    return None
+
+
+# 清理过期的已结束任务。
+def _prune_finished_tasks() -> None:
+    """移除结束时间超过保留时长的任务，运行中任务一律保留。"""
+    # 以单调时钟为准计算过期截止点。
+    deadline = time.monotonic() - _FINISHED_TASK_TTL_SECONDS
+    # 先收集再删除，避免遍历期间修改字典。
+    expired = [
+        task_id for task_id, task in _tasks.items()
+        if task.get("status") != "running"
+        and task.get("finished_monotonic") is not None
+        and task["finished_monotonic"] < deadline
+    ]
+    # 逐个移除过期任务。
+    for task_id in expired:
+        # 已被其他路径移除时静默跳过。
+        _tasks.pop(task_id, None)
+
+
+# 后台协程结束时的收尾。
+def _on_background_task_done(task_id: str) -> None:
+    """释放强引用，记录结束时间；协程被取消等意外结束时把任务标记为失败。"""
+    # 释放强引用，避免已结束协程常驻内存。
+    _background_tasks.pop(task_id, None)
+    # 任务状态可能已被清理，此时无需收尾。
+    task = _tasks.get(task_id)
+    # 任务不存在时直接返回。
+    if task is None:
+        # 无状态可更新。
+        return
+    # 协程已结束却仍是 running（如被取消），落为失败，避免同参请求一直复用一个已死任务。
+    if task.get("status") == "running":
+        # 意外中止统一提示重新发起。
+        task.update(status="failed", stage="failed", message="任务意外中止，请重新发起", estimated_seconds=0)
+    # 记录结束时间，供过期清理使用。
+    task["finished_monotonic"] = time.monotonic()
+
+
+# 启动后台协程并保存强引用。
+def _spawn(task_id: str, coroutine: Coroutine[Any, Any, None]) -> None:
+    """创建后台协程，持有强引用直至其结束。"""
+    # 交给事件循环调度。
+    background = asyncio.create_task(coroutine)
+    # 事件循环只弱引用任务，必须自行持有强引用。
+    _background_tasks[task_id] = background
+    # 结束后释放引用并完成状态收尾。
+    background.add_done_callback(lambda _done, tid=task_id: _on_background_task_done(tid))
+
+
 # 创建后台任务状态。
-def _create_task(kind: Literal["filter", "draw"]) -> str:
+def _create_task(kind: Literal["filter", "draw"], fingerprint: Optional[str] = None) -> str:
     """创建后台任务状态并返回不可预测任务 ID。"""
+    # 新建任务前顺带清理过期的已结束任务，控制内存任务表规模。
+    _prune_finished_tasks()
     # 用随机 UUID 作为任务句柄，避免顺序 ID 被前端猜测。
     task_id = uuid.uuid4().hex
     # 初始化任务状态，进度从排队阶段开始。
@@ -132,6 +217,7 @@ def _create_task(kind: Literal["filter", "draw"]) -> str:
         "estimated_seconds": None,
         "started_monotonic": time.monotonic(),
         "result": None,
+        "fingerprint": fingerprint,
     }
     # 返回新任务 ID 供前端轮询。
     return task_id
@@ -295,25 +381,41 @@ async def verify_winners(request: VerifyWinnersRequest) -> Dict[str, Any]:
 @router.post("/filter/tasks", status_code=202)
 # 创建真人筛选后台任务接口。
 async def start_filter_task(request: FilterTaskRequest) -> Dict[str, Any]:
-    """创建评论区真人批量筛选后台任务。"""
+    """创建评论区真人批量筛选后台任务；同参任务仍在运行时直接复用。"""
+    # 按请求体计算指纹，用于识别重复启动。
+    fingerprint = _request_fingerprint("filter", request)
+    # 同参任务仍在运行时返回原任务，避免重复采集。
+    running_id = _find_running_task(fingerprint)
+    # 命中运行中任务直接复用。
+    if running_id:
+        # 返回原任务 ID 并标记为复用。
+        return {"success": True, "task_id": running_id, "reused": True}
     # 创建任务状态并立即返回 ID。
-    task_id = _create_task("filter")
+    task_id = _create_task("filter", fingerprint)
     # 将耗时工作交给后台协程，接口立即返回任务 ID 供前端轮询。
-    asyncio.create_task(_run_filter_task(task_id, request))
+    _spawn(task_id, _run_filter_task(task_id, request))
     # 返回任务 ID 供前端轮询。
-    return {"success": True, "task_id": task_id}
+    return {"success": True, "task_id": task_id, "reused": False}
 
 
 @router.post("/draw/tasks", status_code=202)
 # 创建随机抽奖后台任务接口。
 async def start_draw_task(request: DrawTaskRequest) -> Dict[str, Any]:
-    """创建随机抽奖后台任务。"""
+    """创建随机抽奖后台任务；同参任务仍在运行时直接复用。"""
+    # 按请求体计算指纹，用于识别重复启动。
+    fingerprint = _request_fingerprint("draw", request)
+    # 同参任务仍在运行时返回原任务，避免重复抽奖。
+    running_id = _find_running_task(fingerprint)
+    # 命中运行中任务直接复用。
+    if running_id:
+        # 返回原任务 ID 并标记为复用。
+        return {"success": True, "task_id": running_id, "reused": True}
     # 创建任务状态并立即返回 ID。
-    task_id = _create_task("draw")
+    task_id = _create_task("draw", fingerprint)
     # 将耗时工作交给后台协程，接口立即返回任务 ID 供前端轮询。
-    asyncio.create_task(_run_draw_task(task_id, request))
+    _spawn(task_id, _run_draw_task(task_id, request))
     # 返回任务 ID 供前端轮询。
-    return {"success": True, "task_id": task_id}
+    return {"success": True, "task_id": task_id, "reused": False}
 
 
 @router.get("/tasks/{task_id}")
@@ -326,7 +428,7 @@ async def get_task(task_id: str) -> Dict[str, Any]:
     if not task:
         # 任务不存在或服务重启后内存表已清空。
         raise HTTPException(status_code=404, detail="任务不存在或服务已重启")
-    # 剔除内部计时字段，避免把实现细节暴露给前端。
-    public_task = {key: value for key, value in task.items() if key != "started_monotonic"}
+    # 剔除内部计时与指纹字段，避免把实现细节暴露给前端。
+    public_task = {key: value for key, value in task.items() if key not in _INTERNAL_TASK_KEYS}
     # 返回任务进度与结果。
     return {"success": True, "data": public_task}

@@ -178,9 +178,13 @@ function sleep(milliseconds) {
     return new Promise(resolve => window.setTimeout(resolve, milliseconds));
 }
 
-// 轮询后台任务状态直到完成/失败：每次轮询都刷新加载 UI，最多 1800 次（约 30 分钟）。
-async function pollTask(statusUrl, elementId) {
-    for (let attempt = 0; attempt < 1800; attempt += 1) {
+// 轮询后台任务状态直到完成/失败：每次轮询都刷新加载 UI，默认最多 1800 次、间隔 1 秒（约 30 分钟）。
+// options: { maxAttempts: 最大轮询次数, intervalMs: 轮询间隔毫秒 }，不传时保持原默认值。
+// 达到上限时任务可能仍在后台运行：抛出的错误带 code='TASK_STILL_RUNNING'，调用方可据此保留任务继续查看。
+async function pollTask(statusUrl, elementId, options = {}) {
+    const maxAttempts = options.maxAttempts ?? 1800;
+    const intervalMs = options.intervalMs ?? 1000;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         const response = await apiRequest(statusUrl, {}, false);
         const task = response.data || {};
         showLoading(elementId, {
@@ -190,9 +194,12 @@ async function pollTask(statusUrl, elementId) {
         });
         if (task.status === 'completed') return task.result || {};
         if (task.status === 'failed') throw new Error(task.message || '任务执行失败');
-        await sleep(1000);
+        await sleep(intervalMs);
     }
-    throw new Error('任务等待超时，请稍后重试');
+    // 文案保持不变，其他调用方行为不受影响；code 供需要区分“仍在运行”的调用方使用。
+    const timeoutError = new Error('任务等待超时，请稍后重试');
+    timeoutError.code = 'TASK_STILL_RUNNING';
+    throw timeoutError;
 }
 
 // 统一把 ISO 时间串格式化为 zh-CN 本地时间文本，空值显示未知。
