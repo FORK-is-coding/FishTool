@@ -1,14 +1,25 @@
 /* ===== style.config.css —— 拆分自 style.css（AI 配置教程），原始行 L928-L1075 ===== */
-/* AI 配置教程沿用全站莫兰迪暖色与大圆角视觉语言。 */
+/* AI 配置教程：C+ 白色档案。说明条用浅灰颗粒底 + 竖向三色段，步骤为白卡，密钥警示为深色面板。 */
 .config-intro {
-    margin: -18px 0 24px;
-    padding-left: 14px;
-    color: var(--text-secondary);
-    border-left: 3px solid var(--accent-color);
+    position: relative;
+    margin: 0 0 24px;
+    padding-left: 16px;
+    color: var(--ink-2);
 }
 
-.ai-guide-card {
-    background-color: #fffaf3;
+/* 页说明左侧黄 / 青绿短竖条。 */
+.config-intro::before {
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    left: 0;
+    width: 3px;
+    content: "";
+    background: linear-gradient(var(--signal) 0 60%, var(--mint) 60%);
+}
+
+.ai-guide-card .guide-heading h2 {
+    font: 800 20px/1.2 var(--f-body);
 }
 
 .guide-heading {
@@ -24,26 +35,60 @@
 }
 
 .guide-heading p {
-    color: var(--text-secondary);
+    margin-top: 6px;
+    color: var(--ink-3);
+    font-size: 13px;
 }
 
+/* 新手指引徽标：细线框 + 左侧黄色短条。 */
 .guide-badge {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
     flex: 0 0 auto;
-    padding: 7px 12px;
-    color: #6a5545;
-    font-size: 12px;
-    font-weight: 700;
-    border: 1px solid var(--border-color);
-    border-radius: 999px;
-    background: var(--primary-soft);
+    height: 26px;
+    padding: 0 10px 0 18px;
+    color: var(--ink);
+    font: 700 11px/1 var(--f-body);
+    letter-spacing: .1em;
+    border: 0;
+    border-radius: 2px;
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--ink-2);
 }
 
+.guide-badge::before {
+    position: absolute;
+    top: 7px;
+    bottom: 7px;
+    left: 7px;
+    width: 4px;
+    content: "";
+    background: var(--signal);
+}
+
+/* 说明条：浅灰颗粒底 + 左侧竖向三色段。 */
 .guide-explainer {
-    padding: 16px 18px;
-    color: var(--text-secondary);
-    border-left: 3px solid var(--accent-color);
-    border-radius: var(--inner-radius);
-    background: rgba(163, 177, 138, 0.12);
+    position: relative;
+    padding: 18px 22px 18px 28px;
+    color: var(--ink-2);
+    border: 0;
+    border-radius: var(--r-card);
+    background: var(--paper-2) url("/static/tex/grain.svg");
+}
+
+.guide-explainer::before {
+    position: absolute;
+    top: 18px;
+    bottom: 18px;
+    left: 12px;
+    width: 4px;
+    content: "";
+    background: linear-gradient(var(--magenta) 0 25%, var(--mint) 25% 50%, var(--signal) 50%, rgba(255, 250, 0, 0));
+}
+
+.guide-explainer p {
+    font-size: 13px;
 }
 
 .guide-explainer p + p {
@@ -51,86 +96,104 @@
 }
 
 .guide-explainer strong {
-    color: var(--text-primary);
-    font-size: 16px;
+    color: var(--ink);
+    font-size: 15px;
 }
 
+/* 步骤卡网格：三列，卡间留缝。 */
 .guide-steps {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 14px;
-    margin: 18px 0;
+    gap: 18px;
+    margin: 22px 0;
 }
 
+/* 步骤卡：白卡 + 4px 圆角 + 轻阴影。 */
 .guide-step {
+    position: relative;
     min-width: 0;
-    padding: 18px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--inner-radius);
-    background: var(--bg-secondary);
+    padding: 22px 24px 20px;
+    border: 0;
+    border-radius: var(--r-card);
+    background-color: #fff;
+    box-shadow: var(--shadow-card);
 }
 
+/* 步骤编号：细体大号数字，不再用实心圆。 */
 .guide-step > span {
-    display: inline-grid;
-    place-items: center;
-    width: 34px;
-    height: 34px;
-    margin-bottom: 12px;
-    color: white;
-    font-size: 12px;
-    font-weight: 700;
-    border-radius: 50%;
-    background: var(--primary-color);
+    display: block;
+    margin-bottom: 18px;
+    color: var(--ink);
+    font: 300 36px/1 var(--f-en);
+    letter-spacing: -.03em;
 }
 
 .guide-step h3 {
     margin-bottom: 7px;
-    color: var(--text-primary);
-    font-size: 16px;
+    color: var(--ink);
+    font: 800 16px/1.3 var(--f-body);
 }
 
 .guide-step p {
-    color: var(--text-secondary);
+    color: var(--ink-3);
     font-size: 13px;
     overflow-wrap: anywhere;
 }
 
 .guide-step code {
-    color: #667f8c;
+    color: var(--ink);
     overflow-wrap: anywhere;
 }
 
+/* 配置说明条：竖条换成黄 / 青绿两段，与教程说明区分。 */
 .guide-config {
-    border-left-color: var(--primary-color);
-    background: var(--primary-soft);
+    background: var(--paper) url("/static/tex/grain.svg");
+    box-shadow: inset 0 0 0 1px var(--paper-3);
 }
 
+.guide-config::before {
+    background: linear-gradient(var(--signal) 0 60%, var(--mint) 60%);
+}
+
+/* 密钥警示：深色面板 + 红色细圈警示标。 */
 .api-key-warning {
     display: flex;
     align-items: center;
     gap: 14px;
-    margin-top: 18px;
-    padding: 14px 16px;
-    color: #79544f;
-    border: 1px solid rgba(180, 111, 105, 0.42);
-    border-radius: var(--inner-radius);
-    background: rgba(180, 111, 105, 0.09);
+    margin-top: 24px;
+    padding: 16px 20px;
+    color: #d9d9d9;
+    border: 0;
+    border-radius: var(--r-card);
+    background: #191919 url("/static/tex/hatch-dark.svg");
+}
+
+.api-key-warning p {
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.api-key-warning strong {
+    color: #fff;
+    font-size: 14px;
 }
 
 .api-key-warning > span {
     display: grid;
     flex: 0 0 auto;
     place-items: center;
-    width: 30px;
-    height: 30px;
-    color: white;
-    font-weight: 800;
+    width: 32px;
+    height: 32px;
+    color: #ff6b62;
+    font: 800 16px/1 var(--f-en);
     border-radius: 50%;
-    background: var(--danger-color);
+    background: rgba(224, 54, 44, .16);
+    box-shadow: inset 0 0 0 1px rgba(224, 54, 44, .5);
 }
 
-.ai-config-card {
-    border-top: 3px solid var(--primary-color);
+/* 模型配置卡：表单宽度收在 640px 内，长输入框不铺满整卡。 */
+.ai-config-card .form-group {
+    max-width: 640px;
 }
 
 @media (max-width: 900px) {

@@ -1,4 +1,7 @@
-/* ===== style.responsive.css —— 拆分自 style.css（响应式适配），原始行 L1848-L1935 ===== */
+/* ===== style.responsive.css —— 响应式适配 =====
+   C+ v2：侧栏在所有宽度下都是 60px 图标栏（文字改为悬停标签），这里不再收窄侧栏；
+   版心留白 --gutter / 区块间距 --block 的断点在 style.base.css。 */
+
 /* 窄屏下采集目标、账号指标和视频明细全部改为单列，避免文字相互遮挡。 */
 @media (max-width: 768px) {
     .monitor-target-grid,
@@ -24,20 +27,15 @@
     }
 }
 
-/* 窄屏适配：侧边栏收窄为 60px 图标栏，隐藏文字。 */
+/* 窄屏适配：看板与卡片网格改为单列，标题行改为纵向排列。 */
 @media (max-width: 768px) {
-    .sidebar {
-        width: 60px;
-    }
-
-    .sidebar .logo h2,
-    .nav-item span:not(.icon) {
+    .app-topbar > .tb-path,
+    .app-topbar > .tb-rec {
         display: none;
     }
 
-    .main-content {
-        margin-left: 60px;
-        padding: 20px;
+    .app-topbar > .tb-fill {
+        margin-left: 0;
     }
 
     .comment-dashboard {

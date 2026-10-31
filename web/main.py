@@ -40,6 +40,8 @@ import logging
 import sys
 # 导入操作系统接口，用于读取 §18.2 事件开关环境变量。
 import os
+# 导入 MIME 类型表，用于给前端字体文件注册正确的 Content-Type。
+import mimetypes
 # 导入类型工具
 from typing import Any, Callable
 # 从 pathlib 导入符号
@@ -559,6 +561,10 @@ static_dir = web_dir / "frontend" / "static"
 # 对输入做运算得到结果
 templates_dir = web_dir / "frontend" / "templates"
 logger.info("Web 资源目录: web=%s, static=%s, templates=%s", web_dir, static_dir, templates_dir)
+
+# 部分 Windows 注册表没有 .woff2 映射，StaticFiles 会按 text/plain 返回，浏览器拒绝加载字体；
+# 挂载前显式注册 font/woff2。
+mimetypes.add_type("font/woff2", ".woff2")
 
 # 前端静态资源目录存在时才挂载，避免构建期报错
 if static_dir.exists():

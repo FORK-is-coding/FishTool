@@ -21,16 +21,16 @@ function getDashboardChartTheme() {
     const styles = getComputedStyle(document.documentElement);
     const cssVar = (name, fallback) => styles.getPropertyValue(name).trim() || fallback;
     return {
-        primary: cssVar('--primary-color', '#d4a373'),
-        secondary: cssVar('--secondary-color', '#c8997f'),
-        accent: cssVar('--accent-color', '#e8b896'),
+        primary: cssVar('--primary-color', '#383838'),
+        secondary: cssVar('--secondary-color', '#3c3c3c'),
+        accent: cssVar('--accent-color', '#fffa00'),
         background: cssVar('--bg-secondary', '#ffffff'),
-        text: cssVar('--text-primary', '#4a4a4a'),
-        mutedText: cssVar('--text-secondary', '#7a7a7a'),
-        border: cssVar('--border-color', '#e5ddd5'),
-        success: cssVar('--success-color', '#a8c5a1'),
-        warning: cssVar('--warning-color', '#e8b896'),
-        danger: cssVar('--danger-color', '#d19b89'),
+        text: cssVar('--text-primary', '#191919'),
+        mutedText: cssVar('--text-secondary', '#8a8a8a'),
+        border: cssVar('--border-color', '#d9d9d9'),
+        success: cssVar('--success-color', '#1f9d6a'),
+        warning: cssVar('--warning-color', '#e08a00'),
+        danger: cssVar('--danger-color', '#e0362c'),
     };
 }
 

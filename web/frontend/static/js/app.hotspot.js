@@ -64,8 +64,8 @@ function renderTagCloudResult(result, zoneName) {
         .slice(0, 20)
         .map(([tag, freq], i) =>
             `<div style="display: inline-block; margin: 10px; padding: 8px 16px;
-                  background: linear-gradient(135deg, #d4a373, #c8997f);
-                  color: white; border-radius: 20px; font-size: ${14 + freq * 0.5}px;">
+                  background: var(--btn, #383838);
+                  color: #fff; border-radius: 20px; font-size: ${14 + freq * 0.5}px;">
                 ${i + 1}. ${escapeHtml(tag)} (${escapeHtml(freq)})
             </div>`
         ).join('');
@@ -437,12 +437,14 @@ async function loadHotspotTimeline(bvid, titleRow) {
         // 只取最近 12 个点，时间按快照顺序升序排列。
         const recent = points.slice(-12);
         const times = recent.map(p => (p.time || '').slice(5, 16));
-        // 四个互动指标使用莫兰迪色系区分，播放为主轴。
+        // 四个互动指标的颜色读 style.base.css 的设计令牌：播放用墨色做主轴，其余用状态色区分。
+        const rootStyle = getComputedStyle(document.documentElement);
+        const token = (name, fallback) => rootStyle.getPropertyValue(name).trim() || fallback;
         const metricSeries = [
-            { key: 'view', name: '播放', color: '#d4a373' },
-            { key: 'danmaku', name: '弹幕', color: '#8ab17d' },
-            { key: 'reply', name: '评论', color: '#7a9cc6' },
-            { key: 'like', name: '点赞', color: '#c98a8a' },
+            { key: 'view', name: '播放', color: token('--ink', '#191919') },
+            { key: 'danmaku', name: '弹幕', color: token('--ok', '#1f9d6a') },
+            { key: 'reply', name: '评论', color: token('--info', '#2d5bd8') },
+            { key: 'like', name: '点赞', color: token('--warn', '#e08a00') },
         ];
         box.innerHTML = `<div class="hotspot-timeline-title">互动趋势（最近 ${recent.length} 次快照）</div><div class="hotspot-timeline-chart"></div>`;
         const chartDom = box.querySelector('.hotspot-timeline-chart');
@@ -532,7 +534,7 @@ async function openHotspotAccount(mid, bvid) {
                 </div>
                 <div class="hotspot-drawer-guard">
                     <span>充电人数</span><b>${d.charge_count === null || d.charge_count === undefined ? '暂无数据' : d.charge_count + ' 人'}</b>
-                    ${d.charge_source === 'unavailable' ? '<span class="hotspot-live-dot" style="background:#8a8f98;">接口不可用</span>' : ''}
+                    ${d.charge_source === 'unavailable' ? '<span class="hotspot-live-dot" style="background:var(--ink-3, #8a8a8a);">接口不可用</span>' : ''}
                 </div>
                 <div class="hotspot-drawer-guard">
                     <span>每千粉舰长率</span><b>${formatPermille(d.guard_count, d.follower)}</b>

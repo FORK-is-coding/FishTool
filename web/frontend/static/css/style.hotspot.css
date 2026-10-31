@@ -1,8 +1,20 @@
-/* 热点生命周期 rev3：复用全局莫兰迪暖色变量。 */
+/* 热点生命周期：C+ 白色档案 / 工业平面。白卡 4px 圆角 + 轻阴影，卡间留缝；徽标为细线框，阶段用短色条。 */
 .hotspot-section-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; }
-.hotspot-algorithm-badge { padding:6px 12px; border-radius:999px; color:var(--text-secondary); background:var(--primary-soft); border:1px solid var(--border-color); font-size:12px; }
-.hotspot-notice { color:var(--text-secondary); font-size:13px; margin:10px 0 16px; }
-.hotspot-notice-sub { margin:-8px 0 16px; color:var(--text-secondary); font-size:12px; opacity:.85; }
+/* 算法版本徽标：等宽小字 + 细线框，不铺底色 */
+.hotspot-algorithm-badge {
+    display:inline-flex;
+    align-items:center;
+    min-height:24px;
+    padding:4px 10px;
+    border-radius:2px;
+    color:var(--ink-3);
+    background:transparent;
+    box-shadow:inset 0 0 0 1px var(--rule);
+    font:600 11px/1.2 var(--f-mono);
+    letter-spacing:.08em;
+}
+.hotspot-notice { margin:12px 0 16px; color:var(--ink-2); font-size:13px; line-height:1.7; }
+.hotspot-notice-sub { margin:-8px 0 18px; color:var(--ink-3); font-size:12px; }
 /* 热点页表单行：标签独占一行，输入框/下拉框/按钮之间统一留 20px 间距。
    只作用于 #hotspot-page，避免影响评论、抽奖、配置等其它页面。 */
 #hotspot-page .form-group {
@@ -39,131 +51,316 @@
     flex:1 1 100%;
     max-width:none;
 }
-.hotspot-lifecycle-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
-.hotspot-lifecycle-card { background:var(--bg-elevated); border:1px solid var(--border-color); border-radius:var(--card-radius); padding:18px; box-shadow:var(--shadow); transition:box-shadow .2s, transform .2s; }
-.hotspot-lifecycle-card:hover { box-shadow:var(--shadow-hover); transform:translateY(-2px); }
-.hotspot-lifecycle-card h3 { color:var(--text-primary); font-size:16px; margin-bottom:5px; }
-.hotspot-lifecycle-meta { color:var(--text-secondary); font-size:13px; }
-.hotspot-confidence { color:var(--success-color); font-weight:600; }
-.hotspot-progress-row { display:flex; align-items:center; gap:12px; margin-top:16px; color:var(--text-secondary); font-size:13px; flex-wrap:wrap; }
-/* 生命周期进度条：与全局 loading-track 同一套高度、圆角和主题渐变。 */
+/* 生命周期卡片网格：卡间留 20px 缝，不用分隔线 */
+.hotspot-lifecycle-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; }
+/* 白卡：底纹由 style.base.css 的白卡底纹统一提供，这里只写底色，不用 background 简写覆盖纹理 */
+.hotspot-lifecycle-card {
+    position:relative;
+    overflow:hidden;
+    padding:22px 24px 20px;
+    border:0;
+    border-radius:var(--r-card);
+    background-color:#fff;
+    box-shadow:var(--shadow-card);
+    transition:box-shadow .25s, transform .3s var(--ease);
+}
+.hotspot-lifecycle-card:hover { transform:translateY(-2px); box-shadow:var(--shadow-hover); }
+/* 阶段短色条：左上 48x3；阶段类（stage-*）只改 --stage，不铺整块色 */
+.hotspot-lifecycle-card::before {
+    position:absolute;
+    top:0;
+    left:24px;
+    width:48px;
+    height:3px;
+    content:"";
+    background:var(--stage, var(--ink-4));
+}
+.hotspot-lifecycle-card > * { position:relative; }
+.hotspot-lifecycle-card h3 { color:var(--ink); font:700 15px/1.45 var(--f-body); }
+.hotspot-lifecycle-meta { color:var(--ink-3); font-size:12px; line-height:1.85; }
+.hotspot-confidence,
+.hotspot-up-count { color:var(--ink); font-family:var(--f-mono); font-weight:600; }
+.hotspot-progress-row { display:flex; align-items:center; gap:12px; margin-top:16px; color:var(--ink-2); font-size:13px; flex-wrap:wrap; }
+/* 生命周期进度条：4px 细条，填充为青绿到黄的渐隐（不铺整条纯黄） */
 .hotspot-progress-row progress {
     flex:1;
     min-width:160px;
-    height:10px;
+    height:4px;
     margin:0;
     overflow:hidden;
     vertical-align:middle;
     appearance:none;
     -webkit-appearance:none;
-    border:1px solid var(--border-color);
-    border-radius:999px;
-    background:var(--bg-tertiary);
+    border:0;
+    border-radius:2px;
+    background:var(--paper-3);
 }
 .hotspot-progress-row progress::-webkit-progress-bar {
-    border-radius:999px;
-    background:var(--bg-tertiary);
+    border-radius:2px;
+    background:var(--paper-3);
 }
 .hotspot-progress-row progress::-webkit-progress-value {
-    border-radius:999px;
-    background:linear-gradient(90deg, var(--primary-color), var(--accent-color));
+    border-radius:2px;
+    background:linear-gradient(90deg, var(--mint), var(--signal) 70%, rgba(255, 250, 0, .35));
     transition:width .3s ease;
 }
 .hotspot-progress-row progress::-moz-progress-bar {
-    border-radius:999px;
-    background:linear-gradient(90deg, var(--primary-color), var(--accent-color));
+    border-radius:2px;
+    background:linear-gradient(90deg, var(--mint), var(--signal) 70%, rgba(255, 250, 0, .35));
 }
 .hotspot-progress-row .btn { flex-shrink:0; }
-/* 生命周期/采集参数下拉：复用 .form-control 的尺寸与配色，只额外限制间距。 */
+/* 生命周期/采集参数下拉：尺寸与配色沿用 .form-control，只收窄字号与最小宽度。 */
 .hotspot-collect-select {
     width:auto;
     max-width:none;
     min-width:132px;
     flex:0 1 auto;
-    padding:9px 12px;
-    font-size:14px;
+    font-size:12px;
     cursor:pointer;
 }
-/* 阶段标签与卡片操作行 */
-.hotspot-stage-pill { padding:2px 10px; border-radius:999px; font-size:12px; color:var(--text-secondary); background:var(--primary-soft); border:1px solid var(--border-color); }
-/* 卡片每千粉转化伪徽标：圆角背景小标签，与阶段 pill 同族样式但用强调色区分 */
-.hotspot-metric-badges { display:inline-flex; gap:4px; margin-left:4px; flex-wrap:wrap; vertical-align:middle; }
-.hotspot-metric-badge { padding:2px 8px; border-radius:999px; font-size:11px; line-height:1.4; color:var(--text-primary); background:rgba(251,114,153,0.12); border:1px solid rgba(251,114,153,0.35); white-space:nowrap; }
+/* 卡片标题行：标题独占一行，下一行依次排阶段胶囊、趋势徽标、转化徽标（行距 10，列距 6） */
+.hotspot-card-title-row { display:flex; flex-wrap:wrap; align-items:center; gap:10px 6px; cursor:pointer; }
+.hotspot-card-title-row h3 { flex:1 1 100%; margin-bottom:0; }
+/* 阶段胶囊：浅灰底 + 左侧阶段色圆点 */
+.hotspot-stage-pill {
+    position:relative;
+    display:inline-flex;
+    align-items:center;
+    height:22px;
+    padding:0 10px 0 18px;
+    border-radius:11px;
+    color:var(--ink);
+    background:var(--paper-2);
+    font:700 11px/1 var(--f-body);
+    letter-spacing:.08em;
+}
+.hotspot-stage-pill::before {
+    position:absolute;
+    top:8px;
+    left:8px;
+    width:6px;
+    height:6px;
+    border-radius:50%;
+    content:"";
+    background:var(--stage, var(--ink-4));
+}
+/* 阶段类：运行时拼出，只设置阶段色变量 */
+.stage-rise { --stage:var(--danger); }
+.stage-emerge { --stage:var(--mint); }
+.stage-stable { --stage:var(--info); }
+.stage-decline { --stage:var(--ink-4); }
+/* 卡片每千粉转化徽标：细线框等宽小字，与阶段胶囊同高 */
+.hotspot-metric-badges { display:inline-flex; gap:4px; flex-wrap:wrap; vertical-align:middle; }
+.hotspot-metric-badge {
+    display:inline-flex;
+    align-items:center;
+    height:22px;
+    padding:0 8px;
+    border-radius:2px;
+    color:var(--ink-2);
+    background:transparent;
+    box-shadow:inset 0 0 0 1px var(--rule);
+    font:500 11px/1 var(--f-mono);
+    white-space:nowrap;
+}
 
-/* 卡片趋势徽标：与抽屉增长判定联动，增长▲ / 显著增长▲▲ / 下滑▼ */
-.hotspot-trend-badge { display:inline-block; margin-left:4px; padding:2px 6px; border-radius:999px; font-size:11px; line-height:1; vertical-align:middle; }
-.hotspot-trend-up { color:#c0553b; background:rgba(192,85,59,.12); border:1px solid rgba(192,85,59,.35); }
-.hotspot-trend-down { color:#4a6b8a; background:rgba(74,107,138,.12); border:1px solid rgba(74,107,138,.35); }
-.hotspot-card-title-row { display:flex; align-items:center; justify-content:space-between; gap:10px; cursor:pointer; }
-.hotspot-card-title-row h3 { margin-bottom:0; }
-.hotspot-up-count { color:var(--primary-color); font-weight:600; }
-.hotspot-card-actions { margin-top:12px; display:flex; gap:8px; }
-.btn-sm { padding:4px 10px; font-size:12px; }
-/* 时间轴：卡片内嵌，默认折叠，点击标题区展开 */
-.hotspot-timeline-box { display:none; margin-top:12px; padding-top:10px; border-top:1px dashed var(--border-color); }
+/* 卡片趋势徽标：与抽屉增长判定联动，增长▲ / 显著增长▲▲ / 下滑▼；细线圆框，颜色只在文字与线 */
+.hotspot-trend-badge {
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    min-width:22px;
+    height:22px;
+    padding:0 4px;
+    border-radius:11px;
+    font-size:9px;
+    line-height:1;
+    vertical-align:middle;
+    box-shadow:inset 0 0 0 1px currentColor;
+}
+.hotspot-trend-up { color:var(--danger); }
+.hotspot-trend-down { color:var(--ok); }
+.hotspot-card-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
+.hotspot-card-actions > .btn,
+.hotspot-drawer-actions > .btn { margin-left:0; }
+/* 时间轴：卡片内嵌，默认折叠，点击标题区展开；用浅灰底区分，不画虚线 */
+.hotspot-timeline-box { display:none; margin-top:12px; padding:10px 12px; border-radius:2px; background:var(--paper); }
 .hotspot-timeline-box.hotspot-timeline-open { display:block; }
-.hotspot-timeline-title { font-size:12px; color:var(--text-secondary); margin-bottom:8px; }
+.hotspot-timeline-title { margin-bottom:8px; color:var(--ink-3); font:500 11px/1.4 var(--f-mono); letter-spacing:.06em; }
 .hotspot-timeline-chart { width:100%; height:220px; }
-.hotspot-timeline-empty { font-size:12px; color:var(--text-secondary); }
+.hotspot-timeline-empty { color:var(--ink-3); font-size:12px; }
 /* 采集失败明细：进度条下方小字提示，点击重试前可确认原因 */
-.hotspot-collect-detail { font-size:12px; color:var(--danger-color, #c0392b); margin-top:6px; }
-/* 账号关联抽屉 */
-/* 桌面端 QtWebEngine 5.15（Chromium 83）不识别 inset 简写，必须展开四个方向，否则遮罩宽高为 0。 */
-.hotspot-drawer-mask { display:none; position:fixed; top:0; right:0; bottom:0; left:0; background:rgba(0,0,0,.35); z-index:900; }
-.hotspot-drawer-mask.hotspot-drawer-mask-show { display:block; }
-.hotspot-drawer { position:fixed; top:0; right:0; height:100%; width:min(420px, 92vw); background:var(--bg-elevated); border-left:1px solid var(--border-color); box-shadow:var(--shadow-hover); transform:translateX(100%); transition:transform .25s ease; z-index:901; display:flex; flex-direction:column; }
-.hotspot-drawer.hotspot-drawer-open { transform:translateX(0); }
-.hotspot-drawer-header { display:flex; align-items:center; justify-content:space-between; padding:18px 20px; border-bottom:1px solid var(--border-color); }
-.hotspot-drawer-header h3 { margin:0; color:var(--text-primary); font-size:16px; }
-.hotspot-drawer-header small { color:var(--text-secondary); font-size:12px; }
-.hotspot-drawer-close { border:none; background:transparent; font-size:24px; line-height:1; color:var(--text-secondary); cursor:pointer; }
-.hotspot-drawer-body { padding:20px; overflow-y:auto; }
-.hotspot-drawer-stat-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }
-.hotspot-drawer-stat-grid div { background:var(--primary-soft); border-radius:8px; padding:12px; text-align:center; }
-.hotspot-drawer-stat-grid span { display:block; font-size:12px; color:var(--text-secondary); margin-bottom:4px; }
-.hotspot-drawer-stat-grid b { font-size:18px; color:var(--text-primary); }
-.hotspot-drawer-growth { margin-top:16px; padding:10px 12px; border-radius:8px; background:var(--bg); border:1px solid var(--border-color); color:var(--text-secondary); font-size:13px; }
-/* 舰长转化行：与增速行同风格，直播中点绿色小圆点提示 */
-.hotspot-drawer-guard { margin-top:10px; padding:10px 12px; border-radius:8px; background:var(--bg); border:1px solid var(--border-color); color:var(--text-secondary); font-size:13px; display:flex; align-items:center; gap:8px; }
-.hotspot-drawer-guard b { color:var(--text-primary); }
-.hotspot-live-dot { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; color:#fff; background:var(--success-color, #27ae60); }
-.hotspot-drawer-actions { margin-top:16px; display:flex; gap:8px; }
-.hotspot-drawer-error { padding:16px; color:var(--danger-color, #c0392b); font-size:13px; }
+.hotspot-collect-detail { margin-top:6px; color:var(--danger); font:500 11px/1.5 var(--f-mono); }
+/* 账号关联抽屉：深色纹理页眉 + 白体。
+   桌面端 QtWebEngine 5.15（Chromium 83）不识别 inset 简写，必须展开四个方向，否则遮罩宽高为 0。
+   遮罩关闭态用 opacity + visibility 隐藏且不接收点击，才能做淡入淡出。 */
+.hotspot-drawer-mask {
+    position:fixed;
+    top:0;
+    right:0;
+    bottom:0;
+    left:0;
+    z-index:900;
+    background:rgba(25, 25, 25, .45);
+    opacity:0;
+    visibility:hidden;
+    pointer-events:none;
+    transition:opacity .3s, visibility 0s linear .3s;
+    animation:none;
+}
+.hotspot-drawer-mask.hotspot-drawer-mask-show { opacity:1; visibility:visible; pointer-events:auto; transition:opacity .3s, visibility 0s; }
+/* 抽屉：收起态同时 visibility:hidden，即使 transform 被其他规则覆盖也不会露出 */
+.hotspot-drawer {
+    position:fixed;
+    top:0;
+    right:0;
+    z-index:901;
+    display:flex;
+    flex-direction:column;
+    width:min(420px, 92vw);
+    height:100%;
+    background:#fff;
+    box-shadow:-8px 0 30px rgba(0, 0, 0, .15);
+    transform:translateX(104%);
+    visibility:hidden;
+    transition:transform .5s var(--ease), visibility 0s linear .5s;
+    animation:none;
+}
+.hotspot-drawer.hotspot-drawer-open { transform:translateX(0); visibility:visible; transition:transform .5s var(--ease), visibility 0s; }
+.hotspot-drawer-header {
+    position:relative;
+    flex:0 0 auto;
+    display:flex;
+    align-items:flex-end;
+    justify-content:space-between;
+    padding:30px 26px 20px;
+    color:#fff;
+    background:#191919 url("/static/tex/hatch-dark.svg");
+}
+/* 页眉底边三色段 */
+.hotspot-drawer-header::after { position:absolute; right:0; bottom:0; left:0; height:2px; content:""; background:var(--tri); }
+.hotspot-drawer-header h3 { margin:0; color:#fff; font:800 22px/1.1 var(--f-body); }
+.hotspot-drawer-header small { display:block; margin-top:8px; color:#8a8a8a; font:500 11px/1 var(--f-mono); letter-spacing:.1em; }
+.hotspot-drawer-close {
+    flex:0 0 auto;
+    width:34px;
+    height:34px;
+    border:0;
+    border-radius:50%;
+    color:#fff;
+    background:rgba(255, 255, 255, .06);
+    box-shadow:inset 0 0 0 1px #444;
+    font-size:18px;
+    line-height:1;
+    cursor:pointer;
+}
+.hotspot-drawer-close:hover { background:rgba(255, 255, 255, .14); }
+.hotspot-drawer-body { flex:1 1 auto; min-height:0; padding:24px 26px; overflow-y:auto; }
+.hotspot-drawer-stat-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; margin-bottom:18px; }
+/* 抽屉数据格：浅底 + 颗粒纹理 + 内描边 */
+.hotspot-drawer-stat-grid div {
+    padding:14px 16px;
+    border-radius:var(--r-card);
+    background:var(--paper) url("/static/tex/grain.svg");
+    box-shadow:inset 0 0 0 1px var(--paper-3);
+}
+.hotspot-drawer-stat-grid span { display:block; color:var(--ink-3); font:500 10px/1 var(--f-mono); letter-spacing:.12em; }
+.hotspot-drawer-stat-grid b { display:block; margin-top:8px; color:var(--ink); font:300 26px/1 var(--f-en); }
+/* 增长判定：浅灰条 + 左侧黄/青绿短竖条 */
+.hotspot-drawer-growth {
+    position:relative;
+    margin-bottom:8px;
+    padding:11px 14px 11px 22px;
+    border-radius:2px;
+    color:var(--ink);
+    background:var(--paper-2);
+    font:700 13px/1.4 var(--f-body);
+}
+.hotspot-drawer-growth::before {
+    position:absolute;
+    top:9px;
+    bottom:9px;
+    left:8px;
+    width:4px;
+    content:"";
+    background:linear-gradient(var(--signal) 0 60%, var(--mint) 60%);
+}
+/* 舰长转化行：列表行，数值右对齐；直播中用小红标 */
+.hotspot-drawer-guard {
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding:12px 0;
+    border-bottom:1px solid var(--paper-3);
+    color:var(--ink-3);
+    font-size:13px;
+}
+.hotspot-drawer-guard > b { margin-left:auto; color:var(--ink); font:600 13px/1 var(--f-mono); }
+.hotspot-live-dot { display:inline-block; padding:3px 8px; border-radius:9px; color:#fff; background:var(--danger); font:600 10px/1.2 var(--f-mono); }
+.hotspot-drawer-actions { display:flex; gap:8px; margin-top:22px; }
+.hotspot-drawer-error { padding:16px 26px; color:var(--danger); font-size:13px; }
+/* 抽屉加载中提示：与正文同样的左右留白。 */
+.hotspot-drawer > .text-muted { padding:24px 26px; }
 @media (max-width: 760px) { .hotspot-lifecycle-grid { grid-template-columns:1fr; } .hotspot-section-heading { align-items:flex-start; flex-direction:column; } }
 
 
 /* ===== 第三批 g：事件工作台 / 机会列表 / 证据回看 / 最小反馈 =====
    约束：不依赖颜色唯一表达（状态同时给文字 + 边框样式）；只增状态 / 证据区。 */
 .event-workbench { margin-top: 16px; }
-.event-status { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 12px; border: 1px solid currentColor; }
+.event-status { display: inline-block; padding: 1px 6px; border-radius: 2px; font: 600 11px/1.5 var(--f-mono); border: 1px solid currentColor; }
 .event-status-running { border-style: dashed; }
-.event-status-completed, .event-status-complete { font-weight: 600; }
+.event-status-completed, .event-status-complete { font-weight: 700; }
 .event-status-insufficient, .event-status-stale { border-style: dotted; }
-.event-action { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 12px; border: 1px solid currentColor; }
+.event-action { display: inline-block; padding: 1px 6px; border-radius: 2px; font: 600 11px/1.5 var(--f-mono); border: 1px solid currentColor; }
+/* 选题卡 / 机会卡：白卡 + 左上深灰短条，卡间留缝 */
 .event-topic-card, .event-opportunity-card {
-    padding: 12px; margin: 10px 0; background: #fff; border-radius: 8px;
-    border-left: 3px solid var(--primary-color);
+    position: relative;
+    margin: 12px 0;
+    padding: 16px 18px 14px;
+    border-radius: var(--r-card);
+    background: #fff;
+    box-shadow: var(--shadow-card);
 }
-.event-meta { color: var(--text-secondary); font-size: 12px; }
-.event-insufficient { border-left: 3px solid #b8860b; padding-left: 8px; }
-.event-error { color: #b00020; }
+.event-topic-card::before, .event-opportunity-card::before {
+    position: absolute;
+    top: 0;
+    left: 18px;
+    width: 36px;
+    height: 3px;
+    content: "";
+    background: var(--btn);
+}
+.event-meta { color: var(--ink-3); font-size: 12px; line-height: 1.7; }
+.event-insufficient { padding-left: 10px; border-left: 2px solid var(--warn); color: var(--ink-2); }
+.event-error { color: var(--danger); }
 
 /* ===== 第三批 h：事件工作台完整版（双通道 / 可溯源 / 历史时间 / 热门 Tag）=====
    约束仍为：不依赖颜色唯一表达（状态同时给文字 + 边框样式）。 */
 .event-hot-tags { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
-.event-tag-chip { border:1px solid var(--border-color); background:var(--primary-soft); color:var(--text-primary); }
+.event-hot-tags > .btn { margin-left:0; }
+/* 热门 Tag：白底细线框小标签 */
+.event-tag-chip {
+    min-width:0;
+    border:0;
+    color:var(--ink-2);
+    background:#fff;
+    box-shadow:inset 0 0 0 1px var(--rule);
+}
+.event-tag-chip:hover { color:var(--ink); background:#fff; box-shadow:inset 0 0 0 1px var(--ink-2); }
+/* 归属方式：浅灰底板，选项为方角细线框 */
 .event-attribution {
     margin:12px 0;
     padding:14px 16px;
-    border:1px solid var(--border-color);
-    border-radius:var(--inner-radius);
-    background:var(--bg-primary);
+    border:0;
+    border-radius:var(--r-card);
+    background:var(--paper);
+    box-shadow:inset 0 0 0 1px var(--paper-3);
 }
 .event-attribution legend {
     padding:0 8px;
-    color:var(--text-primary);
+    color:var(--ink);
     font-size:13px;
-    font-weight:600;
+    font-weight:700;
 }
 .event-attribution label {
     display:inline-flex;
@@ -171,19 +368,19 @@
     gap:8px;
     margin:4px 12px 4px 0;
     padding:8px 12px;
-    color:var(--text-secondary);
+    color:var(--ink-2);
     font-size:13px;
     line-height:1.4;
     cursor:pointer;
-    border:1px solid var(--border-color);
-    border-radius:999px;
-    background:var(--bg-elevated);
-    transition:color .2s, border-color .2s, background-color .2s;
+    border:0;
+    border-radius:2px;
+    background:#fff;
+    box-shadow:inset 0 0 0 1px var(--rule);
+    transition:color .2s, box-shadow .2s;
 }
 .event-attribution label:hover {
-    color:var(--text-primary);
-    border-color:var(--primary-color);
-    background:var(--primary-soft);
+    color:var(--ink);
+    box-shadow:inset 0 0 0 1px var(--ink-2);
 }
 .event-attribution input[type="radio"] {
     appearance:none;
@@ -192,31 +389,38 @@
     width:16px;
     height:16px;
     margin:0;
-    border:2px solid var(--border-color);
+    border:0;
     border-radius:50%;
-    background:var(--bg-elevated);
+    background:#fff;
+    box-shadow:inset 0 0 0 1px var(--rule-2);
     cursor:pointer;
-    transition:border-color .2s, background .2s;
+    transition:box-shadow .15s, background .15s;
 }
+/* 选中：深灰圆底 + 中心黄点 */
 .event-attribution input[type="radio"]:checked {
-    border-color:var(--primary-color);
-    background:radial-gradient(circle, var(--primary-color) 0 3px, var(--bg-elevated) 3.5px);
+    box-shadow:none;
+    background:radial-gradient(circle, var(--signal) 0 3px, var(--btn) 3.5px);
 }
-.event-attribution input[type="radio"]:focus-visible {
-    outline:2px solid var(--primary-color);
+/* Chromium 83 不支持 :focus-visible，改用 :focus */
+.event-attribution input[type="radio"]:focus {
+    outline:2px solid var(--ink-2);
     outline-offset:2px;
 }
 .event-attribution-preview { margin-top:10px; }
 .event-brief { margin:12px 0; }
-.event-brief-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:8px; }
-.event-brief-grid label { display:flex; flex-direction:column; font-size:12px; color:var(--text-secondary); gap:4px; }
+.event-brief > summary { color:var(--ink-2); font:600 12px/1.6 var(--f-body); letter-spacing:.04em; cursor:pointer; }
+.event-brief-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 18px; margin-top:10px; }
+.event-brief-grid label { display:flex; flex-direction:column; font-size:12px; color:var(--ink-3); gap:4px; }
 .event-action-row { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0; }
+.event-action-row > .btn { margin-left:0; }
 .event-trace { margin-top:8px; }
-.event-trace-list { margin:6px 0; padding-left:18px; font-size:12px; color:var(--text-secondary); }
-.event-dual-channel { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:10px; }
-.event-channel { padding:10px 12px; border:1px solid var(--border-color); border-radius:8px; background:var(--bg-elevated); }
-.event-channel h4 { font-size:13px; margin-bottom:4px; color:var(--text-primary); }
-.event-assessment { margin-top:12px; padding:12px; border:1px dashed var(--border-color); border-radius:8px; }
+.event-trace > summary { color:var(--ink-2); font-size:12px; cursor:pointer; }
+.event-trace-list { margin:6px 0; padding-left:18px; color:var(--ink-3); font:500 11px/1.7 var(--f-mono); }
+/* 双通道：两张白卡并排，卡间留缝 */
+.event-dual-channel { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin-top:12px; }
+.event-channel { padding:12px 14px; border-radius:var(--r-card); background:#fff; box-shadow:var(--shadow-card); }
+.event-channel h4 { margin-bottom:4px; color:var(--ink); font-size:13px; }
+.event-assessment { margin-top:12px; padding:12px 14px; border-radius:var(--r-card); background:var(--paper-2); }
 .event-assessment-history { margin-top:8px; }
 @media (max-width:760px) { .event-brief-grid, .event-dual-channel { grid-template-columns:1fr; } }
 
@@ -224,4 +428,4 @@
    约束不变：不依赖颜色唯一表达（提示同时给文字）。 */
 .event-video-links { margin-top:10px; }
 .event-video-link { margin:2px 4px 2px 0; }
-.event-jump-hint { margin-top:6px; font-size:12px; color:var(--text-secondary); min-height:1em; }
+.event-jump-hint { margin-top:6px; color:var(--ink-3); font-size:12px; min-height:1em; }

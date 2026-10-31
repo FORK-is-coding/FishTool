@@ -18,23 +18,23 @@ async function loadAuthStatus() {
         const data = await apiRequest('/auth/status');
         if (data.logged_in) {
             const user = data.user || {};
-            badge.textContent = '✅ 已登录';
-            badge.style.background = '#e8f5e9';
-            badge.style.color = '#2e7d32';
+            // 状态色由 style.base.css 的 .auth-status-badge.is-ok / is-warn / is-error 提供，不再写内联颜色。
+            badge.textContent = '已登录';
+            badge.className = 'auth-status-badge is-ok';
             userInfo.innerHTML = `${escapeHtml(user.username || '未知用户')}（UID: ${escapeHtml(user.uid || '未知')}） | ${escapeHtml(data.cookie_masked || '')}`;
             logoutBtn.style.display = '';
         } else {
             badge.textContent = '未登录';
-            badge.style.background = '#fff3e0';
-            badge.style.color = '#e65100';
+            badge.className = 'auth-status-badge is-warn';
             userInfo.innerHTML = data.invalid
-                ? '<span style="color:#c62828;">本地Cookie已失效，请重新扫码</span>'
+                ? '<span class="auth-user-error">本地Cookie已失效，请重新扫码</span>'
                 : '扫码后可解锁评论监控、视频数据采集等身份功能';
             logoutBtn.style.display = 'none';
         }
     } catch (error) {
         badge.textContent = '检测失败';
-        userInfo.innerHTML = `<span style="color:#c62828;">${escapeHtml(error.message)}</span>`;
+        badge.className = 'auth-status-badge is-error';
+        userInfo.innerHTML = `<span class="auth-user-error">${escapeHtml(error.message)}</span>`;
     }
 }
 

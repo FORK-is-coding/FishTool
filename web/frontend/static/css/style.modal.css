@@ -1,19 +1,16 @@
-/* ===== style.modal.css —— 拆分自 style.css（前端优化补回 + 弹窗），原始行 L1616-L1846 ===== */
-/* 前端优化补回：统一客户端边框、大圆角卡片、鼠标跟随光晕与应用弹窗。 */
-.container {
-    border: 1px solid var(--border-color);
-    border-radius: var(--card-radius);
-    overflow: hidden;
-    background: var(--bg-primary);
-}
+/* ===== style.modal.css —— 共享卡片规则（鼠标光晕）+ 应用弹窗 + 群二维码弹窗 + 高优先级错误 Toast =====
+   C+ v2：白色档案 / 工业平面。弹窗白底 4px 圆角、顶边三色段；Toast 白底 + 左侧状态短条。
+   本文件保留的 flex gap：.app-toast-stack（纵向 10），兜底见 style.flexgap.css。 */
 
-.form-control,
-.btn,
-.sentiment-tag,
+/* 状态小标签与可用项：统一 2px 圆角。 */
 .availability-item {
     border-radius: var(--control-radius);
 }
 
+/* 共享卡片规则：建立独立层叠上下文并裁切，鼠标光晕（::before，z-index:-1）只画在卡片内部。
+   app.ui.js 的 bindGlowCards 写入 --x / --y（在 style.base.css 用 @property 注册，可过渡）。
+   这里不写边框、底色和圆角：白卡底纹由 style.base.css 统一提供，各组件的底色与圆角由各自样式决定。
+   注意：.section 必须留在这条同时带 isolation:isolate 与 overflow:hidden 的规则里（真实内核用例检查计算样式）。 */
 .card,
 .section,
 .comment-dashboard,
@@ -34,17 +31,14 @@
     position: relative;
     isolation: isolate;
     overflow: hidden;
-    border: 1px solid var(--border-color);
-    border-radius: var(--card-radius);
-    background-color: var(--bg-secondary);
     transition:
         --x 120ms linear,
         --y 120ms linear,
         transform 220ms ease,
-        border-color 220ms ease,
         box-shadow 220ms ease;
 }
 
+/* 鼠标光晕：墨色 10% 的径向淡影，替代旧版暖色光晕。 */
 .card::before,
 .section::before,
 .comment-dashboard::before,
@@ -79,27 +73,6 @@
     transition: opacity 220ms ease;
 }
 
-.card:hover,
-.section:hover,
-.comment-dashboard:hover,
-.metric-item:hover,
-.chart-panel:hover,
-.voice-module:hover,
-.voice-item:hover,
-.result-area:hover,
-.logs-area:hover,
-.raw-output-details:hover,
-.analysis-notice:hover,
-.analysis-error:hover,
-.diagnosis-dashboard:hover,
-.diagnosis-score:hover,
-.diagnosis-detail-card:hover,
-.ai-research-card:hover,
-.account-tag-cloud-card:hover {
-    border-color: var(--primary-border-hover);
-    box-shadow: var(--shadow-hover);
-}
-
 .card:hover::before,
 .section:hover::before,
 .comment-dashboard:hover::before,
@@ -120,9 +93,17 @@
     opacity: 1;
 }
 
-/* 弹窗遮罩：全屏半透明+毛玻璃，点击空白处可关闭。 */
-/* 注意：必须显式写 top/right/bottom/left 四个值，不能简写成 inset:0；
-   FishTool 内嵌的 QtWebEngine 5.15.2（Chromium 83）不识别 inset 简写，
+/* 空结果占位复用 ::before 显示“暂无数据”，不画光晕。 */
+.result-area:empty::before,
+.result-area:empty:hover::before {
+    opacity: 1;
+    background: none;
+}
+
+/* ---------------- 应用弹窗 ---------------- */
+/* 弹窗遮罩：全屏墨色半透明，点击空白处可关闭。
+   注意：必须显式写 top/right/bottom/left 四个值，不能用简写；
+   FishTool 内嵌的 QtWebEngine 5.15.2（Chromium 83）不识别该简写，
    会导致 position:fixed 失效、弹窗渲染到屏幕外（历史线上 bug 根因）。 */
 .app-modal-backdrop {
     position: fixed;
@@ -134,38 +115,101 @@
     display: grid;
     place-items: center;
     padding: 24px;
-    background: rgba(81, 74, 69, 0.24);
-    backdrop-filter: blur(8px);
+    background: rgba(25, 25, 25, .45);
+    animation: app-modal-fade 180ms ease-out;
 }
 
-/* 弹窗本体：最大 440px 居中，暖白底+大圆角+柔和投影。 */
+/* 弹窗本体：最大 440px 居中，白底 + 4px 圆角 + 顶边三色段。 */
 .app-modal {
+    position: relative;
     width: min(440px, 100%);
-    padding: 26px;
-    color: var(--text-primary);
-    border: 1px solid var(--border-color);
+    max-height: calc(100vh - 48px);
+    padding: 30px 28px 26px;
+    overflow: auto;
+    color: var(--ink);
+    border: 0;
     border-radius: var(--modal-radius);
-    background: var(--bg-elevated);
-    box-shadow: 0 22px 60px rgba(81, 74, 69, 0.22);
+    background: #fff url("/static/tex/grain.svg");
+    box-shadow: 0 12px 40px rgba(0, 0, 0, .22);
+    animation: app-modal-in 220ms var(--ease);
+}
+
+.app-modal::before {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    height: 2px;
+    content: "";
+    background: var(--tri);
+    -webkit-mask-image: linear-gradient(90deg, #000 40%, transparent 85%);
+}
+
+/* 右上角排线短条 */
+.app-modal::after {
+    position: absolute;
+    top: 22px;
+    right: 24px;
+    width: 35px;
+    height: 4px;
+    content: "";
+    background: repeating-linear-gradient(90deg, var(--ink-4) 0 8px, transparent 8px 12px);
 }
 
 .app-modal h3 {
-    margin-bottom: 10px;
-    color: var(--primary-color);
+    position: relative;
+    margin: 0 0 12px;
+    padding-right: 48px;
+    padding-left: 14px;
+    color: var(--ink);
+    font: 800 18px/1.3 var(--f-body);
+    letter-spacing: .02em;
+}
+
+.app-modal h3::before {
+    position: absolute;
+    top: 3px;
+    bottom: 3px;
+    left: 0;
+    width: 3px;
+    content: "";
+    background: var(--btn);
 }
 
 .app-modal p {
-    color: var(--text-secondary);
+    color: var(--ink-2);
+    font-size: 13px;
+    line-height: 1.75;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
 }
 
 .app-modal .btn {
-    margin-top: 20px;
+    margin-top: 22px;
 }
 
+/* QQ 群弹窗：图片与关闭按钮居中，标题仍左对齐。 */
+.group-qr-modal {
+    text-align: center;
+}
+
+.group-qr-modal h3 {
+    text-align: left;
+}
+
+@keyframes app-modal-fade {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes app-modal-in {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: none; }
+}
 /* ===== 高优先级错误 Toast =====
    后端 core.toast 通过 /ws 推送；右上角堆叠、自动消失，不阻塞用户操作。
-   注意：QtWebEngine 5.15.2（Chromium 83）不识别 inset，这里显式写 top/right。 */
+   app.ui.js 生成 class="app-toast is-${level}"（level = info / warning / error），离场加 is-leaving。
+   注意：QtWebEngine 5.15.2（Chromium 83）不识别四边定位简写，这里显式写 top/right。 */
 .app-toast-stack {
     position: fixed;
     z-index: 1100;
@@ -178,31 +222,47 @@
     pointer-events: none;
 }
 
+/* 单条 Toast：白底 + 颗粒纹理 + 左侧 4px 状态短条（默认 info 为黄 / 青绿渐变短条）。 */
 .app-toast {
+    position: relative;
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
         "title close"
         "message message";
     gap: 4px 12px;
-    padding: 14px 14px 14px 16px;
+    padding: 14px 14px 14px 22px;
+    overflow: hidden;
     pointer-events: auto;
-    color: var(--text-primary);
-    border: 1px solid var(--border-color);
-    border-left: 4px solid var(--primary-color);
-    border-radius: 14px;
-    background: var(--bg-elevated);
-    box-shadow: 0 16px 40px rgba(81, 74, 69, 0.18);
+    color: var(--ink);
+    border: 0;
+    border-radius: var(--r-card);
+    background: #fff url("/static/tex/grain.svg");
+    box-shadow: 0 6px 22px rgba(0, 0, 0, .14), 0 0 0 1px var(--paper-3);
     animation: app-toast-in 180ms ease-out;
     transition: opacity 180ms ease, transform 180ms ease;
 }
 
-.app-toast.is-warning {
-    border-left-color: var(--warning-color);
+.app-toast::before {
+    position: absolute;
+    top: 12px;
+    bottom: 12px;
+    left: 8px;
+    width: 4px;
+    content: "";
+    background: linear-gradient(var(--signal) 0 60%, var(--mint) 60%);
 }
 
-.app-toast.is-error {
-    border-left-color: var(--danger-color);
+.app-toast.is-info::before {
+    background: linear-gradient(var(--signal) 0 60%, var(--mint) 60%);
+}
+
+.app-toast.is-warning::before {
+    background: var(--warn);
+}
+
+.app-toast.is-error::before {
+    background: var(--danger);
 }
 
 .app-toast.is-leaving {
@@ -212,21 +272,25 @@
 
 .app-toast-title {
     grid-area: title;
-    font-size: 14px;
-    line-height: 1.4;
-    color: var(--text-primary);
+    color: var(--ink);
+    font: 700 14px/1.4 var(--f-body);
+    letter-spacing: .02em;
+}
+
+.app-toast.is-warning .app-toast-title {
+    color: var(--warn);
 }
 
 .app-toast.is-error .app-toast-title {
-    color: var(--danger-color);
+    color: var(--danger);
 }
 
 .app-toast-message {
     grid-area: message;
     overflow-wrap: anywhere;
+    color: var(--ink-2);
     font-size: 13px;
     line-height: 1.6;
-    color: var(--text-secondary);
 }
 
 .app-toast-close {
@@ -235,18 +299,23 @@
     width: 24px;
     height: 24px;
     padding: 0;
+    color: var(--ink-3);
     font-size: 18px;
     line-height: 1;
-    color: var(--text-muted);
     cursor: pointer;
     border: 0;
-    border-radius: 50%;
+    border-radius: 2px;
     background: transparent;
 }
 
 .app-toast-close:hover {
-    color: var(--text-primary);
-    background: var(--bg-tertiary);
+    color: var(--ink);
+    background: var(--paper-2);
+}
+
+.app-toast-close:focus {
+    outline: none;
+    box-shadow: inset 0 0 0 1px var(--ink-2);
 }
 
 @keyframes app-toast-in {
@@ -269,6 +338,7 @@
     }
 }
 
+/* 减少动效：卡片光晕、弹窗与 Toast 不做过渡。 */
 @media (prefers-reduced-motion: reduce) {
     .card,
     .section,
@@ -302,15 +372,16 @@
     .diagnosis-detail-card::before {
         transition: none;
     }
-}
 
-@media (prefers-reduced-motion: reduce) {
-    .app-toast {
+    .app-toast,
+    .app-modal,
+    .app-modal-backdrop {
         animation: none;
         transition: none;
     }
 }
 
+/* 账号自诊 / 抽奖页的断点（历史上放在本文件，保留原位置与数值）。 */
 @media (max-width: 1100px) {
     .diagnosis-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .lottery-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -321,7 +392,7 @@
 }
 
 @media (max-width: 768px) {
-    .diagnosis-dashboard { padding: 14px; border-radius: 14px; }
+    .diagnosis-dashboard { padding: 14px; border-radius: var(--r-card); }
     .diagnosis-header { align-items: flex-start; flex-direction: column; }
     .diagnosis-metrics, .diagnosis-chart-grid, .diagnosis-detail-grid, .ai-research-grid { grid-template-columns: minmax(0, 1fr); }
     .diagnosis-chart-grid { grid-auto-rows: minmax(340px, auto); }
@@ -331,3 +402,4 @@
     .lottery-candidate-list { grid-template-columns: minmax(0, 1fr); }
     .tag-cloud-heading { flex-direction: column; }
     .tag-cloud-heading > span { text-align: left; }
+}

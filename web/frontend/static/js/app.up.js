@@ -300,6 +300,11 @@ function renderAIResearch(aiReport) {
     </section>`;
 }
 
+// 读取 style.base.css 的设计令牌；导出报告的截图与 Canvas 重绘与页面配色一致。
+function diagnosisToken(name, fallback) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+}
+
 // 渲染自诊三张图表：播放量走势、互动效率雷达、分区基准对比。
 function renderDiagnosisCharts(videoStats, engagement, benchmark) {
     const theme = getDashboardChartTheme();
@@ -308,7 +313,7 @@ function renderDiagnosisCharts(videoStats, engagement, benchmark) {
     renderDiagnosisBenchmarkChart(getDiagnosisChart('diagnosis-benchmark-chart'), benchmark, theme);
 }
 
-// 把 ECharts 图表截成 PNG data URI；导出 PDF 时保持页面上的暖色主题。
+// 把 ECharts 图表截成 PNG data URI；导出 PDF 时保持页面上的白底配色。
 function captureDiagnosisChartImage(elementId) {
     try {
         const element = document.getElementById(elementId);
@@ -318,7 +323,7 @@ function captureDiagnosisChartImage(elementId) {
         return chart.getDataURL({
             type: 'png',
             pixelRatio: 1.5,
-            backgroundColor: '#fffdf9',
+            backgroundColor: diagnosisToken('--bg-secondary', '#ffffff'),
             excludeComponents: ['toolbox'],
         });
     } catch (error) {
@@ -327,7 +332,7 @@ function captureDiagnosisChartImage(elementId) {
     }
 }
 
-// 用 Canvas 重绘账号 Tag 词云，颜色/字号与页面保持同一套暖色规则。
+// 用 Canvas 重绘账号 Tag 词云，颜色/字号与页面 .tag-cloud-word.tone-* 保持同一套规则。
 function buildDiagnosisTagCloudImage(tagCloud) {
     const entries = Object.entries(tagCloud?.word_frequency || {}).slice(0, 40);
     if (!entries.length) return null;
@@ -336,7 +341,14 @@ function buildDiagnosisTagCloudImage(tagCloud) {
     const height = 520;
     const padding = 36;
     const gap = 18;
-    const colors = ['#b47b50', '#718d7b', '#9b6f73', '#667f8c', '#8c765d'];
+    // 与 style.up.css 的 tone-0～tone-4 一一对应；tone-2 的品红在令牌表里没有对应项，照抄样式表的值。
+    const colors = [
+        diagnosisToken('--ink', '#191919'),
+        diagnosisToken('--ok', '#1f9d6a'),
+        '#c2187f',
+        diagnosisToken('--info', '#2d5bd8'),
+        diagnosisToken('--ink-3', '#8a8a8a'),
+    ];
     const scale = 1.5;
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(width * scale);
@@ -345,9 +357,9 @@ function buildDiagnosisTagCloudImage(tagCloud) {
     if (!ctx) return null;
 
     ctx.scale(scale, scale);
-    ctx.fillStyle = '#fffdf9';
+    ctx.fillStyle = diagnosisToken('--bg-secondary', '#ffffff');
     ctx.fillRect(0, 0, width, height);
-    ctx.strokeStyle = '#ece2d7';
+    ctx.strokeStyle = diagnosisToken('--border-color', '#d9d9d9');
     ctx.lineWidth = 1;
     ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
 
@@ -435,14 +447,14 @@ function traceRoundedRect(ctx, x, y, width, height, radius) {
 
 function drawReportChartPanel(ctx, image, label, x, y, width, height) {
     ctx.save();
-    ctx.fillStyle = '#fffdf9';
-    ctx.strokeStyle = '#e8ddd1';
+    ctx.fillStyle = diagnosisToken('--bg-secondary', '#ffffff');
+    ctx.strokeStyle = diagnosisToken('--border-color', '#d9d9d9');
     ctx.lineWidth = 1;
     traceRoundedRect(ctx, x, y, width, height, 14);
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle = '#8a5a43';
+    ctx.fillStyle = diagnosisToken('--text-primary', '#191919');
     ctx.font = '600 18px "Microsoft YaHei", "SimHei", sans-serif';
     ctx.textBaseline = 'top';
     ctx.fillText(label, x + 18, y + 14);
@@ -506,7 +518,7 @@ async function buildDiagnosisChartsImage() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
     ctx.scale(scale, scale);
-    ctx.fillStyle = '#fffdf9';
+    ctx.fillStyle = diagnosisToken('--bg-primary', '#fafafa');
     ctx.fillRect(0, 0, width, height);
 
     let y = padding;
@@ -567,14 +579,14 @@ function renderDiagnosisEngagementChart(engagementChart, engagement, theme) {
             axisName: { color: theme.text, fontSize: 13, fontWeight: 600, lineHeight: 19 },
             axisLine: { lineStyle: { color: theme.border, width: 1.5 } },
             splitLine: { lineStyle: { color: theme.border, width: 1 } },
-            splitArea: { areaStyle: { color: ['rgba(250,247,242,.32)', 'rgba(250,247,242,.12)'] } },
+            splitArea: { areaStyle: { color: ['rgba(242,242,242,.32)', 'rgba(242,242,242,.12)'] } },
         },
         series: [{
             type: 'radar',
             symbol: 'circle',
             symbolSize: 10,
             lineStyle: { color: theme.secondary, width: 3 },
-            itemStyle: { color: theme.secondary, borderColor: '#ffffff', borderWidth: 2 },
+            itemStyle: { color: theme.secondary, borderColor: theme.background, borderWidth: 2 },
             areaStyle: { color: theme.secondary, opacity: 0.28 },
             data: [{ value: scores.map(item => item.score), name: '互动效率' }],
         }],

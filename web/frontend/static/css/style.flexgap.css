@@ -20,11 +20,9 @@
 .no-flex-gap .api-key-warning > * + * { margin-left: 14px; }                        /* style.config.css */
 .no-flex-gap .usage-card-heading > * + * { margin-left: 14px; }                     /* style.help.css */
 .no-flex-gap .hotspot-section-heading > * + * { margin-left: 16px; }                /* style.hotspot.css */
-.no-flex-gap .hotspot-card-title-row > * + * { margin-left: 10px; }                 /* style.hotspot.css */
-/* 趋势徽标原有 margin-left:4px，gap 浏览器里实际间距为 10+4。 */
-.no-flex-gap .hotspot-card-title-row > .hotspot-trend-badge { margin-left: 14px; }
 .no-flex-gap .hotspot-card-actions > * + * { margin-left: 8px; }                    /* style.hotspot.css */
 .no-flex-gap .hotspot-drawer-guard > * + * { margin-left: 8px; }                    /* style.hotspot.css */
+.no-flex-gap .hotspot-drawer-guard > b { margin-left: auto; }                       /* 数值右对齐：保留原 auto */
 .no-flex-gap .hotspot-drawer-actions > * + * { margin-left: 8px; }                  /* style.hotspot.css */
 .no-flex-gap .event-attribution label > input { margin-right: 8px; }                /* style.hotspot.css：input 后是文本节点 */
 .no-flex-gap .loading-copy > * + * { margin-left: 16px; }                           /* style.log.css */
@@ -68,12 +66,16 @@
 /* .hotspot-progress-row：gap 12；原 margin-top 16、下侧 0 → 行距放子项下方，容器下方 -12。 */
 .no-flex-gap .hotspot-progress-row { margin-bottom: -12px; margin-left: -6px; margin-right: -6px; }
 .no-flex-gap .hotspot-progress-row > * { margin: 0 6px 12px; }
+/* .hotspot-card-title-row：gap 10px 6px，原无外边距；标题整行（flex-basis 100%）扣掉左右外边距。 */
+.no-flex-gap .hotspot-card-title-row { margin: -10px -3px 0; }
+.no-flex-gap .hotspot-card-title-row > * { margin: 10px 3px 0; }
+.no-flex-gap .hotspot-card-title-row > h3 { flex-basis: calc(100% - 6px); }
 /* .event-hot-tags（表单组外独立使用时）：gap 6；原 margin-top 8 → 行距放子项下方。 */
 .no-flex-gap .event-hot-tags { margin-bottom: -6px; margin-left: -3px; margin-right: -3px; }
 .no-flex-gap .event-hot-tags > * { margin: 0 3px 6px; }
 .no-flex-gap .logs-toolbar-row { margin: -14px -7px 0; }                            /* gap 14，原无外边距 */
 .no-flex-gap .logs-toolbar-row > * { margin: 14px 7px 0; }
-.no-flex-gap .log-level-filters { margin-bottom: -10px; margin-left: -5px; margin-right: -5px; }  /* gap 10，原 margin-top 18 */
+.no-flex-gap .log-level-filters { margin-bottom: -10px; margin-left: -5px; margin-right: -5px; }  /* gap 10，原 margin-top 20 */
 .no-flex-gap .log-level-filters > * { margin: 0 5px 10px; }
 .no-flex-gap .lottery-quick-actions { margin: -10px -5px 0; }                       /* gap 10，原无外边距 */
 .no-flex-gap .lottery-quick-actions > * { margin: 10px 5px 0; }
@@ -87,10 +89,10 @@
 .no-flex-gap .candidate-list > * { margin: 0 4px 8px; }
 /* 上下都有原外边距、且在桌面最小宽度 1200px 下不换行的容器：按单行处理，只补列距。 */
 .no-flex-gap .event-action-row > * + * { margin-left: 8px; }                        /* gap 8，原 margin 8px 0 */
-.no-flex-gap .resident-monitor-metrics > * + * { margin-left: 12px; }               /* gap 12，原 margin 14px 0 */
+.no-flex-gap .resident-monitor-metrics > * + * { margin-left: 12px; }               /* gap 12，原 margin 22px 0 24px */
 /* inline-flex 徽标组：行内块不参与外边距折叠，四周各半 gap、容器抵消即可。 */
-.no-flex-gap .hotspot-metric-badges { margin: -2px -2px -2px 2px; }                 /* gap 4，原 margin-left 4 */
-.no-flex-gap .hotspot-card-title-row > .hotspot-metric-badges { margin: -2px -2px -2px 12px; }  /* 标题行 gap 10 + 原 4 */
+.no-flex-gap .hotspot-metric-badges { margin: -2px; }                               /* gap 4，原无外边距 */
+.no-flex-gap .hotspot-card-title-row > .hotspot-metric-badges { margin: 8px 1px -2px; }  /* 标题行子项 10px 3px 0 再抵消内层 2px */
 .no-flex-gap .hotspot-metric-badges > * { margin: 2px; }
 .no-flex-gap .lottery-user-icons { margin: -2.5px; }                                /* gap 5 */
 .no-flex-gap .lottery-user-icons > * { margin: 2.5px; }
