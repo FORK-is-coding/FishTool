@@ -6,6 +6,24 @@
 // 所有接口统一走 API_BASE 前缀，由后端 FastAPI 路由承接。
 // ============================================================================
 const API_BASE = '/api';
+
+// 桌面端 QtWebEngine 5.15（Chromium 83）不支持 flex 容器的 gap（Chromium 84 起），
+// 实测检测后给 <html> 加 no-flex-gap，style.flexgap.css 仅在该类下用外边距补回间距；
+// 支持 gap 的浏览器不加类，兜底规则完全不生效。
+// 非浏览器环境（如测试用 node vm 只桩了部分 document）直接跳过，不影响脚本其余部分加载。
+(function detectFlexGapSupport() {
+    const root = typeof document !== 'undefined' ? document.documentElement : null;
+    if (!root || typeof document.createElement !== 'function' || !root.classList) return;
+    const probe = document.createElement('div');
+    probe.style.cssText = 'display:flex;flex-direction:column;row-gap:1px;position:absolute;visibility:hidden';
+    probe.appendChild(document.createElement('div'));
+    probe.appendChild(document.createElement('div'));
+    root.appendChild(probe);
+    const supported = probe.scrollHeight === 1;
+    root.removeChild(probe);
+    if (!supported) root.classList.add('no-flex-gap');
+})();
+
 const commentCharts = {};
 let commentDashboardLoaded = false;
 let currentLotteryWinners = [];
