@@ -220,6 +220,11 @@ function escapeHtml(value) {
 // 浏览器先解实体再解析 JS，单靠 escapeHtml 无法阻止跳出 JS 字符串。
 function jsArg(value) { return escapeHtml(JSON.stringify(String(value ?? ''))); }
 
+// 接口列表字段归一：数组原样返回，null/undefined/对象/字符串等一律视为空列表，避免渲染时抛错。
+function asArray(value) {
+    return Array.isArray(value) ? value : [];
+}
+
 // 过滤外部链接：仅放行 http/https，其余（含 javascript: 伪协议）一律置空。
 // 返回值已完成 HTML 转义，可直接插入 href 属性。
 function safeUrl(value) {
