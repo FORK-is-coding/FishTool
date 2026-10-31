@@ -24,8 +24,12 @@
 <link rel="stylesheet" href="/static/css/style.logviewer.css?v=split-20260824-ui20261101">
 <link rel="stylesheet" href="/static/css/style.help.css?v=split-20260824-ui20261101">
 <link rel="stylesheet" href="/static/css/style.hotspot.css?v=spacing3-20261026-fix20261030-ui20261101">
+<!-- 首次启动开场动画与欢迎页重播按钮的样式；不写 flex gap，放在 flex gap 兜底之前。 -->
+<link rel="stylesheet" href="/static/css/style.intro.css?v=ui20261101">
 <!-- 桌面端 Chromium 83 的 flex gap 兜底：只在 <html class="no-flex-gap"> 下生效，必须最后加载。 -->
 <link rel="stylesheet" href="/static/css/style.flexgap.css?v=flexgap-20261030-ui20261101">
+<!-- 开场首屏判断：必须在 head 同步执行，决定是否先遮住主界面；不依赖 app.core.js。 -->
+<script src="/static/js/intro-gate.js?v=ui20261101"></script>
 </head>
 <body>
     <div class="container">
@@ -134,6 +138,11 @@
                         <span class="meta-lattice" aria-hidden="true"></span>
                         <span>INFO.// FISHTOOL OPERATIONS CONSOLE</span>
                         <span class="meta-r">BUILD 0.2.5</span>
+                        <!-- 重播开场动画：24px 浅灰颗粒小方块 + 回旋箭头；悬停时变深灰斜纹、左侧黄色短竖条，并向左展开 REPLAY INTRO -->
+                        <button type="button" class="intro-replay" id="intro-replay-btn" onclick="FishIntro.replay(event)" aria-label="重播开场动画" title="重播开场动画">
+                            <span class="intro-replay-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v4.5h-4.5"/></svg></span>
+                            <span class="intro-replay-label">REPLAY INTRO</span>
+                        </button>
                     </div>
                     <div class="hero-title">
                         <p class="hero-kicker"><i class="tri-block" aria-hidden="true"></i>个人自媒体的智能运营助理</p>
@@ -964,6 +973,8 @@
     <script src="/static/vendor/echarts.min.js"></script>
     <!-- 版本参数用于让 8000 端口加载本次弹窗修复后的脚本，避免旧 JS 缓存导致 onclick 无响应。 -->
     <script src="/static/js/app.core.js?v=progress-20261026-fix20261027-fix20261030-ui20261101"></script>
+<!-- 开场动画控制器：three.js 与 LOGO 数据只在播放完整版时按需加载。 -->
+<script src="/static/js/app.intro.js?v=ui20261101" data-three="/static/vendor/three.min.js?v=r160" data-logo="/static/intro/logo-mark.js?v=ui20261101"></script>
 <script src="/static/js/app.hotspot.js?v=progress-20261026-fix20261027-fix20261030-ui20261101"></script>
 <!-- 第三批 g：事件工作台 / 机会列表 / 证据回看 / 最小反馈（新增脚本，不改既有结构）。 -->
 <script src="/static/js/app.events.js?v=batch3h-20261003-fix20261027"></script>
