@@ -225,7 +225,8 @@ function exportProblemLogs() {
     const blob = new Blob([body], { type: 'text/plain;charset=utf-8' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `bili_ops_errors_${new Date().toISOString().slice(0, 19).replaceAll(':', '-')}.txt`;
+    // 桌面端 Chromium 83 没有 String.prototype.replaceAll，用全局正则替换。
+    link.download = `bili_ops_errors_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.txt`;
     link.click();
     URL.revokeObjectURL(link.href);
 }

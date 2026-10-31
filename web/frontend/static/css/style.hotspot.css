@@ -108,7 +108,8 @@
 /* 采集失败明细：进度条下方小字提示，点击重试前可确认原因 */
 .hotspot-collect-detail { font-size:12px; color:var(--danger-color, #c0392b); margin-top:6px; }
 /* 账号关联抽屉 */
-.hotspot-drawer-mask { display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:900; }
+/* 桌面端 QtWebEngine 5.15（Chromium 83）不识别 inset 简写，必须展开四个方向，否则遮罩宽高为 0。 */
+.hotspot-drawer-mask { display:none; position:fixed; top:0; right:0; bottom:0; left:0; background:rgba(0,0,0,.35); z-index:900; }
 .hotspot-drawer-mask.hotspot-drawer-mask-show { display:block; }
 .hotspot-drawer { position:fixed; top:0; right:0; height:100%; width:min(420px, 92vw); background:var(--bg-elevated); border-left:1px solid var(--border-color); box-shadow:var(--shadow-hover); transform:translateX(100%); transition:transform .25s ease; z-index:901; display:flex; flex-direction:column; }
 .hotspot-drawer.hotspot-drawer-open { transform:translateX(0); }

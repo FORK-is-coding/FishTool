@@ -14,25 +14,23 @@
     border-radius: var(--control-radius);
 }
 
-:is(
-    .card,
-    .section,
-    .comment-dashboard,
-    .metric-item,
-    .chart-panel,
-    .voice-module,
-    .voice-item,
-    .result-area,
-    .logs-area,
-    .raw-output-details,
-    .analysis-notice,
-    .analysis-error,
-    .diagnosis-dashboard,
-    .diagnosis-score,
-    .diagnosis-detail-card,
-    .ai-research-card,
-    .account-tag-cloud-card
-) {
+.card,
+.section,
+.comment-dashboard,
+.metric-item,
+.chart-panel,
+.voice-module,
+.voice-item,
+.result-area,
+.logs-area,
+.raw-output-details,
+.analysis-notice,
+.analysis-error,
+.diagnosis-dashboard,
+.diagnosis-score,
+.diagnosis-detail-card,
+.ai-research-card,
+.account-tag-cloud-card {
     position: relative;
     isolation: isolate;
     overflow: hidden;
@@ -47,25 +45,23 @@
         box-shadow 220ms ease;
 }
 
-:is(
-    .card,
-    .section,
-    .comment-dashboard,
-    .metric-item,
-    .chart-panel,
-    .voice-module,
-    .voice-item,
-    .result-area,
-    .logs-area,
-    .raw-output-details,
-    .analysis-notice,
-    .analysis-error,
-    .diagnosis-dashboard,
-    .diagnosis-score,
-    .diagnosis-detail-card,
-    .ai-research-card,
-    .account-tag-cloud-card
-)::before {
+.card::before,
+.section::before,
+.comment-dashboard::before,
+.metric-item::before,
+.chart-panel::before,
+.voice-module::before,
+.voice-item::before,
+.result-area::before,
+.logs-area::before,
+.raw-output-details::before,
+.analysis-notice::before,
+.analysis-error::before,
+.diagnosis-dashboard::before,
+.diagnosis-score::before,
+.diagnosis-detail-card::before,
+.ai-research-card::before,
+.account-tag-cloud-card::before {
     position: absolute;
     z-index: -1;
     top: 0;
@@ -83,54 +79,50 @@
     transition: opacity 220ms ease;
 }
 
-:is(
-    .card,
-    .section,
-    .comment-dashboard,
-    .metric-item,
-    .chart-panel,
-    .voice-module,
-    .voice-item,
-    .result-area,
-    .logs-area,
-    .raw-output-details,
-    .analysis-notice,
-    .analysis-error,
-    .diagnosis-dashboard,
-    .diagnosis-score,
-    .diagnosis-detail-card,
-    .ai-research-card,
-    .account-tag-cloud-card
-):hover {
+.card:hover,
+.section:hover,
+.comment-dashboard:hover,
+.metric-item:hover,
+.chart-panel:hover,
+.voice-module:hover,
+.voice-item:hover,
+.result-area:hover,
+.logs-area:hover,
+.raw-output-details:hover,
+.analysis-notice:hover,
+.analysis-error:hover,
+.diagnosis-dashboard:hover,
+.diagnosis-score:hover,
+.diagnosis-detail-card:hover,
+.ai-research-card:hover,
+.account-tag-cloud-card:hover {
     border-color: var(--primary-border-hover);
     box-shadow: var(--shadow-hover);
 }
 
-:is(
-    .card,
-    .section,
-    .comment-dashboard,
-    .metric-item,
-    .chart-panel,
-    .voice-module,
-    .voice-item,
-    .result-area,
-    .logs-area,
-    .raw-output-details,
-    .analysis-notice,
-    .analysis-error,
-    .diagnosis-dashboard,
-    .diagnosis-score,
-    .diagnosis-detail-card,
-    .ai-research-card,
-    .account-tag-cloud-card
-):hover::before {
+.card:hover::before,
+.section:hover::before,
+.comment-dashboard:hover::before,
+.metric-item:hover::before,
+.chart-panel:hover::before,
+.voice-module:hover::before,
+.voice-item:hover::before,
+.result-area:hover::before,
+.logs-area:hover::before,
+.raw-output-details:hover::before,
+.analysis-notice:hover::before,
+.analysis-error:hover::before,
+.diagnosis-dashboard:hover::before,
+.diagnosis-score:hover::before,
+.diagnosis-detail-card:hover::before,
+.ai-research-card:hover::before,
+.account-tag-cloud-card:hover::before {
     opacity: 1;
 }
 
 /* 弹窗遮罩：全屏半透明+毛玻璃，点击空白处可关闭。 */
 /* 注意：必须显式写 top/right/bottom/left 四个值，不能简写成 inset:0；
-   FishTool 内嵌的 QtWebEngine (Chromium 87) 不识别 inset 简写，
+   FishTool 内嵌的 QtWebEngine 5.15.2（Chromium 83）不识别 inset 简写，
    会导致 position:fixed 失效、弹窗渲染到屏幕外（历史线上 bug 根因）。 */
 .app-modal-backdrop {
     position: fixed;
@@ -173,7 +165,7 @@
 
 /* ===== 高优先级错误 Toast =====
    后端 core.toast 通过 /ws 推送；右上角堆叠、自动消失，不阻塞用户操作。
-   注意：QtWebEngine (Chromium 87) 不识别 inset，这里显式写 top/right。 */
+   注意：QtWebEngine 5.15.2（Chromium 83）不识别 inset，这里显式写 top/right。 */
 .app-toast-stack {
     position: fixed;
     z-index: 1100;
@@ -278,40 +270,36 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-    :is(
-        .card,
-        .section,
-        .comment-dashboard,
-        .metric-item,
-        .chart-panel,
-        .voice-module,
-        .voice-item,
-        .result-area,
-        .logs-area,
-        .raw-output-details,
-        .analysis-notice,
-        .analysis-error,
-        .diagnosis-dashboard,
-        .diagnosis-score,
-        .diagnosis-detail-card
-    ),
-    :is(
-        .card,
-        .section,
-        .comment-dashboard,
-        .metric-item,
-        .chart-panel,
-        .voice-module,
-        .voice-item,
-        .result-area,
-        .logs-area,
-        .raw-output-details,
-        .analysis-notice,
-        .analysis-error,
-        .diagnosis-dashboard,
-        .diagnosis-score,
-        .diagnosis-detail-card
-    )::before {
+    .card,
+    .section,
+    .comment-dashboard,
+    .metric-item,
+    .chart-panel,
+    .voice-module,
+    .voice-item,
+    .result-area,
+    .logs-area,
+    .raw-output-details,
+    .analysis-notice,
+    .analysis-error,
+    .diagnosis-dashboard,
+    .diagnosis-score,
+    .diagnosis-detail-card,
+    .card::before,
+    .section::before,
+    .comment-dashboard::before,
+    .metric-item::before,
+    .chart-panel::before,
+    .voice-module::before,
+    .voice-item::before,
+    .result-area::before,
+    .logs-area::before,
+    .raw-output-details::before,
+    .analysis-notice::before,
+    .analysis-error::before,
+    .diagnosis-dashboard::before,
+    .diagnosis-score::before,
+    .diagnosis-detail-card::before {
         transition: none;
     }
 }
