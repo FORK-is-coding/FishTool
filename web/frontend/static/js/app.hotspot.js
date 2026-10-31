@@ -493,15 +493,20 @@ async function openHotspotVideoCard(bvid) {
 }
 
 // 打开账号关联抽屉：同时加载 UP 主关联数据与时间轴。
+// 每次打开 / 关闭抽屉都递增；请求返回时序号已变，说明抽屉被关闭或换了账号，丢弃结果。
+let hotspotDrawerSeq = 0;
+
 async function openHotspotAccount(mid, bvid) {
     const mask = document.getElementById('hotspot-drawer-mask');
     const drawer = document.getElementById('hotspot-drawer');
     if (!mask || !drawer) return;
+    const seq = ++hotspotDrawerSeq;
     mask.classList.add('hotspot-drawer-mask-show');
     drawer.classList.add('hotspot-drawer-open');
     drawer.innerHTML = '<p class="text-muted">加载账号数据中...</p>';
     try {
         const result = await apiRequest(`/hotspot/lifecycle/accounts?bvid=${encodeURIComponent(bvid)}`);
+        if (seq !== hotspotDrawerSeq) return;
         const d = result.data || {};
         const fmt = v => (v === null || v === undefined ? '暂无' : Number(v).toLocaleString());
         const growth = d.growth_ratio === null || d.growth_ratio === undefined ? '暂无'
@@ -541,11 +546,13 @@ async function openHotspotAccount(mid, bvid) {
                 </div>
             </div>`;
     } catch (error) {
+        if (seq !== hotspotDrawerSeq) return;
         drawer.innerHTML = `<p class="hotspot-drawer-error">账号数据加载失败：${escapeHtml(error.message)}</p>`;
     }
 }
 
 function closeHotspotDrawer() {
+    hotspotDrawerSeq += 1;
     const mask = document.getElementById('hotspot-drawer-mask');
     const drawer = document.getElementById('hotspot-drawer');
     if (mask) mask.classList.remove('hotspot-drawer-mask-show');

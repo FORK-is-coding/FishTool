@@ -12,6 +12,8 @@ let currentLotteryWinners = [];
 
 // ============ 导航功能 ============
 function navigateTo(pageName) {
+    // 离开当前页前收起弹窗与抽屉，避免它们残留在新页面，或回到原页面时自动弹出。
+    if (typeof closeAllOverlays === 'function') closeAllOverlays();
     switchPage(pageName);
 
     refreshPageOnEnter(pageName);
