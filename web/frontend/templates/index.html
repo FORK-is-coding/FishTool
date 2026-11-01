@@ -24,6 +24,8 @@
 <link rel="stylesheet" href="/static/css/style.logviewer.css?v=split-20260824-ui20261101">
 <link rel="stylesheet" href="/static/css/style.help.css?v=split-20260824-ui20261101">
 <link rel="stylesheet" href="/static/css/style.hotspot.css?v=spacing3-20261026-fix20261030-ui20261101">
+<!-- 欢迎页启动公告弹窗的样式；不写 flex gap，放在 flex gap 兜底之前。 -->
+<link rel="stylesheet" href="/static/css/style.notice.css?v=notice20261101">
 <!-- 首次启动开场动画与欢迎页重播按钮的样式；不写 flex gap，放在 flex gap 兜底之前。 -->
 <link rel="stylesheet" href="/static/css/style.intro.css?v=ui20261101">
 <!-- 桌面端 Chromium 83 的 flex gap 兜底：只在 <html class="no-flex-gap"> 下生效，必须最后加载。 -->
@@ -984,6 +986,8 @@
 <script src="/static/js/app.auth.js?v=split-20260824-fix20261027-fix20261030-ui20261101-v029ui20261101"></script>
 <script src="/static/js/app.lottery.js?v=welcomefix-20261026-fix20261027-fix20261030-v029ui20261101"></script>
 <script src="/static/js/app.ui.js?v=split-20261026-toast-fix20261030-v029ui20261101"></script>
+<!-- 欢迎页启动公告：依赖 app.ui.js 的 mountAppModal，必须在它之后加载。 -->
+<script src="/static/js/app.notice.js?v=notice20261101"></script>
 
     <!-- 单视频跟踪（watch）区块的配套 JS：本批唯一新增脚本，内联在 index.html 内，
          不改动 static/ 下任何既有脚本，也不改动上方任何既有结构。
