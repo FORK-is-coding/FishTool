@@ -416,28 +416,50 @@ def test_get_alerts_returns_latest_first_with_serialized_fields(manager):
     assert result[0]["created_at"] == now.isoformat()
 
 
-def test_get_alerts_filters_by_numeric_bvid_and_level(manager):
-    """bvid 过滤走 video_id 数值亲和，级别过滤独立生效。"""
+def test_get_alerts_filters_by_bvid_and_level(manager):
+    """真实 BV 号应解析为视频外键，级别过滤仍独立生效。"""
     video_a = seed_video(manager, BVID)
     video_b = seed_video(manager, "BV2other")
     insert_alert(manager, video_a, "a", "high", datetime(2026, 8, 22, 12, 0))
     insert_alert(manager, video_b, "b", "low", datetime(2026, 8, 22, 12, 1))
     monitor = make_monitor()
 
-    by_video = run(monitor.get_alerts(bvid=str(video_a), is_read=None))
+    by_video = run(monitor.get_alerts(bvid=BVID, is_read=None))
     by_level = run(monitor.get_alerts(level="low", is_read=None))
 
     assert [item["type"] for item in by_video] == ["a"]
     assert [item["type"] for item in by_level] == ["b"]
 
 
-def test_get_alerts_returns_empty_for_non_numeric_bvid(manager):
-    """传入真实 BV 号字符串时因 video_id 数值比较而查不到（固化现状）。"""
+def test_get_alerts_returns_empty_for_unknown_bvid(manager):
+    """未知 BV 号不能退化成全量查询或误匹配整数主键。"""
     video_id = seed_video(manager, BVID)
     insert_alert(manager, video_id, "a", "high", datetime(2026, 8, 22, 12, 0))
     monitor = make_monitor()
 
-    assert run(monitor.get_alerts(bvid=BVID, is_read=None)) == []
+    assert run(monitor.get_alerts(bvid="BV1unknown", is_read=None)) == []
+    assert run(monitor.get_alerts(bvid=str(video_id), is_read=None)) == []
+
+
+def test_get_alerts_combines_bvid_level_read_state_and_limit(manager):
+    """BV 过滤后仍正确叠加级别、已读状态、倒序和数量限制。"""
+    video_a = seed_video(manager, BVID)
+    video_b = seed_video(manager, "BV2other")
+    base = datetime(2026, 8, 22, 12, 0)
+    insert_alert(manager, video_a, "old", "high", base)
+    insert_alert(manager, video_a, "low", "low", base + timedelta(minutes=1))
+    insert_alert(manager, video_a, "new", "high", base + timedelta(minutes=2))
+    insert_alert(manager, video_a, "read", "high", base + timedelta(minutes=3), is_read=True)
+    insert_alert(manager, video_b, "other", "high", base + timedelta(minutes=4))
+    monitor = make_monitor()
+
+    result = run(monitor.get_alerts(bvid=BVID, level="high", limit=1))
+    read = run(monitor.get_alerts(bvid=BVID, is_read=True))
+    all_for_video = run(monitor.get_alerts(bvid=BVID, is_read=None))
+
+    assert [item["type"] for item in result] == ["new"]
+    assert [item["type"] for item in read] == ["read"]
+    assert [item["type"] for item in all_for_video] == ["read", "new", "low", "old"]
 
 
 def test_get_alerts_filters_unread_and_respects_limit(manager):

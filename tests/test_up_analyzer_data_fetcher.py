@@ -778,8 +778,8 @@ def test_fetch_category_top_ups_wraps_ranking_exception() -> None:
     assert "type 参数只接受 all/origin 字符串" in str(excinfo.value)
 
 
-def test_fetch_category_top_ups_enriches_owners_and_records_upstat_gap() -> None:
-    """应补齐每位 UP 的粉丝数与充电人数；upstat 维度当前存在已知缺陷需记录。"""
+def test_fetch_category_top_ups_enriches_owners_with_cumulative_views() -> None:
+    """应补齐每位 UP 的粉丝、充电和账号累计播放，不能混用单视频播放。"""
     fetcher, api, limiter = _build_fetcher(
         get_ranking=_ranking_payload([_rank_item(7)]),
         get_user_relation_stat={"data": {"follower": 500}},
@@ -799,10 +799,11 @@ def test_fetch_category_top_ups_enriches_owners_and_records_upstat_gap() -> None
     assert item["follower_count"] == 500
     assert item["charge_count"] == 3
     assert item["charge_source"] == "battery_list"
-    # 已知缺陷：upstat 分支引用了未定义的局部变量，异常被就地捕获。
-    assert "upstat" in item.get("data_errors", {})
-    assert item["total_play"] == 0
-    assert "get_user_upstat" not in [call["name"] for call in api.calls]
+    assert "upstat" not in item.get("data_errors", {})
+    assert item["total_play"] == 9999
+    assert [call for call in api.calls if call["name"] == "get_user_upstat"] == [
+        {"name": "get_user_upstat", "args": (7,), "kwargs": {}}
+    ]
     # 1 次榜单 + 每位 UP 3 次（关系/充电/播放）。
     assert len(limiter.calls) == 4
 
@@ -840,6 +841,7 @@ def test_fetch_category_top_ups_records_dimension_failures() -> None:
         get_ranking=_ranking_payload([_rank_item(7), _rank_item(8)]),
         get_user_relation_stat=RuntimeError("关系失败"),
         get_charge_count=RuntimeError("充电失败"),
+        get_user_upstat=RuntimeError("播放失败"),
     )
 
     result = asyncio.run(fetcher.fetch_category_top_ups("游戏"))
@@ -847,6 +849,53 @@ def test_fetch_category_top_ups_records_dimension_failures() -> None:
     assert [item["uid"] for item in result] == [7, 8]
     assert result[0]["follower_count"] == 0
     assert set(result[0]["data_errors"]) == {"relation_stat", "charge_count", "upstat"}
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"data": {"archive": {"view": 0}, "archive_view": 444}}, 0),
+        ({"data": {"archive_view": 1234}}, 1234),
+        ({"data": {}}, 0),
+        ({"data": None}, 0),
+        (None, 0),
+    ],
+)
+def test_fetch_category_top_ups_preserves_upstat_response_contract(payload, expected) -> None:
+    """保留真实零、旧字段及空响应的既有降级契约，且仍须实际调用接口。"""
+    fetcher, api, _ = _build_fetcher(
+        get_ranking=_ranking_payload([_rank_item(7)]),
+        get_user_upstat=payload,
+    )
+
+    result = asyncio.run(fetcher.fetch_category_top_ups("游戏"))
+
+    assert result[0]["total_play"] == expected
+    assert "upstat" not in result[0].get("data_errors", {})
+    assert [call["args"] for call in api.calls if call["name"] == "get_user_upstat"] == [(7,)]
+
+
+def test_fetch_category_top_ups_does_not_reuse_another_owners_upstat() -> None:
+    """中间一位 UP 取数失败时不能沿用上一位的数据，后续 UP 仍正常取数。"""
+    fetcher, api, _ = _build_fetcher(
+        get_ranking=_ranking_payload([_rank_item(7), _rank_item(8), _rank_item(9)]),
+    )
+    requested = []
+
+    async def upstat_for_owner(uid):
+        requested.append(uid)
+        if uid == 8:
+            raise BilibiliAPIError("播放失败")
+        return {"data": {"archive": {"view": uid * 1000}}}
+
+    api.get_user_upstat = upstat_for_owner
+    result = asyncio.run(fetcher.fetch_category_top_ups("游戏"))
+
+    assert requested == [7, 8, 9]
+    assert [item["total_play"] for item in result] == [7000, 0, 9000]
+    assert "upstat" in result[1]["data_errors"]
+    assert "upstat" not in result[0].get("data_errors", {})
+    assert "upstat" not in result[2].get("data_errors", {})
 
 
 # ================================================================ _save_account_snapshot

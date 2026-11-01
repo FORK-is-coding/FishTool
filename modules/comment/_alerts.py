@@ -348,12 +348,12 @@ class MonitorAlertsMixin:
             # 基础查询
             query = session.query(CommentAlert)
             
-            # 按视频过滤
-            # 传入的是 bvid，直接与 video_id 比对
+            # BV 号属于 Video 表；预警表保存的是整数外键 video_id。
             if bvid:
-                # 按条件过滤查询
-                # 剔除不符合条件的数据
-                query = query.filter_by(video_id=bvid)
+                video = session.query(Video).filter_by(bvid=bvid).first()
+                if video is None:
+                    return []
+                query = query.filter_by(video_id=video.id)
             
             # 按级别过滤
             # 剔除不符合条件的数据
