@@ -14,6 +14,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -32,6 +34,70 @@ def _runtime_root() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return PROJECT_ROOT
+
+
+#: 冻结环境下要放到 exe 旁边 config/ 的随包配置文件。
+#: config.yaml 不在此列：ConfigManager 首次启动时会自己生成。
+BUNDLED_CONFIG_FILES = ("budget.yaml",)
+
+
+def seed_bundled_config(
+    bundle_dir: Path | None = None,
+    runtime_dir: Path | None = None,
+) -> list[Path]:
+    """冻结环境首次启动时，把随包配置复制到 exe 旁边的 ``config/``。
+
+    ``core/request_budget.py``、``core/quota_store.py`` 和
+    ``modules/hotspot/risk_control.py`` 在冻结环境只读 exe 同级的
+    ``config/budget.yaml``，而 build.spec 只把它打进包内（``_MEIPASS``）。
+    不复制的话，exe 永远读不到配额账本。
+
+    已存在的文件不覆盖，用户改过的账本保持原样。源码环境不做任何事。
+
+    Args:
+        bundle_dir: 随包资源根目录；默认取 ``sys._MEIPASS``。
+        runtime_dir: 运行期持久化根目录；默认取 :func:`_runtime_root`。
+
+    Returns:
+        list[Path]: 本次新复制出的文件路径。
+    """
+    if bundle_dir is None:
+        meipass = getattr(sys, "_MEIPASS", None)
+        if not getattr(sys, "frozen", False) or not meipass:
+            return []
+        bundle_dir = Path(meipass)
+    if runtime_dir is None:
+        runtime_dir = _runtime_root()
+
+    copied: list[Path] = []
+    for name in BUNDLED_CONFIG_FILES:
+        src = bundle_dir / "config" / name
+        dst = runtime_dir / "config" / name
+        if dst.exists():
+            continue
+        if not src.is_file():
+            _entry_logger().warning("[启动] 包内缺少配置文件，无法复制: %s", src)
+            continue
+        tmp = dst.with_name(dst.name + ".tmp")
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            # 先写临时文件再改名：中途失败不会留下半个账本，下次启动还会重试。
+            shutil.copyfile(src, tmp)
+            os.replace(tmp, dst)
+        except OSError as exc:
+            _entry_logger().error("[启动] 复制配置文件失败: %s -> %s: %s", src, dst, exc)
+            tmp.unlink(missing_ok=True)
+            continue
+        _entry_logger().info("[启动] 已复制默认配置文件: %s", dst)
+        copied.append(dst)
+    return copied
+
+
+def _entry_logger():
+    """延迟导入项目 logger，避免入口模块导入时就初始化日志目录。"""
+    from core.logger import get_logger
+
+    return get_logger(__name__)
 
 
 def init_project() -> bool:
@@ -202,6 +268,9 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # 冻结环境先补齐 exe 旁边的随包配置，后面所有子命令读到的都是同一份。
+    seed_bundled_config()
 
     # 不带子命令时默认桌面版，保持「双击/直接运行 app.py 就能用」的体验。
     command = args.command or "desktop"
