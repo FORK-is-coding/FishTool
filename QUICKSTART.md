@@ -19,6 +19,18 @@ python app.py
 `http://localhost:8000` 也可以使用同一套界面。
 
 ### 4. 仅使用 Web 版（不打开桌面窗口）
+
+**Windows 一键启动**：双击项目根目录的 `start_web.bat`。脚本会：
+
+- 依次查找 `.venv`、`venv`、PATH 上的 `python`、`py -3.12`、`py -3.11`，优先用已装好依赖的 Python 3.11/3.12；
+  只找到没装依赖的，会询问是否执行 `pip install -r requirements.txt`；
+- 启动 Web 服务，`/health` 就绪后自动用默认浏览器打开 http://localhost:8000；
+- 端口上已经有 FishTool 在运行（例如开着桌面版）时，直接打开浏览器，不重复启动；
+- 端口被其他程序占用时直接提示，可换端口：在命令行运行 `start_web.bat 9000`。
+
+窗口要一直开着，关闭窗口或按 `Ctrl+C` 即停止服务；启动失败时窗口会停住，方便查看报错。
+
+**命令行启动**（任意系统）：
 ```bash
 python app.py web
 ```

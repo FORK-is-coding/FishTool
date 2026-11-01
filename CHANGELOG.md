@@ -10,6 +10,23 @@
 
 ## [未发布]
 
+### Windows 一键启动 Web 版
+
+- 新增根目录 `start_web.bat`：双击即启动 Web 版（`app.py web`，只监听 127.0.0.1），
+  `/health` 就绪后自动打开默认浏览器；可传端口 `start_web.bat 9000`。
+- 自动选择 Python 3.11/3.12（`.venv` → `venv` → PATH `python` → `py -3.12` → `py -3.11`），
+  优先已装依赖的解释器；都缺依赖时询问是否 `pip install -r requirements.txt`。
+- 端口上已有 FishTool（如桌面版）时只打开浏览器；端口被其他程序占用时启动前直接报错；
+  失败时窗口暂停以便查看原因。退出时恢复控制台原代码页。
+- 新增 `.gitattributes`，固定 `*.bat` / `*.cmd` 为 CRLF；`tests/test_start_web_bat.py` 锁住
+  CRLF、无 BOM、注释纯 ASCII、经 `app.py web` 启动等约束。
+
+### README 重写
+
+- 首页 README 按当前界面重写：一键启动放在最前，功能说明按左侧菜单顺序，标明哪些功能用到 AI。
+- 配图换成新版界面截图，统一放在 `assets/readme/`（开场动画、配置、热点发现、评论监控、
+  头部 UP 拆解、账号自诊、抽奖工具）。
+
 ### 默认只监听本机（#5）
 
 - `python app.py web` 的 `--host` 默认值、桌面版内嵌 Web 服务（源码模式子进程与打包版进程内
