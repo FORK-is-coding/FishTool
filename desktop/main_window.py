@@ -92,6 +92,37 @@ def _default_download_path(suggested_name: str, downloads_dir: Optional[Path] = 
     return str(downloads / safe_name) if downloads.is_dir() else safe_name
 
 
+def fit_window_geometry(
+    available: tuple[int, int, int, int],
+    frame_extra: tuple[int, int],
+    initial: tuple[int, int],
+    minimum: tuple[int, int],
+) -> tuple[tuple[int, int, int, int], tuple[int, int]]:
+    """按屏幕可用区域算出主窗口的初始位置、尺寸和最小尺寸。
+
+    初始尺寸和最小尺寸都不超过可用区域（扣掉标题栏和边框），窗口在可用区域内居中。
+    屏幕足够大时结果与常量一致。
+
+    Args:
+        available: 屏幕可用区域 ``(x, y, 宽, 高)``，已扣除任务栏，逻辑像素。
+        frame_extra: 标题栏和边框占用的 ``(宽, 高)``。
+        initial: 期望的客户区初始尺寸 ``(宽, 高)``。
+        minimum: 期望的客户区最小尺寸 ``(宽, 高)``。
+
+    Returns:
+        ``((x, y, 宽, 高), (最小宽, 最小高))``，尺寸均指客户区，``x/y`` 指窗口外框左上角。
+    """
+    ax, ay, aw, ah = available
+    fw, fh = max(0, frame_extra[0]), max(0, frame_extra[1])
+    max_w, max_h = max(1, aw - fw), max(1, ah - fh)
+    min_w, min_h = min(minimum[0], max_w), min(minimum[1], max_h)
+    width = max(min_w, min(initial[0], max_w))
+    height = max(min_h, min(initial[1], max_h))
+    x = ax + max(0, (aw - width - fw) // 2)
+    y = ay + max(0, (ah - height - fh) // 2)
+    return (x, y, width, height), (min_w, min_h)
+
+
 class DesktopWebPage(QWebEnginePage):
     """桌面端 WebEngine 页面，记录 JS 错误并接收报告保存请求。"""
 
@@ -194,6 +225,34 @@ class MainWindow(QMainWindow):
         # 触发服务/线程开始运行
         self.start_web_service()
     
+    #: 窗口未显示前拿不到真实边框尺寸，按 Windows 10/11 默认标题栏和边框估算。
+    WINDOW_FRAME_EXTRA = (16, 39)
+
+    def _apply_initial_geometry(self):
+        """按主屏可用区域设置初始尺寸、最小尺寸并居中。"""
+        initial = (self.INITIAL_WINDOW_WIDTH, self.INITIAL_WINDOW_HEIGHT)
+        minimum = (self.MIN_WINDOW_WIDTH, self.MIN_WINDOW_HEIGHT)
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            self.setMinimumSize(*minimum)
+            self.setGeometry(100, 100, *initial)
+            return
+        area = screen.availableGeometry()
+        (x, y, width, height), (min_w, min_h) = fit_window_geometry(
+            (area.x(), area.y(), area.width(), area.height()),
+            self.WINDOW_FRAME_EXTRA,
+            initial,
+            minimum,
+        )
+        if (width, height) != initial:
+            logger.info(
+                "[主窗口] 屏幕可用区域 %sx%s，启动尺寸由 %sx%s 收缩为 %sx%s",
+                area.width(), area.height(), initial[0], initial[1], width, height,
+            )
+        self.setMinimumSize(min_w, min_h)
+        self.resize(width, height)
+        self.move(x, y)
+
     def init_ui(self):
         """初始化UI界面
         # 设置初始值/默认状态，避免后续空引用
@@ -204,13 +263,8 @@ class MainWindow(QMainWindow):
         # 从存储/网络读入数据
         """
         # 启动尺寸与网页版式保持 8:5 比例；最小尺寸避免内容区被压入窄屏布局。
-        self.setMinimumSize(self.MIN_WINDOW_WIDTH, self.MIN_WINDOW_HEIGHT)
-        self.setGeometry(
-            100,
-            100,
-            self.INITIAL_WINDOW_WIDTH,
-            self.INITIAL_WINDOW_HEIGHT,
-        )
+        # 两者都按当前屏幕可用区域收缩，窗口居中且不会压到任务栏下面。
+        self._apply_initial_geometry()
         
         # 中央窗口
         central_widget = QWidget()
@@ -261,6 +315,9 @@ class MainWindow(QMainWindow):
         # 从存储/网络读入数据
         settings.setAttribute(QWebEngineSettings.LocalContentCanAccessFileUrls, True)
         
+        # QtWebEngine 默认关闭平滑滚动，滚轮一格直接跳一段；打开后与浏览器的滚轮手感一致。
+        settings.setAttribute(QWebEngineSettings.ScrollAnimatorEnabled, True)
+
         # QWebEngine 默认使用 1.0 CSS 缩放，避免桌面端相对浏览器再次放大或缩小。
         self.web_view.setZoomFactor(1.0)
 
