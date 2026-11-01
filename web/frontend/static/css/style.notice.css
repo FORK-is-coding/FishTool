@@ -1,0 +1,137 @@
+/* ===== 欢迎页启动公告（app.notice.js） =====
+   沿用 .app-modal 的遮罩、圆角、入场动画、顶边三色段和右上角排线，只放大尺寸，
+   并把面板纹理调淡：底纹仍是卡片那套 card-block / card-field，上面压一层更白的渐变。
+   桌面端是 Chromium 83：不写 flex gap（按钮行复用已有兜底的 .app-modal-actions），
+   不用 inset 简写和 :is() / :where()。 */
+.app-modal.welcome-notice-modal {
+    width: min(640px, 100%);
+    padding: 34px 40px 30px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    background-color: #fff;
+    background-image:
+        url("/static/tex/card-code.svg"),
+        linear-gradient(180deg, rgba(255, 255, 255, .93) 0, rgba(255, 255, 255, .93) 56%, rgba(255, 255, 255, .76) 100%),
+        url("/static/tex/card-block.svg"),
+        url("/static/tex/card-field.svg");
+    background-size: 52px 9px, 100% 100%, 104px 104px, 12px 12px;
+    background-repeat: no-repeat, no-repeat, repeat, repeat;
+    background-position: left 40px bottom 46px, 0 0, left -1px bottom -1px, left bottom;
+}
+
+/* 内容压在空心大字之上 */
+.welcome-notice-modal > * {
+    position: relative;
+    z-index: 1;
+}
+
+/* 右上角空心大字：与各页标题后的 .ph-hollow 同一做法，描边和斜纹都更淡 */
+.welcome-notice-modal .welcome-notice-hollow {
+    position: absolute;
+    top: 40px;
+    right: 28px;
+    z-index: 0;
+    white-space: nowrap;
+    color: transparent;
+    font: 800 64px/1 var(--f-wide);
+    letter-spacing: -.06em;
+    -webkit-text-stroke: 1px rgba(25, 25, 25, .06);
+    background: repeating-linear-gradient(-45deg, rgba(25, 25, 25, .06) 0 1px, transparent 1px 5px);
+    -webkit-background-clip: text;
+    background-clip: text;
+    pointer-events: none;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.welcome-notice-kicker {
+    display: block;
+    margin-bottom: 16px;
+    color: var(--ink-3);
+    font: 500 11px/1 var(--f-mono);
+    letter-spacing: .08em;
+}
+
+.welcome-notice-kicker b {
+    color: var(--ink);
+    font-weight: 600;
+}
+
+.app-modal.welcome-notice-modal h3 {
+    margin-bottom: 18px;
+    font-size: 24px;
+}
+
+.welcome-notice-modal .welcome-notice-body p {
+    margin: 0 0 12px;
+    color: var(--ink-2);
+    font-size: 14px;
+    line-height: 1.85;
+    white-space: normal;
+}
+
+.welcome-notice-modal .welcome-notice-body p:last-child {
+    margin-bottom: 0;
+}
+
+.welcome-notice-body strong {
+    color: var(--ink);
+    font-weight: 700;
+}
+
+/* 防诈骗提醒：左侧红色竖条 + 极淡红底，句中重点转红 */
+.welcome-notice-modal .welcome-notice-body .welcome-notice-alert {
+    padding: 12px 16px;
+    border-left: 3px solid var(--danger);
+    background: rgba(224, 54, 44, .05);
+}
+
+.welcome-notice-alert strong {
+    color: var(--danger);
+}
+
+.welcome-notice-link {
+    color: var(--ink);
+    font-weight: 700;
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+}
+
+.welcome-notice-link:hover {
+    background: rgba(255, 250, 0, .5);
+}
+
+.welcome-notice-mail {
+    font-family: var(--f-mono);
+    letter-spacing: .02em;
+    -webkit-user-select: all;
+    user-select: all;
+}
+
+.welcome-notice-modal .app-modal-actions {
+    margin-top: 24px;
+    padding-top: 20px;
+    border-top: 1px solid var(--rule);
+}
+
+/* 按钮间距只由 .app-modal-actions 的 12px gap 决定，抵消全局 .btn + .btn 的 10px 左外边距
+   （与 style.lottery.css 同一写法）；不支持 gap 时不命中，由 style.flexgap.css 的兜底接管。 */
+html:not(.no-flex-gap) .welcome-notice-modal .app-modal-actions > .btn {
+    margin-left: 0;
+}
+
+@media (max-width: 560px) {
+    .app-modal.welcome-notice-modal {
+        padding: 28px 22px 24px;
+        background-position: left 22px bottom 40px, 0 0, left -1px bottom -1px, left bottom;
+    }
+
+    .app-modal.welcome-notice-modal h3 {
+        font-size: 20px;
+    }
+
+    .welcome-notice-modal .welcome-notice-hollow {
+        display: none;
+    }
+}
