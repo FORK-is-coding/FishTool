@@ -3,7 +3,7 @@
 覆盖范围：
 - DatabaseManager.__init__ / create_tables / get_session / drop_all_tables / backup
 - DatabaseManager._migrate_comment_member_columns / _migrate_up_master_charge_count
-  / _migrate_video_stats_columns
+  / _migrate_video_stats_columns / _migrate_cookie_pool_plaintext_credentials
 - api.init_database / get_session / get_db
 - 包级 __all__ 兼容导出
 
@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from pathlib import Path
 
@@ -129,6 +130,91 @@ def test_migrations_add_missing_columns_to_legacy_db(tmp_path):
     assert "ix_video_stats_video_captured" in index_names
 
 
+def sessdata_digest(sessdata: str) -> str:
+    """独立计算 cookie_pool.sessdata 列应存的摘要（不复用生产实现）。"""
+    return "sha256:" + hashlib.sha256(sessdata.encode("utf-8")).hexdigest()
+
+
+def _create_legacy_cookie_pool(path):
+    """用真实 sqlite3 造旧版 cookie_pool 表，sessdata/bili_jct 列为明文。"""
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            "CREATE TABLE cookie_pool ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, account_id INTEGER NOT NULL, "
+            "cookie_data TEXT NOT NULL, sessdata VARCHAR(100), bili_jct VARCHAR(100), "
+            "buvid3 VARCHAR(100), is_valid BOOLEAN, fail_count INTEGER, "
+            "last_used DATETIME, last_check DATETIME, created_at DATETIME)"
+        )
+        connection.executemany(
+            "INSERT INTO cookie_pool (account_id, cookie_data, sessdata, bili_jct, buvid3) "
+            "VALUES (1, ?, ?, ?, ?)",
+            [
+                ("enc-1", "plain-sess", "plain-jct", "b1"),
+                ("enc-2", sessdata_digest("already"), "", "b2"),
+                ("enc-3", None, None, "b3"),
+                # 不可解码的 BLOB：迁移不能崩溃，也不能原样保留
+                ("enc-4", b"\xff\xfe\x00", "jct-4", "b4"),
+            ],
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _cookie_pool_rows(path):
+    """读取 cookie_pool 的 (id, sessdata, bili_jct, buvid3, cookie_data)，按 id 排序。"""
+    connection = sqlite3.connect(path)
+    try:
+        return connection.execute(
+            "SELECT id, sessdata, bili_jct, buvid3, cookie_data FROM cookie_pool ORDER BY id"
+        ).fetchall()
+    finally:
+        connection.close()
+
+
+def test_cookie_pool_migration_hashes_plaintext_and_clears_bili_jct(tmp_path):
+    """旧库明文 sessdata 改写为 sha256 摘要、bili_jct 清空，其余列不动。"""
+    legacy_path = tmp_path / "legacy_cookie.db"
+    _create_legacy_cookie_pool(legacy_path)
+
+    DatabaseManager(str(legacy_path))
+
+    assert _cookie_pool_rows(legacy_path) == [
+        (1, sessdata_digest("plain-sess"), "", "b1", "enc-1"),
+        (2, sessdata_digest("already"), "", "b2", "enc-2"),
+        (3, None, None, "b3", "enc-3"),
+        (4, "", "", "b4", "enc-4"),
+    ]
+    assert sessdata_digest("plain-sess").startswith("sha256:")
+
+
+def test_cookie_pool_migration_is_idempotent(tmp_path):
+    """第二次构造零改动：已是摘要的值不会被二次摘要。"""
+    legacy_path = tmp_path / "legacy_cookie.db"
+    _create_legacy_cookie_pool(legacy_path)
+
+    DatabaseManager(str(legacy_path))
+    first = _cookie_pool_rows(legacy_path)
+    DatabaseManager(str(legacy_path))
+    second = _cookie_pool_rows(legacy_path)
+
+    assert second == first
+    assert first[0][1] == sessdata_digest("plain-sess")
+    assert first[0][1] != sessdata_digest(sessdata_digest("plain-sess"))
+
+
+def test_cookie_pool_migration_skips_missing_table(tmp_path):
+    """没有 cookie_pool 表时迁移直接跳过，不报错。"""
+    manager = DatabaseManager(str(tmp_path / "ops.db"))
+    with manager.engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE cookie_pool")
+
+    manager._migrate_cookie_pool_plaintext_credentials()
+
+    assert "cookie_pool" not in set(inspect(manager.engine).get_table_names())
+
+
 # ---------------------------------------------------------------------------
 # 模块级工厂函数
 # ---------------------------------------------------------------------------
@@ -228,3 +314,28 @@ def test_package_exports_are_available():
     assert set(expected) <= set(db_package.__all__)
     for name in expected:
         assert hasattr(db_package, name)
+
+
+def test_task_key_migration_is_idempotent_and_keeps_existing_rows(tmp_path):
+    """旧库 tasks 表缺 task_key：迁移补列 + 唯一索引，旧记录保留且可重复迁移。"""
+    legacy_path = tmp_path / "legacy_tasks.db"
+    connection = sqlite3.connect(legacy_path)
+    try:
+        connection.execute(
+            "CREATE TABLE tasks (id INTEGER PRIMARY KEY, task_type VARCHAR(50), task_name VARCHAR(200), "
+            "params JSON, status VARCHAR(20), progress FLOAT, result JSON, error TEXT, checkpoint JSON, "
+            "started_at DATETIME, completed_at DATETIME, created_at DATETIME)"
+        )
+        connection.execute("INSERT INTO tasks (task_type, status) VALUES ('comment_collect', 'completed')")
+        connection.commit()
+    finally:
+        connection.close()
+
+    manager = DatabaseManager(str(legacy_path))
+    manager._migrate_task_key_column()  # 再跑一次仍无异常
+    inspector = inspect(manager.engine)
+    assert "task_key" in {column["name"] for column in inspector.get_columns("tasks")}
+    assert "ux_tasks_task_key" in {index["name"] for index in inspector.get_indexes("tasks")}
+    with sqlite3.connect(legacy_path) as raw:
+        assert raw.execute("SELECT COUNT(*) FROM tasks WHERE task_key IS NULL").fetchone()[0] == 1
+    manager.engine.dispose()

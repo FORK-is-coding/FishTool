@@ -65,9 +65,11 @@ function knownRatioPercent(value) {
 // ============ 后台任务找回（页面等待超时后任务可能仍在运行） ============
 // 每类任务对应的会话存储键、触发按钮与“继续查看”文案。
 const LOTTERY_ACTIVE_TASKS = {
-    filter: { storageKey: 'fishtool.lottery.activeTask.filter', buttonId: 'lottery-filter-button', resumeLabel: '继续查看筛选进度' },
-    draw: { storageKey: 'fishtool.lottery.activeTask.draw', buttonId: 'lottery-preview-button', resumeLabel: '继续查看抽奖进度' },
+    filter: { storageKey: 'fishtool.lottery.activeTask.filter', buttonId: 'lottery-filter-button', resumeLabel: '继续查看筛选进度', cancelId: 'lottery-filter-cancel', resultId: 'lottery-filter-result' },
+    draw: { storageKey: 'fishtool.lottery.activeTask.draw', buttonId: 'lottery-preview-button', resumeLabel: '继续查看抽奖进度', cancelId: 'lottery-draw-cancel', resultId: 'lottery-draw-result' },
 };
+// 取消后的统一提示：说明已采集数据会保留复用，避免用户误以为白跑。
+const LOTTERY_CANCELLED_NOTICE = '<p class="analysis-notice" role="status">任务已取消。已采集的评论与用户资料会保留，下次发起时可直接复用。</p>';
 // sessionStorage 在隐私模式 / 被禁用时会抛错，保留内存兜底，保证本页内仍可继续查看。
 const lotteryActiveTaskMemory = {};
 
@@ -103,24 +105,121 @@ function lotterySyncTaskButton(kind) {
     button.textContent = lotteryReadActiveTask(kind) ? LOTTERY_ACTIVE_TASKS[kind].resumeLabel : button.dataset.idleLabel;
 }
 
-// 轮询达到页面等待上限时，提示任务仍在后台运行，并给出继续查看入口。
+// 轮询达到页面等待上限时，提示任务仍在后台运行，并给出继续查看与取消入口。
 function renderLotteryTaskStillRunning(kind, elementId) {
     const resumeHandler = kind === 'filter' ? 'startRealUserFilter()' : 'previewLotteryDraw()';
+    // 处理函数按 kind 取固定字面量，不把变量插进内联事件的 JS 字符串（与 PR-04 的内联事件规则一致）。
+    const cancelHandler = kind === 'filter' ? "cancelLotteryTask('filter')" : "cancelLotteryTask('draw')";
     document.getElementById(elementId).innerHTML = `
         <div class="analysis-notice" role="status">
             <p>任务仍在后台运行，页面已暂停等待。后台完成后可继续查看进度和结果，无需重新发起。</p>
             <button class="btn btn-secondary" type="button" onclick="${resumeHandler}">${LOTTERY_ACTIVE_TASKS[kind].resumeLabel}</button>
+            <button class="btn btn-secondary" type="button" onclick="${cancelHandler}">取消任务</button>
         </div>`;
+}
+
+// 轮询期间在触发按钮旁显示「取消任务」；不改公共 showLoading，结果区每次轮询重绘也不会冲掉它。
+function lotteryShowCancelButton(kind, visible) {
+    const config = LOTTERY_ACTIVE_TASKS[kind];
+    const existing = document.getElementById(config.cancelId);
+    if (!visible) {
+        if (existing) existing.remove();
+        return;
+    }
+    if (existing) return;
+    const trigger = document.getElementById(config.buttonId);
+    if (!trigger) return;
+    const cancelButton = document.createElement('button');
+    cancelButton.id = config.cancelId;
+    cancelButton.type = 'button';
+    cancelButton.className = 'btn btn-secondary';
+    cancelButton.textContent = '取消任务';
+    cancelButton.addEventListener('click', () => cancelLotteryTask(kind));
+    trigger.insertAdjacentElement('afterend', cancelButton);
+}
+
+// 二次确认后取消后台任务：成功或任务已结束都清掉活动任务，避免按钮一直停在「继续查看」。
+async function cancelLotteryTask(kind) {
+    const taskId = lotteryReadActiveTask(kind);
+    if (!taskId) return;
+    if (!confirm('确定要取消这个任务吗？已采集的评论与用户资料会保留，下次发起时可直接复用。')) return;
+    try {
+        await apiRequest(`/lottery/tasks/${encodeURIComponent(taskId)}/cancel`, { method: 'POST' }, false);
+        lotteryWriteActiveTask(kind, '');
+        lotteryShowCancelButton(kind, false);
+        document.getElementById(LOTTERY_ACTIVE_TASKS[kind].resultId).innerHTML = LOTTERY_CANCELLED_NOTICE;
+    } catch (error) {
+        // 取消失败时重新查询任务：已不存在或已结束（404 / 409 的情形）就不再保留活动任务，
+        // 仍在运行（如网络抖动）则保留，用户可再次取消或继续查看。
+        if (!await lotteryTaskStillRunning(taskId)) {
+            lotteryWriteActiveTask(kind, '');
+            lotteryShowCancelButton(kind, false);
+        }
+        showAppAlert(`取消失败：${error.message}`);
+    }
+}
+
+// 查询任务是否仍在运行；查询失败（任务不存在或服务已重启）视为不在运行。
+async function lotteryTaskStillRunning(taskId) {
+    try {
+        const response = await apiRequest(`/lottery/tasks/${encodeURIComponent(taskId)}`, {}, false);
+        return (response.data || {}).status === 'running';
+    } catch (error) {
+        return false;
+    }
 }
 
 // 统一处理筛选/抽奖任务错误：仍在运行则保留任务 ID，其余情况视为结束并清除。
 function handleLotteryTaskError(kind, error, elementId, failurePrefix) {
+    lotteryShowCancelButton(kind, false);
     if (error.code === 'TASK_STILL_RUNNING') {
         renderLotteryTaskStillRunning(kind, elementId);
         return;
     }
+    if (error.code === 'TASK_CANCELLED') {
+        lotteryWriteActiveTask(kind, '');
+        document.getElementById(elementId).innerHTML = LOTTERY_CANCELLED_NOTICE;
+        return;
+    }
+    if (error.code === 'TASK_INTERRUPTED') {
+        // 保留活动任务，用户确认后才续跑（会消耗请求配额与 token），已完成部分由后端缓存跳过。
+        renderLotteryTaskInterrupted(kind, elementId, error.message);
+        return;
+    }
     lotteryWriteActiveTask(kind, '');
     document.getElementById(elementId).innerHTML = `<p class="analysis-error">${failurePrefix}：${escapeHtml(error.message)}</p>`;
+}
+
+// 服务重启打断的任务：提供「继续执行」与「取消任务」两个入口。
+function renderLotteryTaskInterrupted(kind, elementId, message) {
+    // 处理函数按 kind 取固定字面量，不把变量插进内联事件的 JS 字符串（与 PR-04 的内联事件规则一致）。
+    const resumeHandler = kind === 'filter' ? "resumeLotteryTask('filter')" : "resumeLotteryTask('draw')";
+    const cancelHandler = kind === 'filter' ? "cancelLotteryTask('filter')" : "cancelLotteryTask('draw')";
+    document.getElementById(elementId).innerHTML = `
+        <div class="analysis-notice" role="status">
+            <p>${escapeHtml(message || '服务重启，任务已中断')}</p>
+            <button class="btn btn-primary" type="button" onclick="${resumeHandler}">继续执行</button>
+            <button class="btn btn-secondary" type="button" onclick="${cancelHandler}">取消任务</button>
+        </div>`;
+}
+
+// 继续执行已中断任务：后端沿用原句柄与原参数，前端接着轮询同一个任务。
+async function resumeLotteryTask(kind) {
+    const taskId = lotteryReadActiveTask(kind);
+    if (!taskId) return;
+    try {
+        const started = await apiRequest(`/lottery/tasks/${encodeURIComponent(taskId)}/resume`, { method: 'POST' }, false);
+        // 后端若发现同参任务已在运行，会返回那个任务的 ID。
+        if (started.task_id && started.task_id !== taskId) lotteryWriteActiveTask(kind, started.task_id);
+    } catch (error) {
+        // 任务已结束或已过期：不再保留活动任务，提示用户重新发起。
+        lotteryWriteActiveTask(kind, '');
+        document.getElementById(LOTTERY_ACTIVE_TASKS[kind].resultId).innerHTML = `<p class="analysis-error">继续执行失败：${escapeHtml(error.message)}</p>`;
+        return;
+    }
+    // 复用既有入口：有活动任务时它们只轮询、不新建任务。
+    if (kind === 'filter') return startRealUserFilter();
+    return resumeLotteryDraw();
 }
 
 // 页面就绪后按会话中记录的活动任务恢复按钮文案。
@@ -147,7 +246,9 @@ async function startRealUserFilter() {
             taskId = started.task_id;
             lotteryWriteActiveTask('filter', taskId);
         }
+        lotteryShowCancelButton('filter', true);
         const result = await pollTask(`/lottery/tasks/${encodeURIComponent(taskId)}`, 'lottery-filter-result');
+        lotteryShowCancelButton('filter', false);
         lotteryWriteActiveTask('filter', '');
         const realUsers = Array.isArray(result.real_users) ? result.real_users : [];
         const suspiciousUsers = Array.isArray(result.suspicious_users) ? result.suspicious_users : [];
@@ -398,7 +499,9 @@ async function runLotteryDraw(target, winnerCount, uniqueUsers, filters) {
 
 /** 轮询抽奖任务直至结束，成功后清除活动任务并渲染中奖名单。 */
 async function pollLotteryDraw(taskId) {
+    lotteryShowCancelButton('draw', true);
     const result = await pollTask(`/lottery/tasks/${encodeURIComponent(taskId)}`, 'lottery-draw-result');
+    lotteryShowCancelButton('draw', false);
     lotteryWriteActiveTask('draw', '');
     const winners = Array.isArray(result.winners) ? result.winners : [];
     currentLotteryWinners = winners.map(winner => ({ ...winner }));

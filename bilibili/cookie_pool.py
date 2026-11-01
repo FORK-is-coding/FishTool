@@ -34,6 +34,7 @@ from cryptography.fernet import Fernet
 import logging
 
 from core.database import get_session, Account, CookiePool as CookiePoolModel
+from core.database.models_account import sessdata_digest
 from core.exceptions import CookieExpiredError, AuthenticationError
 from core.toast import emit_toast
 from core.logger import get_logger
@@ -176,13 +177,16 @@ class CookiePool:
                         # 回滚事务
                         db.rollback()
                 
+                # 关键字段从解密后的 Cookie 串解析：
+                # 数据库 sessdata 列只存摘要、bili_jct 列恒为空，不再读取明文列
+                fields = self._parse_cookie(decrypted_cookie or '')
                 # 构造内存对象并加入池
                 cookie = Cookie(
                     id=c.id,
                     account_id=c.account_id,
                     cookie_data=decrypted_cookie,
-                    sessdata=c.sessdata,
-                    bili_jct=c.bili_jct,
+                    sessdata=fields.get('SESSDATA', ''),
+                    bili_jct=fields.get('bili_jct', ''),
                     buvid3=c.buvid3,
                     is_valid=c.is_valid
                 )
@@ -241,8 +245,9 @@ class CookiePool:
             try:
                 db = get_session()
                 try:
+                    # 数据库 sessdata 列只存摘要，去重按摘要比较
                     existing = db.query(CookiePoolModel).filter(
-                        CookiePoolModel.sessdata == sessdata
+                        CookiePoolModel.sessdata == sessdata_digest(sessdata)
                     ).first()
                     if existing is None:
                         # 关联默认账号；表里无账号时兜底 account_id=1
@@ -252,14 +257,16 @@ class CookiePool:
                         try:
                             encrypted = self._cipher.encrypt(cookie_str.encode('utf-8')).decode('utf-8')
                         except Exception as _enc_err:
-                            # 加密失败降级明文，load_from_db 会走迁移路径再加密
-                            logger.warning(f"Cookie 加密失败，降级明文存储: {_enc_err}")
-                            encrypted = cookie_str
+                            # 加密失败不落库：绝不降级写明文，本次登录态仅保留在内存池
+                            logger.warning(f"Cookie 加密失败，不写入数据库（仅保留在内存池）: {_enc_err}")
+                            return cookie
+                        # sessdata 列存摘要、bili_jct 列置空：库里不留会话凭据明文，
+                        # 运行时字段由 load_from_db 从解密后的 cookie_data 解析
                         model = CookiePoolModel(
                             account_id=account_id,
                             cookie_data=encrypted,
-                            sessdata=sessdata,
-                            bili_jct=cookie_dict.get('bili_jct', ''),
+                            sessdata=sessdata_digest(sessdata),
+                            bili_jct='',
                             buvid3=cookie_dict.get('buvid3', ''),
                             is_valid=True,
                         )
@@ -277,6 +284,80 @@ class CookiePool:
                 logger.warning(f"Cookie 持久化失败（内存池仍可用）: {e}")
 
         return cookie
+
+    def remove_account_cookies(self, sessdata: str = '', dede_user_id: str = '') -> Dict[str, int]:
+        """撤销指定账号的 Cookie：同时删除内存池与 cookie_pool 表中的记录。
+
+        退出登录时调用。只调用 mark_invalid 不够，巡检 check_all_cookies
+        会把失效记录恢复为有效；因此这里直接删除，而不是标记失效。
+        匹配规则（任一命中即删除）：
+        - SESSDATA 等于 sessdata：当前这次登录的会话；
+        - Cookie 中的 DedeUserID 等于 dede_user_id：同一账号历史遗留的旧会话。
+        其他账号的记录不受影响。两个参数都为空时不做任何删除。
+
+        Args:
+            sessdata: 待撤销会话的 SESSDATA。
+            dede_user_id: 待撤销账号的 DedeUserID（B站 UID）。
+
+        Returns:
+            删除条数，形如 {'memory': 内存条数, 'db': 数据库条数}。
+
+        Raises:
+            Exception: 数据库删除失败时向上抛出（内存池已先行清理），
+                由调用方决定如何提示。
+        """
+        sessdata = (sessdata or '').strip()
+        dede_user_id = (dede_user_id or '').strip()
+        # 空参数保护：绝不能因为参数缺失而清空整个池
+        if not sessdata and not dede_user_id:
+            return {'memory': 0, 'db': 0}
+
+        target_digest = sessdata_digest(sessdata)
+
+        def _matches(row_sessdata: str, cookie_str: str) -> bool:
+            """判断一条 Cookie 是否属于待撤销的账号。
+
+            内存对象的 sessdata 是明文；数据库行的 sessdata 列是摘要，
+            两种口径都接受，另外再按解密后 Cookie 串里的字段兜底匹配。
+            """
+            if sessdata and row_sessdata in (sessdata, target_digest):
+                return True
+            fields = self._parse_cookie(cookie_str or '')
+            if sessdata and fields.get('SESSDATA') == sessdata:
+                return True
+            return bool(dede_user_id) and fields.get('DedeUserID') == dede_user_id
+
+        # 先清内存：整体替换列表而不是原地删除，
+        # 正在遍历旧列表的巡检不会跳项，也不会把已删除的对象放回池中。
+        kept = [c for c in self.cookies if not _matches(c.sessdata, c.cookie_data)]
+        memory_removed = len(self.cookies) - len(kept)
+        self.cookies = kept
+
+        # 再清数据库，避免重启后 load_from_db 把记录恢复
+        db_removed = 0
+        db = get_session()
+        try:
+            for row in db.query(CookiePoolModel).all():
+                raw = row.cookie_data
+                try:
+                    cookie_str = self._cipher.decrypt(raw.encode('utf-8')).decode('utf-8')
+                except Exception as decrypt_error:
+                    # 兼容旧版明文 / BLOB 记录，与 load_from_db 的回退口径一致；
+                    # 撤销时逐行解密属预期内的降级，记 debug 即可，不刷屏
+                    logger.debug(f"Cookie ID={row.id} 解密失败，按旧版明文匹配: {decrypt_error}")
+                    cookie_str = raw.decode('utf-8', errors='replace') if isinstance(raw, bytes) else (raw or '')
+                if _matches(row.sessdata, cookie_str):
+                    db.delete(row)
+                    db_removed += 1
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+        logger.info(f"已撤销账号 Cookie: 内存 {memory_removed} 条, 数据库 {db_removed} 条")
+        return {'memory': memory_removed, 'db': db_removed}
 
     def load_from_secrets(self) -> int:
         """回退加载：从 ConfigManager secrets 读取扫码登录保存的 Cookie。

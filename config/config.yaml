@@ -126,3 +126,9 @@ supply:
   angle_min_coverage: 0.7                 # 可评价「拥挤」所需的最低 angle_coverage（低覆盖门）
   supply_present_min_addresses: 2         # supply_present 所需最少可确认 addresses 作品数
   policy_version: supply_c_v1             # 供给策略版本；随结果输出
+
+# 抽奖评论候选集复用策略（issue #5-6）。
+# 只有在本窗口内、且标记为完整采集的本地评论快照才会被直接复用；
+# 旧格式缓存、部分采集或超时快照一律重新完整采集。缺失或非法时按 600 秒处理。
+lottery:
+  comment_snapshot_ttl_seconds: 600       # 评论快照复用窗口（秒）

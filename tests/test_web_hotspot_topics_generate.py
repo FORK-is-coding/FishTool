@@ -288,3 +288,30 @@ def test_generate_without_key_does_not_touch_service(client, monkeypatch):
     resp = client.post("/api/hotspot/topics/generate", json={"direction": "d", "zone_name": "z"})
     assert resp.status_code == 200
     assert resp.json()["success"] is True
+
+
+def test_generate_keyed_refreshes_generator_llm_client(keyed, monkeypatch):
+    """带键生成每次请求都把生成器的 LLM 客户端刷新为最新实例（保存配置后不再用旧客户端）。"""
+    from types import SimpleNamespace
+
+    old_client = object()
+    new_client = object()
+    seen = []
+
+    class _Service(_FakeGenerationService):
+        """在 generate 时记录生成器当前持有的客户端。"""
+
+        async def generate(self, request):
+            seen.append(self.generator.llm_client)
+            return {"topics": [], "saved_ids": [], "replayed": False}
+
+    service = _Service()
+    service.generator = SimpleNamespace(llm_client=old_client)
+    monkeypatch.setattr(routes_topics_generate, "get_llm_client", lambda: new_client)
+    client = keyed(service)
+    resp = client.post(
+        "/api/hotspot/topics/generate",
+        json={"direction": "d", "zone_name": "z", "generation_request_id": "gen-llm"},
+    )
+    assert resp.status_code == 200
+    assert seen == [new_client]

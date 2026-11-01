@@ -107,13 +107,23 @@ class _FakeBilibiliAPI:
 
 
 class _FakeCookiePool:
-    """记录 add_cookie 调用的假 Cookie 池。"""
+    """记录 add_cookie / remove_account_cookies 调用的假 Cookie 池。"""
 
     added: list = []
+    removed: list = []
 
     def add_cookie(self, cookie, persist: bool = False) -> None:
         """记录写入的 Cookie。"""
         type(self).added.append({"cookie": cookie, "persist": persist})
+
+    def remove_account_cookies(self, sessdata: str = "", dede_user_id: str = "") -> dict:
+        """记录撤销参数，并记下调用时 secrets 中的 Cookie，用于校验清理顺序。"""
+        type(self).removed.append({
+            "sessdata": sessdata,
+            "dede_user_id": dede_user_id,
+            "secret_at_call": _FakeConfig.store.get(auth_module.COOKIE_SECRET_KEY),
+        })
+        return {"memory": 1, "db": 1}
 
 
 @pytest.fixture()
@@ -125,6 +135,7 @@ def client(monkeypatch):
     _FakeQrCodeLogin.cookie = "SESSDATA=abcdefgh1234; bili_jct=zzz"
     _FakeBilibiliAPI.poll_result = ({"code": 0, "data": {"code": 86101}}, [])
     _FakeCookiePool.added = []
+    _FakeCookiePool.removed = []
 
     monkeypatch.setattr(auth_module, "ConfigManager", _FakeConfig)
     monkeypatch.setattr(auth_module, "CookieLoginHelper", _FakeCookieLoginHelper)
@@ -399,6 +410,61 @@ def test_logout_clears_secret(client):
     body = client.post("/api/auth/logout").json()
     assert body == {"success": True, "message": "已清除登录态"}
     assert _FakeConfig.store[auth_module.COOKIE_SECRET_KEY] == ""
+
+
+def test_logout_revokes_cookie_pool_before_clearing_secret(client):
+    """登出应先按 SESSDATA / DedeUserID 撤销 Cookie 池，再清空 secrets。"""
+    _FakeConfig.store[auth_module.COOKIE_SECRET_KEY] = "DedeUserID=42; SESSDATA=abcdefgh1234; bili_jct=zzz"
+
+    body = client.post("/api/auth/logout").json()
+
+    assert body == {"success": True, "message": "已清除登录态"}
+    assert _FakeCookiePool.removed == [{
+        "sessdata": "abcdefgh1234",
+        "dede_user_id": "42",
+        # 调用池清理时 secrets 尚未清空，证明顺序是先清池后清 secret
+        "secret_at_call": "DedeUserID=42; SESSDATA=abcdefgh1234; bili_jct=zzz",
+    }]
+    assert _FakeConfig.store[auth_module.COOKIE_SECRET_KEY] == ""
+
+
+def test_logout_without_secret_skips_cookie_pool(client):
+    """本地本就没有 Cookie 时不调用池清理，避免误删其他账号。"""
+    body = client.post("/api/auth/logout").json()
+
+    assert body == {"success": True, "message": "已清除登录态"}
+    assert _FakeCookiePool.removed == []
+
+
+def test_logout_pool_failure_still_clears_secret_with_warning(client, monkeypatch):
+    """池清理失败时仍清空 secrets、返回 200，并在响应中附 warning。"""
+    _FakeConfig.store[auth_module.COOKIE_SECRET_KEY] = "SESSDATA=abcdefgh1234"
+
+    def boom_pool():
+        """模拟 Cookie 池不可用。"""
+        raise RuntimeError("pool down")
+
+    monkeypatch.setattr("bilibili.cookie_pool.get_cookie_pool", boom_pool)
+
+    response = client.post("/api/auth/logout")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["warning"]
+    assert _FakeConfig.store[auth_module.COOKIE_SECRET_KEY] == ""
+
+
+def test_logout_frontend_surfaces_warning():
+    """静态契约：前端退出登录后应把响应中的 warning 展示给用户。"""
+    from pathlib import Path
+
+    auth_js = Path("web/frontend/static/js/app.auth.js").read_text(encoding="utf-8")
+    start = auth_js.index("async function logoutBili()")
+    body = auth_js[start:auth_js.index("\n}", start)]
+
+    assert "const result = await apiRequest('/auth/logout'" in body
+    assert "result.warning" in body
 
 
 def test_logout_failure_returns_500(client, monkeypatch):

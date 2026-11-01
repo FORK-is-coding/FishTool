@@ -102,6 +102,55 @@ def test_set_cookie_uses_request_header_snapshot_with_read_only_session_headers(
     assert core.session.headers == {"User-Agent": "session-default"}
 
 
+def test_set_cookie_empty_removes_cookie_header():
+    """set_cookie('') 应移除 Cookie 请求头，而不是发送空值或旧值。"""
+    core = build_core()
+    core.set_cookie("SESSDATA=old")
+
+    core.set_cookie("")
+
+    assert core.cookie == ""
+    assert "Cookie" not in core.headers
+
+
+class FakePool:
+    """按顺序返回预设 Cookie 对象的池替身，None 表示池已为空。"""
+
+    def __init__(self, *cookies):
+        self.cookies = list(cookies)
+
+    async def get_cookie(self):
+        """弹出下一个 Cookie 对象。"""
+        return self.cookies.pop(0)
+
+
+def test_request_drops_previous_cookie_when_pool_becomes_empty():
+    """池被清空（如退出登录）后，后续请求不得再沿用上一次轮换得到的 Cookie。"""
+    core = build_core(
+        FakeResponse(payload={"code": 0, "data": {}}),
+        FakeResponse(payload={"code": 0, "data": {}}),
+    )
+    core.cookie_pool = FakePool(SimpleNamespace(cookie_data="SESSDATA=old"), None)
+
+    asyncio.run(core.request("GET", "https://example.test", retry_times=1))
+    asyncio.run(core.request("GET", "https://example.test", retry_times=1))
+
+    assert core.session.calls[0]["headers"]["Cookie"] == "SESSDATA=old"
+    assert "Cookie" not in core.session.calls[1]["headers"]
+    assert core.cookie == ""
+
+
+def test_request_with_empty_pool_keeps_anonymous_fingerprint_header():
+    """从未拿到池 Cookie 时，init_session 写入的匿名指纹头保持不变。"""
+    core = build_core(FakeResponse(payload={"code": 0, "data": {}}))
+    core.headers["Cookie"] = "buvid3=fp"
+    core.cookie_pool = FakePool(None)
+
+    asyncio.run(core.request("GET", "https://example.test", retry_times=1))
+
+    assert core.session.calls[0]["headers"]["Cookie"] == "buvid3=fp"
+
+
 def test_request_success_merges_headers_signs_and_reports_success():
     """成功请求应签名参数、合并请求头并剥离 data 外层。"""
     limiter = FakeLimiter()

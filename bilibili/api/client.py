@@ -191,8 +191,12 @@ class BilibiliAPICore:
         Returns:
             无。
         """
-        self.cookie = cookie
-        self.headers['Cookie'] = cookie
+        self.cookie = cookie or ""
+        if self.cookie:
+            self.headers['Cookie'] = self.cookie
+        else:
+            # 清空登录态时移除请求头，避免继续发送空值或旧的 Cookie 头
+            self.headers.pop('Cookie', None)
 
     @staticmethod
     def _resolve_domain(domain: Optional[str], cookie: str, cookie_pool: Optional[Any]) -> str:
@@ -282,6 +286,10 @@ class BilibiliAPICore:
                 # 设置cookie属性
                 # 先更新当前请求使用的 Cookie，再计算预算标识；标识只保留哈希值。
                 self.set_cookie(cookie_obj.cookie_data)
+            elif self.cookie:
+                # 池里已没有可用 Cookie（例如已退出登录）：丢弃上一次轮换得到的登录态，
+                # 不能继续沿用旧的 Cookie 请求头。
+                self.set_cookie("")
 
         # 充电接口按当前 Cookie 施加独立滑动窗口预算，避免与普通端点限频混用。
         if budget_key and self.rate_limiter is not None:

@@ -46,7 +46,7 @@ from typing import Any, Callable
 from pathlib import Path
 
 # 从 core.config 导入符号
-from core.config import ConfigManager
+from core.config import config as runtime_config
 from core.database import init_database
 # 从 core.logger 导入符号
 from core.logger import get_logger
@@ -279,9 +279,12 @@ async def lifespan(app: FastAPI):
     # 先挂 toast 桥：后续启动装配失败也能通过 /ws 告知前端与桌宠。
     toast_unregister = _install_toast_bridge()
     # 赋值并准备后续使用
-    config_manager = ConfigManager()
+    # 引用运行时单例而非新建实例：常驻监控每轮读取的间隔等配置才能随 PUT / reload 生效
+    config_manager = runtime_config
     # Web 入口独立运行时也必须初始化数据库全局管理器
     init_database()
+    # 抽奖任务：上次进程遗留的运行中任务标为已中断（等用户点「继续执行」，不自动续跑），并清理过期记录。
+    lottery.recover_tasks_on_startup()
     # 仅接线评论区常驻监控；动态采集没有常驻任务入口。
     global monitor_service
     monitor_service = ResidentCommentMonitor(comment.get_monitor, config_manager)

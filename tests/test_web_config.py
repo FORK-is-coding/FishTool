@@ -171,7 +171,10 @@ def client(monkeypatch, db):
     _FakeConfig.reset()
     monkeypatch.setattr(config_module, "ConfigManager", _FakeConfig)
     monkeypatch.setattr(config_module, "get_session", db.get_session)
-    monkeypatch.setattr(core_config_module, "config", SimpleNamespace(reload=lambda: None))
+    # 运行时单例替身：PUT / reload 现在都会重载它，用计数断言重载确实发生在单例上
+    runtime = SimpleNamespace(reloaded=0)
+    runtime.reload = lambda: setattr(runtime, "reloaded", runtime.reloaded + 1)
+    monkeypatch.setattr(core_config_module, "config", runtime)
 
     app = FastAPI()
     app.include_router(config_module.router, prefix="/api/config")
@@ -473,6 +476,31 @@ def test_update_llm_config_persists_and_resets_client(client):
     assert _FakeConfig.saved == 1
 
 
+def test_update_llm_config_closes_old_global_client(client, monkeypatch):
+    """保存后应经 reset_llm_client() 清空全局单例并关闭旧客户端连接。"""
+    import llm.client as llm_module
+
+    class _OldClient:
+        """持有旧配置的客户端替身。"""
+
+        closed = 0
+
+        async def close(self):
+            """记录关闭次数。"""
+            type(self).closed += 1
+
+    old_client = _OldClient()
+    monkeypatch.setattr(llm_module, "_global_llm_client", old_client)
+
+    response = client.post(
+        "/api/config/llm",
+        json={"api_key": "sk-new", "base_url": "https://api.new/v1", "model": "gpt-new"},
+    )
+    assert response.status_code == 200
+    assert llm_module._global_llm_client is None
+    assert _OldClient.closed == 1
+
+
 def test_update_llm_config_skips_empty_daily_limit(client):
     """daily_token_limit 缺省时不应写入该键。"""
     client.post(
@@ -584,25 +612,121 @@ def test_update_single_config_rejects_protected_keys(client, key):
 
 
 # ---------------------------------------------------------------------------
+# PUT / 与 POST /reload 对运行中进程生效（真实 ConfigManager + 临时配置目录）
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def runtime_env(tmp_path, monkeypatch):
+    """真实 ConfigManager 落在临时目录：路由新建实例与运行时单例读写同一目录。
+
+    返回 dict：runtime 为替换后的运行时单例，cfg_dir 为临时配置目录，
+    resets 记录 reset_llm_client 被 await 的次数。绝不触碰仓库 config/。
+    """
+    import sys
+
+    import llm.client as llm_module
+
+    real_config_manager = sys.modules["core.config"].ConfigManager
+    cfg_dir = str(tmp_path / "runtime_config")
+    runtime = real_config_manager(config_dir=cfg_dir)
+    monkeypatch.setattr(sys.modules["core.config"], "config", runtime)
+    monkeypatch.setattr(
+        config_module, "ConfigManager", lambda *a, **k: real_config_manager(config_dir=cfg_dir)
+    )
+
+    env = {"runtime": runtime, "cfg_dir": cfg_dir, "resets": 0}
+
+    async def _counting_reset():
+        """记录 reset_llm_client 调用次数，不触碰真实全局客户端。"""
+        env["resets"] += 1
+
+    monkeypatch.setattr(llm_module, "reset_llm_client", _counting_reset)
+    app = FastAPI()
+    app.include_router(config_module.router, prefix="/api/config")
+    env["client"] = TestClient(app)
+    return env
+
+
+def test_put_config_visible_to_runtime_singleton(runtime_env):
+    """PUT 后运行中的 core.config.config 应立即读到新值。"""
+    import sys
+
+    response = runtime_env["client"].put(
+        "/api/config/", json={"key": "monitor.check_interval", "value": 42}
+    )
+    assert response.status_code == 200
+    assert sys.modules["core.config"].config.get("monitor.check_interval") == 42
+    # 非 llm.* 键不必重建 LLM 客户端
+    assert runtime_env["resets"] == 0
+
+
+def test_put_llm_key_resets_llm_client(runtime_env):
+    """PUT llm.* 键后运行时单例读到新值，并重建全局 LLM 客户端。"""
+    response = runtime_env["client"].put(
+        "/api/config/", json={"key": "llm.model", "value": "gpt-runtime"}
+    )
+    assert response.status_code == 200
+    assert runtime_env["runtime"].get("llm.model") == "gpt-runtime"
+    assert runtime_env["resets"] == 1
+
+
+def test_reload_picks_up_disk_changes_and_resets_llm_client(runtime_env):
+    """外部改写磁盘后 POST /reload，运行时单例应读到磁盘新值并重建 LLM 客户端。"""
+    import sys
+
+    external = sys.modules["core.config"].ConfigManager(config_dir=runtime_env["cfg_dir"])
+    external.set("llm.model", "gpt-from-disk")
+    external.save_config()
+    assert runtime_env["runtime"].get("llm.model") != "gpt-from-disk"
+
+    response = runtime_env["client"].post("/api/config/reload")
+    assert response.status_code == 200
+    assert runtime_env["runtime"].get("llm.model") == "gpt-from-disk"
+    assert runtime_env["resets"] == 1
+
+
+def test_web_main_config_manager_follows_put(runtime_env, monkeypatch):
+    """web.main lifespan 的 config_manager（注入常驻监控）应是运行时单例，PUT 后同步可见。"""
+    import importlib
+
+    web_main = importlib.import_module("web.main")
+    runtime = runtime_env["runtime"]
+    # 真实 lifespan；conftest 已隔离 DB 与常驻监控，这里让运行时单例指向临时目录实例
+    monkeypatch.setattr(web_main, "runtime_config", runtime, raising=False)
+    # 走真实 app：显式用本机 Host，与浏览器 / 桌面端访问一致（/api/config 可能挂本机 Host 校验）
+    with TestClient(web_main.app, base_url="http://127.0.0.1:8000") as client:
+        response = client.put("/api/config/", json={"key": "monitor.check_interval", "value": 77})
+        assert response.status_code == 200
+        assert web_main.config_manager.get("monitor.check_interval") == 77
+        monitor = web_main.monitor_service
+        assert monitor.args[1] is web_main.config_manager
+
+
+# ---------------------------------------------------------------------------
 # POST /reload
 # ---------------------------------------------------------------------------
 
 
 def test_reload_config_calls_reload(client):
-    """重载接口应触发 ConfigManager.reload 并返回成功文案。"""
+    """重载接口应重载运行时单例（而非新建实例）并返回成功文案。"""
+    import sys
+
     body = client.post("/api/config/reload").json()
     assert body == {"success": True, "message": "配置已重新加载"}
-    assert _FakeConfig.reloaded == 1
+    assert sys.modules["core.config"].config.reloaded == 1
+    assert _FakeConfig.reloaded == 0
 
 
 def test_reload_config_failure_returns_500(client, monkeypatch):
     """重载异常应转 500。"""
+    import sys
 
     def boom(*args, **kwargs):
-        """模拟配置构造失败。"""
+        """模拟运行时单例重载失败（如配置文件损坏）。"""
         raise RuntimeError("broken")
 
-    monkeypatch.setattr(config_module, "ConfigManager", boom)
+    monkeypatch.setattr(sys.modules["core.config"].config, "reload", boom)
     response = client.post("/api/config/reload")
     assert response.status_code == 500
     assert "重载配置失败" in response.json()["detail"]

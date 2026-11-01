@@ -470,3 +470,93 @@ def test_add_keywords_failure_returns_500(client):
     response = client.post("/api/comment/keywords", json={"keywords": ["x"]})
     assert response.status_code == 500
     assert "添加关键词失败" in response.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# get_monitor：LLM 客户端热更新
+# ---------------------------------------------------------------------------
+
+
+class _RecordingLogger:
+    """记录 info / exception 调用的 logger 替身。"""
+
+    def __init__(self) -> None:
+        self.records = []
+
+    def info(self, *args, **kwargs):
+        """记录 info 级别日志。"""
+        self.records.append("info")
+
+    def exception(self, *args, **kwargs):
+        """记录 exception 级别日志。"""
+        self.records.append("exception")
+
+
+class _MonitorStub:
+    """只保存构造参数的监控器替身，结构与 MonitorBaseMixin 一致。"""
+
+    def __init__(self, api, llm_client, alert_callback=None) -> None:
+        self.api = api
+        self.llm_client = llm_client
+        self.alert_callback = alert_callback
+        self.analyzer = type("Analyzer", (), {})()
+        self.analyzer.llm_client = llm_client
+
+
+@pytest.fixture()
+def monitor_env(monkeypatch):
+    """隔离 get_monitor：替身监控器、可切换的全局 LLM 客户端与记录 logger。"""
+    state = {"client": None, "error": None}
+
+    def fake_global():
+        """按状态返回当前全局客户端或抛错。"""
+        if state["error"] is not None:
+            raise state["error"]
+        return state["client"]
+
+    recorder = _RecordingLogger()
+    monkeypatch.setattr(comment_module, "_monitor", None)
+    monkeypatch.setattr(comment_module, "CommentMonitor", _MonitorStub)
+    monkeypatch.setattr(comment_module, "get_api", lambda: object())
+    monkeypatch.setattr(comment_module, "get_global_llm_client", fake_global)
+    monkeypatch.setattr(comment_module, "logger", recorder)
+    return state, recorder
+
+
+def test_get_monitor_syncs_new_llm_client_after_reset(monitor_env):
+    """配置保存后全局客户端换新，常驻监控器与情感分析器应改用新客户端。"""
+    state, _ = monitor_env
+    old_client, new_client = object(), object()
+
+    state["client"] = old_client
+    monitor = comment_module.get_monitor()
+    assert monitor.llm_client is old_client
+
+    state["client"] = new_client
+    again = comment_module.get_monitor()
+    assert again is monitor
+    assert monitor.llm_client is new_client
+    assert monitor.analyzer.llm_client is new_client
+
+
+def test_get_monitor_failure_not_cached_and_retries(monitor_env):
+    """首次未配置时用规则引擎（记 info），配置补齐后下一次调用拿到客户端。"""
+    from core.exceptions import LLMNotConfiguredError
+
+    state, recorder = monitor_env
+    state["error"] = LLMNotConfiguredError("LLM API密钥未配置")
+    monitor = comment_module.get_monitor()
+    assert monitor.llm_client is None
+    assert recorder.records == ["info"]
+
+    state["error"] = None
+    state["client"] = object()
+    assert comment_module.get_monitor().llm_client is state["client"]
+
+
+def test_get_monitor_unexpected_llm_error_logs_exception(monitor_env):
+    """LLM 初始化的意外异常降级为 None，并记完整堆栈。"""
+    state, recorder = monitor_env
+    state["error"] = RuntimeError("boom")
+    assert comment_module.get_monitor().llm_client is None
+    assert recorder.records == ["exception"]

@@ -233,9 +233,10 @@ def test_poll_task_timeout_is_marked_still_running_with_default_limits() -> None
     for name in ("app.hotspot.js", "app.up.js"):
         source = Path(f"web/frontend/static/js/{name}").read_text(encoding="utf-8")
         assert re.search(r"pollTask\(\s*`[^`]+`,\s*'[\w-]+'\s*\)", source), name
-    # 后端没有 cancelled 状态，通用 pollTask 不识别它。
+    # 后端取消接口落 cancelled 状态后，pollTask 以 TASK_CANCELLED 抛出，与失败区分开。
     poll_body = core_js.split("async function pollTask", 1)[1].split("\n}\n", 1)[0]
-    assert "cancelled" not in poll_body
+    assert "task.status === 'cancelled'" in poll_body
+    assert "code = 'TASK_CANCELLED'" in poll_body
 
 
 def test_lottery_page_keeps_running_task_and_resumes_instead_of_restarting() -> None:
@@ -260,6 +261,63 @@ def test_lottery_page_keeps_running_task_and_resumes_instead_of_restarting() -> 
     assert "lotteryWriteActiveTask(kind, '');" in lottery_js
     assert "lotteryWriteActiveTask('draw', '');" in lottery_js
     assert "lotteryWriteActiveTask('filter', '');" in lottery_js
+
+
+def test_lottery_page_can_cancel_background_task() -> None:
+    """抽奖页轮询中与「仍在后台运行」提示里都可取消任务，取消后清除活动任务（issue #13 后续）。"""
+    from pathlib import Path
+
+    lottery_js = Path("web/frontend/static/js/app.lottery.js").read_text(encoding="utf-8")
+    cancel_body = lottery_js.split("async function cancelLotteryTask", 1)[1].split("\n}\n", 1)[0]
+    # 先二次确认，再调用取消接口。
+    assert "confirm(" in cancel_body
+    assert cancel_body.index("confirm(") < cancel_body.index("/cancel`")
+    assert "/lottery/tasks/${encodeURIComponent(taskId)}/cancel`" in cancel_body
+    assert "method: 'POST'" in cancel_body
+    assert "lotteryWriteActiveTask(kind, '');" in cancel_body
+    # 「仍在后台运行」提示里提供取消入口。
+    still_running = lottery_js.split("function renderLotteryTaskStillRunning", 1)[1].split("\n}\n", 1)[0]
+    assert "cancelLotteryTask('filter')" in still_running
+    assert "cancelLotteryTask('draw')" in still_running
+    assert 'onclick="${cancelHandler}"' in still_running
+    # 轮询期间显示取消按钮，结束后移除；两条轮询路径都接上。
+    filter_body = lottery_js.split("async function startRealUserFilter", 1)[1].split("\n}\n", 1)[0]
+    draw_poll = lottery_js.split("async function pollLotteryDraw", 1)[1].split("\n}\n", 1)[0]
+    for body, kind in ((filter_body, "filter"), (draw_poll, "draw")):
+        assert f"lotteryShowCancelButton('{kind}', true);" in body
+        assert body.index(f"lotteryShowCancelButton('{kind}', true);") < body.index("pollTask(")
+        assert f"lotteryShowCancelButton('{kind}', false);" in body
+    # 轮询收到 TASK_CANCELLED 时不当作失败，清除活动任务并提示已取消。
+    error_body = lottery_js.split("function handleLotteryTaskError", 1)[1].split("\n}\n", 1)[0]
+    assert "error.code === 'TASK_CANCELLED'" in error_body
+    assert "LOTTERY_CANCELLED_NOTICE" in error_body
+
+
+def test_lottery_page_offers_resume_for_interrupted_task() -> None:
+    """服务重启打断的任务：pollTask 以 TASK_INTERRUPTED 抛出，页面给出「继续执行」且需用户点击才续跑（issue #13 后续）。"""
+    from pathlib import Path
+
+    core_js = Path("web/frontend/static/js/app.core.js").read_text(encoding="utf-8")
+    poll_body = core_js.split("async function pollTask", 1)[1].split("\n}\n", 1)[0]
+    assert "task.status === 'interrupted'" in poll_body
+    assert "code = 'TASK_INTERRUPTED'" in poll_body
+
+    lottery_js = Path("web/frontend/static/js/app.lottery.js").read_text(encoding="utf-8")
+    error_body = lottery_js.split("function handleLotteryTaskError", 1)[1].split("\n}\n", 1)[0]
+    interrupted_branch = error_body.split("error.code === 'TASK_INTERRUPTED'", 1)[1].split("return;", 1)[0]
+    # 中断时保留活动任务，只渲染入口，不自动续跑。
+    assert "renderLotteryTaskInterrupted(" in interrupted_branch
+    assert "lotteryWriteActiveTask(kind, '')" not in interrupted_branch
+    assert "resumeLotteryTask(" not in interrupted_branch
+    # 入口提供继续执行与取消，处理函数为固定字面量。
+    notice = lottery_js.split("function renderLotteryTaskInterrupted", 1)[1].split("\n}\n", 1)[0]
+    assert "resumeLotteryTask('filter')" in notice and "resumeLotteryTask('draw')" in notice
+    assert "cancelLotteryTask('filter')" in notice and "cancelLotteryTask('draw')" in notice
+    # 继续执行调用 resume 接口后沿用既有入口轮询同一任务。
+    resume_body = lottery_js.split("async function resumeLotteryTask", 1)[1].split("\n}\n", 1)[0]
+    assert "/lottery/tasks/${encodeURIComponent(taskId)}/resume`" in resume_body
+    assert "method: 'POST'" in resume_body
+    assert "startRealUserFilter()" in resume_body and "resumeLotteryDraw()" in resume_body
 
 
 def test_lottery_routes_are_mounted() -> None:

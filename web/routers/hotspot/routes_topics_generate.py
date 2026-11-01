@@ -110,6 +110,11 @@ async def generate_topics(request: TopicGenerateRequest):
             generation_request_id=request.generation_request_id,
             context_mode=request.context_mode,
         )
+        # 生成器在 lifespan 装配时固定了当时的 LLM 客户端；保存配置后旧实例已被重置，
+        # 每次请求刷新为最新客户端，避免继续使用旧地址/模型/密钥。
+        generator = getattr(service, "generator", None)
+        if generator is not None:
+            generator.llm_client = get_llm_client()
         result = await service.generate(generation_request)
         if isinstance(result, dict) and result.get("accepted"):
             # 运行中受理视图 → HTTP 202（专用 pollTopicGeneration 识别）。

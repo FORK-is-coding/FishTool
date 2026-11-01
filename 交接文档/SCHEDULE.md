@@ -2,7 +2,7 @@
 
 ## 1. 当前事实
 
-项目依赖中有 APScheduler，但源码没有发现 `add_job`、cron 或 scheduler 启动代码。当前“定时任务”由 `core/monitor_service.py` 的 `ResidentCommentMonitor` 使用 asyncio 常驻循环实现，并由 `web/main.py` lifespan 统一启动/关闭。
+项目不使用 APScheduler：`requirements.txt` 不含该依赖，源码也没有 `add_job`、cron 或 scheduler 启动代码。当前“定时任务”由 `core/monitor_service.py` 的 `ResidentCommentMonitor` 使用 asyncio 常驻循环实现，并由 `web/main.py` lifespan 统一启动/关闭。
 
 当前两个循环：
 

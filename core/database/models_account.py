@@ -3,11 +3,32 @@
 
 拆分自 database.py 原始 L93-L168。
 """
+import hashlib
 from datetime import datetime
 from sqlalchemy import Column, Integer, String, Text, Float, Boolean, DateTime, JSON, ForeignKey
 from sqlalchemy.orm import relationship
 
 from .base import Base
+
+
+#: cookie_pool.sessdata 列的摘要前缀；带此前缀的值已是摘要，迁移时跳过。
+SESSDATA_DIGEST_PREFIX = 'sha256:'
+
+
+def sessdata_digest(sessdata: str) -> str:
+    """计算 SESSDATA 的不可逆摘要，供 cookie_pool.sessdata 列去重使用。
+
+    数据库只保存摘要，不保存 SESSDATA 明文；运行时所需字段从解密后的 cookie_data 解析。
+
+    Args:
+        sessdata: SESSDATA 明文。
+
+    Returns:
+        ``sha256:<hex>`` 形式的摘要；入参为空时返回空串。
+    """
+    if not sessdata:
+        return ''
+    return SESSDATA_DIGEST_PREFIX + hashlib.sha256(sessdata.encode('utf-8')).hexdigest()
 
 
 # ============ 用户与认证 ============
@@ -69,9 +90,9 @@ class CookiePool(Base):
     # 赋值并准备后续使用
     cookie_data = Column(Text, nullable=False, comment='加密的Cookie数据')
     # 赋值并准备后续使用
-    sessdata = Column(String(100), comment='SESSDATA')
+    sessdata = Column(String(100), comment='SESSDATA 的 sha256 摘要（仅用于去重，不存明文）')
     # 赋值并准备后续使用
-    bili_jct = Column(String(100), comment='bili_jct')
+    bili_jct = Column(String(100), comment='已废弃，恒为空串；运行时从解密后的 cookie_data 解析')
     # 赋值并准备后续使用
     buvid3 = Column(String(100), comment='buvid3')
     # 赋值并准备后续使用

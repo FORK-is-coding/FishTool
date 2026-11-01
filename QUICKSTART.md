@@ -3,7 +3,7 @@
 ## 第一次使用
 
 ### 1. 安装Python环境
-确保已安装 Python 3.9+
+确保已安装 Python 3.11 或 3.12（3.9 及以下无法运行源码；`requirements.txt` 锁定的 aiohttp / pydantic 版本没有 Python 3.13 的 Windows 安装包）
 
 ### 2. 安装依赖
 ```bash
@@ -36,14 +36,22 @@ python app.py init
 
 ## 基本使用流程
 
+### 零、扫码登录B站（推荐）
+
+1. 打开后默认进入左侧"欢迎"页
+2. 在"B站登录态"区域点击"扫码登录"
+3. 用B站App扫描二维码并确认（二维码约 3 分钟过期，可点"重新生成"）
+4. 状态显示"已登录"即完成，Cookie 加密保存在本地
+
 ### 一、配置LLM（可选，但推荐）
 
 1. 访问 http://localhost:8000
-2. 点击左侧"配置"菜单
-3. 填写LLM配置：
+2. 点击左侧"配置"菜单（欢迎页"快速开始"里的"前往配置"也可进入）
+3. 在"AI大模型配置"区域填写：
    - API Key：你的OpenAI兼容API密钥
-   - Base URL：默认 https://api.openai.com/v1
-   - Model：默认 gpt-3.5-turbo
+   - Base URL：OpenAI兼容接口地址，页面会回显当前配置（出厂为 https://api.deepseek.com）
+   - Model：模型名；能获取到模型列表时可直接下拉选择，否则手动填写
+4. 点击"保存配置"
 
 > 无LLM配置时，选题助手将使用降级方案，情感分析使用词典规则
 
@@ -85,12 +93,14 @@ python app.py init
 
 ### 四、查看日志
 
-1. 进入"日志"页面
-2. 选择日志类型：
+1. 进入"日志"页面（进入后自动加载并持续刷新）
+2. 选择日志来源：
+   - 全项目日志：以下各类合并查看
    - 应用日志：常规运行日志
    - 错误日志：异常和错误
    - 爬虫日志：API请求记录
-3. 点击"加载日志"
+   - 风控日志：限频、风控事件
+3. 可按关键词、日志级别筛选，点击"重新加载"刷新
 
 ## 常见问题
 
@@ -113,8 +123,7 @@ A:
 
 ### Q: 如何获取Cookie？
 A: 
-- 项目内置扫码登录功能（命令行模式）
-- 或手动从浏览器导出
+- 不需要手动获取：在"欢迎"页点击"扫码登录"，扫码成功后 Cookie 自动加密保存
 
 ## 命令行参数
 
@@ -139,7 +148,7 @@ python app.py web --init-only
 
 ## 目录说明
 
-- `logs/` - 日志文件
+- `data/logs/` - 日志文件（app.log / error.log / crawler.log / risk_control.log）
 - `data/` - SQLite数据库
 - `config/` - 配置文件
 - `backups/` - 备份文件
@@ -148,11 +157,10 @@ python app.py web --init-only
 
 - 配置更多分区监控
 - 设置自定义预警关键词
-- 导出选题库为Excel
-- 接入桌面客户端（阶段三）
+- 打包为 exe：见 README.md「快速开始」第 3 步
 
 ## 技术支持
 
 查看完整文档：README.md  
-进度追踪：PROGRESS.md  
-错误日志：logs/error.log
+进度追踪：docs/PROGRESS.md\
+错误日志：data/logs/error.log

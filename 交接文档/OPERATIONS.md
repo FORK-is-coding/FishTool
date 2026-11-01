@@ -66,24 +66,26 @@ python app.py
 ```
 
 桌面版会同时启动主窗口、桌宠和本地 Web 服务，浏览器访问 `http://localhost:8000`
-也可以使用同一套界面/API。首次启动向导可扫码登录并配置 LLM。exe/冻结环境下，ConfigManager 把持久化根目录设为 `sys.executable` 所在目录，因此分发时必须让 exe 旁的 `config/`、`data/` 可写。
+也可以使用同一套界面/API。桌面端没有首次启动向导：扫码登录在 WebUI「欢迎」页的「B站登录态」区域，LLM 在「配置」页的「AI大模型配置」区域保存。exe/冻结环境下，ConfigManager 把持久化根目录设为 `sys.executable` 所在目录，因此分发时必须让 exe 旁的 `config/`、`data/` 可写。
 
 ## 5. PyInstaller 打包
 
-当前唯一实际打包描述是 `build.spec`；README 中的 `python build.py` 已过时，因为项目根目录没有 `build.py`。
+当前唯一实际打包描述是 `build.spec`（Analysis 入口为 `app.py`）；项目根目录没有 `build.py`，README 快速开始第 3 步与下面的命令一致。
 
-安装构建工具并打包：
+在已执行 `pip install -r requirements.txt` 的虚拟环境中安装构建工具并打包：
 
 ```powershell
 pip install pyinstaller
 pyinstaller --clean --noconfirm build.spec
 ```
 
+PyInstaller 不在 `requirements.txt` 中，需要单独安装。图标是 PNG，PyInstaller 要靠 Pillow 转成 ico；Pillow 已由 `requirements.txt` 中的 `qrcode[pil]` 带入，缺失时打包会在图标处理阶段报错。
+
 输出：`dist/FishTool.exe`。spec 打包 `config/*.yaml`、前端 templates/static，并声明 PyQt、FastAPI、SQLAlchemy、数据分析等 hidden imports。
 
 构建前检查：
 
-- `build.spec` 使用桌面图标 `C:\Users\27418\Desktop\图标.png`，当前文件已确认存在；打包环境若缺失该文件则回退为无自定义图标。
+- `build.spec` 使用仓库内图标 `assets/图标.png`（整个 `assets/` 也打进 datas，供运行时 `desktop/icon_utils.py` 查找窗口图标）；该文件缺失时 exe 回退为无自定义图标。
 - `.key/.secrets` 不在 datas 中，这是正确的安全默认；不要把个人密钥打进通用 exe。
 - spec 的 Analysis 只列出 `app.py`，发布前必须实际启动验证桌面入口与 `app.py web` 两种模式。
 - `build/` 是中间产物，`dist/` 是发布候选；不要以旧 `backups/*.exe` 作为最新版。
@@ -93,7 +95,7 @@ pyinstaller --clean --noconfirm build.spec
 1. 在空白临时目录放 exe。
 2. 启动并确认自动创建/使用 exe 旁的 `config/`、`data/`。
 3. 检查 WebUI、静态 ECharts、扫码登录、SQLite 写入、退出后无残留后台进程。
-4. 用 `tools/run_packaging_test.ps1` 做基础检查，并查看 `dist/PACKAGE_BUILD_LOG*.txt`。
+4. 查看 PyInstaller 生成的 `build/build/warn-build.txt`，确认没有新增的缺失模块。`tools/run_packaging_test.ps1` 依赖仓库中不存在的 `run_packaging.py`，当前不可用。
 
 ## 6. 发布与升级
 

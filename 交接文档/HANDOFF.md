@@ -23,7 +23,7 @@
 - Cookie 迁移已完成：`bilibili/cookie_pool.py` 读取旧明文失败时会尝试兼容并加密回写；新数据由 `ConfigManager` 的 Fernet 加密体系管理。迁移前先备份数据库和 `config/.key`、`config/.secrets`。
 - `tools/archive/` 是归档区，不是当前测试入口。里面保留历史验收、临时诊断和已废弃脚本；其中 `dead_*.py` 明确不应接回生产调用链。
 - 当前源码目录中仍有 `.tmp/.fixtmp` 和缓存目录，它们不是运行入口，提交/交接时不要把临时文件当实现依据。
-- 项目没有发现实际 APScheduler 注册代码；`requirements.txt` 虽包含 APScheduler，但当前常驻任务由 `core/monitor_service.py` 的 asyncio 循环负责。
+- 项目不使用 APScheduler：`requirements.txt` 不含该依赖，源码也没有 scheduler 注册代码；常驻任务由 `core/monitor_service.py` 的 asyncio 循环负责。
 
 ## 3. 目录职责
 
@@ -49,7 +49,7 @@ bili_ops_toolbox/
 │  ├─ main.py                # lifespan、路由挂载、静态页、WebSocket
 │  ├─ routers/               # auth/config/logs/hotspot/comment/analysis
 │  └─ frontend/              # index.html、app.js、style.css、ECharts
-├─ desktop/                  # PyQt 主窗口、桌宠、首次运行向导
+├─ desktop/                  # PyQt 主窗口、桌宠、图标与报告导出（无首次运行向导）
 ├─ llm/                      # OpenAI 兼容客户端和用量统计
 ├─ config/                   # config.yaml；.key/.secrets 为敏感文件
 ├─ data/                     # bili_ops.db 与 data/logs

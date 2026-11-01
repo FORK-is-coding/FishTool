@@ -71,6 +71,27 @@ logger = get_logger(__name__)
 SAVE_PDF_CHUNK_PREFIX = "FISHTOOL_SAVE_PDF_CHUNK:"
 
 
+def _default_download_path(suggested_name: str, downloads_dir: Optional[Path] = None) -> str:
+    """计算网页下载保存对话框的默认路径（纯函数，便于脱离 Qt 测试）。
+
+    与报告导出 ``_on_save_pdf_requested`` 同口径：只取建议文件名的最后一段，
+    默认放到 ``~/Downloads``，该目录不存在时只给文件名（由对话框决定起始目录）。
+
+    Args:
+        suggested_name: QWebEngine 给出的建议文件名（来自 ``<a download>`` 或响应头）。
+        downloads_dir: 默认下载目录；省略时取 ``~/Downloads``。
+
+    Returns:
+        str: 保存对话框的初始路径。
+    """
+    # 统一把反斜杠当分隔符，防止网页给出的名字带目录跳出下载目录。
+    safe_name = Path(str(suggested_name or "").replace("\\", "/")).name.strip()
+    if safe_name in ("", ".", ".."):
+        safe_name = "download"
+    downloads = downloads_dir if downloads_dir is not None else Path.home() / "Downloads"
+    return str(downloads / safe_name) if downloads.is_dir() else safe_name
+
+
 class DesktopWebPage(QWebEnginePage):
     """桌面端 WebEngine 页面，记录 JS 错误并接收报告保存请求。"""
 
@@ -225,6 +246,10 @@ class MainWindow(QMainWindow):
         profile = self.web_view.page().profile()
         profile.setHttpCacheType(QWebEngineProfile.NoCache)
         profile.clearHttpCache()
+        # QWebEngine 不处理 downloadRequested 时会丢弃所有下载，
+        # 「导出问题日志」等 Blob + <a download> 在桌面端会静默失效（#14）。
+        # 必须直连：accept() 要在信号处理函数返回前调用，否则下载被取消。
+        profile.downloadRequested.connect(self._on_download_requested)
         
         # 启用开发者工具
         # 允许本地页面访问远程资源（API等）
@@ -748,6 +773,31 @@ class MainWindow(QMainWindow):
             self.web_view.page().runJavaScript(script)
         except Exception as exc:  # noqa: BLE001 - 页面已关闭时忽略回调
             logger.warning("[报告导出] 回传保存结果失败: %s", exc)
+
+    def _on_download_requested(self, download) -> None:
+        """处理页面发起的下载：弹保存对话框，确认后接受下载，取消则放弃。
+
+        Args:
+            download: ``QWebEngineDownloadItem``。
+        """
+        suggested = download.suggestedFileName()
+        initial_path = _default_download_path(suggested)
+        try:
+            selected, _ = QFileDialog.getSaveFileName(self, "保存文件", initial_path)
+        except Exception as exc:  # noqa: BLE001 - 对话框异常时放弃本次下载，不崩溃
+            logger.exception("[桌面Web] 打开下载保存对话框失败: %s", exc)
+            download.cancel()
+            return
+
+        if not selected:
+            logger.info("[桌面Web] 用户取消下载: %s", suggested)
+            download.cancel()
+            return
+        target = Path(selected)
+        download.setDownloadDirectory(str(target.parent))
+        download.setDownloadFileName(target.name)
+        download.accept()
+        logger.info("[桌面Web] 开始下载: %s", target)
 
     def show_toast(self, title: str, message: str, duration: int = 6000):
         """显示非阻塞托盘提示（高优先级错误用，不打断用户操作）。

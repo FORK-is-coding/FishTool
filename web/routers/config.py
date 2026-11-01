@@ -334,12 +334,12 @@ async def update_llm_config(request: LLMConfigRequest):
         # 根因：llm/client.py 持有模块级 config 单例 + 全局 LLMClient 单例，
         # 上面用的是新建的 ConfigManager() 实例写盘，旧单例内存里还是旧 model，
         # 导致前端保存成功但实际请求仍用旧模型（qwen3.7 之类）。
-        # 处理：reload 模块级 config 单例 + 重置 LLMClient 全局单例，
-        # 下次 get_llm_client() 会用新配置重建。
+        # 处理：reload 模块级 config 单例 + 重置 LLMClient 全局单例并关闭旧连接，
+        # 下次 get_llm_client() 会用新配置重建（热点、评论模块都委托该单例）。
         from core.config import config as runtime_config
         runtime_config.reload()
-        import llm.client as llm_client_module
-        llm_client_module._global_llm_client = None
+        from llm.client import reset_llm_client
+        await reset_llm_client()
         
         return {
             "success": True,
@@ -463,6 +463,13 @@ async def update_config(request: ConfigUpdateRequest):
         config.set(request.key, request.value)
         # 落盘持久化
         config.save_config()
+        # 同 update_llm_config：上面用新建实例写盘，运行中的模块级单例需 reload 才能读到新值
+        from core.config import config as runtime_config
+        runtime_config.reload()
+        # llm.* 会影响全局 LLMClient 构造时固定的地址、模型与请求头，需丢弃后按新配置重建
+        if request.key.split('.')[0] == 'llm':
+            from llm.client import reset_llm_client
+            await reset_llm_client()
         
         return {
             "success": True,
@@ -486,10 +493,13 @@ async def reload_config():
     # 持久化数据，防止丢失
     """
     try:
-        # 赋值并准备后续使用
-        config = ConfigManager()
+        # 重载运行中的模块级配置单例；新建实例再 reload 不会影响任何调用方
+        from core.config import config as runtime_config
         # 触发重新读取，内部会清缓存并重载
-        config.reload()
+        runtime_config.reload()
+        # 磁盘上的 llm.* 可能已被外部修改，重建全局 LLMClient 以用上新配置
+        from llm.client import reset_llm_client
+        await reset_llm_client()
         
         return {
             "success": True,
