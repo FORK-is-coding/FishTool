@@ -351,9 +351,7 @@ function renderVerifyWinnersResult(data, resultHost) {
 /** 使用项目统一暖色弹窗询问是否确认开始抽奖。 */
 function confirmLotteryTarget(metadata) {
     return new Promise(resolve => {
-        document.querySelector('.app-modal-backdrop')?.remove();
         const { backdrop, confirm } = buildLotteryConfirmModal(metadata, resolve);
-        document.body.append(backdrop);
         confirm.focus();
     });
 }
@@ -378,13 +376,16 @@ function buildLotteryConfirmModal(metadata, resolve) {
     const confirm = document.createElement('button');
     confirm.className = 'btn btn-primary';
     confirm.textContent = '确认开始';
-    const finish = value => { backdrop.remove(); resolve(value); };
-    cancel.addEventListener('click', () => finish(false));
-    confirm.addEventListener('click', () => finish(true));
-    backdrop.addEventListener('click', event => { if (event.target === backdrop) finish(false); });
     actions.append(cancel, confirm);
     modal.append(title, copy, actions);
     backdrop.append(modal);
+    // 经统一入口挂载：按 Esc、切换页面或挂载新弹窗时，按“取消”结束 Promise，调用方不会一直等待。
+    let result = false;
+    const close = mountAppModal(backdrop, () => resolve(result));
+    const finish = value => { result = value; close(); };
+    cancel.addEventListener('click', () => finish(false));
+    confirm.addEventListener('click', () => finish(true));
+    backdrop.addEventListener('click', event => { if (event.target === backdrop) finish(false); });
     return { backdrop, confirm };
 }
 

@@ -1,5 +1,51 @@
 // ===== app.ui.js —— 拆分自 app.js（UI：悬停光晕 / 弹窗 / 常驻监控 / 页面初始化），原始行 L1926-L2140 =====
 
+// ============ 浮层统一收口 ============
+// 页面上同一时刻只保留一个 .app-modal-backdrop。所有弹窗都经 mountAppModal 挂载，
+// 关闭统一走 closeAppModal：执行该弹窗自己的关闭回调（例如抽奖确认要 resolve(false)），
+// 再把焦点还给打开前的元素。Esc、切换页面都复用这一入口。
+let appModalClose = null;
+
+/**
+ * 挂载一个应用弹窗，并登记它的关闭回调。
+ * @param {HTMLElement} backdrop 弹窗遮罩元素（含弹窗本体）。
+ * @param {() => void} [onClose] 关闭时执行的业务回调。
+ * @returns {() => void} 关闭该弹窗的函数。
+ */
+function mountAppModal(backdrop, onClose) {
+    closeAppModal();
+    const returnFocus = document.activeElement;
+    let closed = false;
+    const close = () => {
+        if (closed) return;
+        closed = true;
+        if (appModalClose === close) appModalClose = null;
+        backdrop.remove();
+        if (onClose) onClose();
+        if (returnFocus && typeof returnFocus.focus === 'function' && document.contains(returnFocus)) returnFocus.focus();
+    };
+    appModalClose = close;
+    document.body.append(backdrop);
+    return close;
+}
+
+/** 关闭当前弹窗；没有弹窗时什么也不做。 */
+function closeAppModal() {
+    if (appModalClose) appModalClose();
+    // 兜底：清理未经 mountAppModal 挂载的遗留遮罩。
+    document.querySelectorAll('.app-modal-backdrop').forEach(node => node.remove());
+}
+
+/** 关闭所有浮层：应用弹窗与热点页账号抽屉。切换页面、按 Esc 时调用。 */
+function closeAllOverlays() {
+    closeAppModal();
+    if (typeof closeHotspotDrawer === 'function') closeHotspotDrawer();
+}
+
+document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' || event.key === 'Esc') closeAllOverlays();
+});
+
 /**
  * 为单个卡片绑定鼠标光晕坐标更新。
  * @param {HTMLElement} card 需要响应光标位置的卡片元素。
@@ -51,9 +97,6 @@ function bindGlowCards(root = document) {
  * @returns {void}
  */
 function showGroupQrModal() {
-    // 先移除旧弹窗，避免连续点击产生多个遮罩层。
-    document.querySelector('.app-modal-backdrop')?.remove();
-
     const backdrop = document.createElement('div');
     backdrop.className = 'app-modal-backdrop';
     backdrop.setAttribute('role', 'dialog');
@@ -73,16 +116,14 @@ function showGroupQrModal() {
 
     const image = createGroupQrImage(modal, closeButton);
 
-    // 点击关闭按钮或遮罩空白区域都可以退出弹窗。
-    const closeModal = () => backdrop.remove();
+    modal.append(title, image, closeButton);
+    backdrop.append(modal);
+    // 挂载时会先关闭已有弹窗；点击关闭按钮、遮罩空白处或按 Esc 都会退出。
+    const closeModal = mountAppModal(backdrop);
     closeButton.addEventListener('click', closeModal);
     backdrop.addEventListener('click', event => {
         if (event.target === backdrop) closeModal();
     });
-
-    modal.append(title, image, closeButton);
-    backdrop.append(modal);
-    document.body.append(backdrop);
     closeButton.focus();
 }
 
@@ -109,8 +150,6 @@ function createGroupQrImage(modal, closeButton) {
  * @returns {void}
  */
 function showAppAlert(message) {
-    document.querySelector('.app-modal-backdrop')?.remove();
-
     const backdrop = document.createElement('div');
     backdrop.className = 'app-modal-backdrop';
     backdrop.setAttribute('role', 'alertdialog');
@@ -129,15 +168,13 @@ function showAppAlert(message) {
     closeButton.className = 'btn btn-primary';
     closeButton.textContent = '确定';
 
-    const closeModal = () => backdrop.remove();
+    modal.append(title, content, closeButton);
+    backdrop.append(modal);
+    const closeModal = mountAppModal(backdrop);
     closeButton.addEventListener('click', closeModal);
     backdrop.addEventListener('click', event => {
         if (event.target === backdrop) closeModal();
     });
-
-    modal.append(title, content, closeButton);
-    backdrop.append(modal);
-    document.body.append(backdrop);
     closeButton.focus();
 }
 
@@ -372,6 +409,8 @@ window.addEventListener('DOMContentLoaded', () => {
 Object.assign(window, {
     showGroupQrModal,
     showAppAlert,
+    closeAppModal,
+    closeAllOverlays,
     showToast,
     verifyLotteryWinners,
 });
