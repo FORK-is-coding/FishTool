@@ -126,6 +126,9 @@ def run_desktop(port: int) -> int:
     # 在创建 QApplication 前启用 Qt 高 DPI，保证 Windows 缩放下 CSS 像素与浏览器一致。
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    # Qt5 默认把缩放倍率四舍五入成整数：150% 的屏幕按 2 倍渲染，页面整体比浏览器大三分之一，
+    # 逻辑屏幕也从 1707x960 缩成 1280x720。PassThrough 保留小数倍率，与浏览器的 devicePixelRatio 一致。
+    QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     set_windows_app_user_model_id()
 
     # 只把程序名传给 Qt，避免 argparse 的 desktop/--port 参数被 Qt 当成未知选项。
