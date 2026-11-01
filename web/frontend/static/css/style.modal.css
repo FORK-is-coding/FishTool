@@ -197,6 +197,18 @@
     text-align: left;
 }
 
+/* 确认弹窗（showAppConfirm）：按钮行靠右，取消在左、确认在右。flex gap 兜底见 style.flexgap.css。 */
+.app-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-top: 22px;
+}
+
+.app-modal .app-modal-actions .btn {
+    margin-top: 0;
+}
+
 @keyframes app-modal-fade {
     from { opacity: 0; }
     to { opacity: 1; }

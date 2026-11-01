@@ -200,6 +200,9 @@ def run_desktop(port: int) -> int:
     # 只把程序名传给 Qt，避免 argparse 的 desktop/--port 参数被 Qt 当成未知选项。
     app = QApplication([sys.argv[0]])
     app.setWindowIcon(load_app_icon())
+    # 悬停提示与菜单只能全局设置样式；与面板一致的深灰提示、白底菜单。
+    from desktop.ui_theme import app_style
+    app.setStyleSheet(app_style())
     app.setApplicationName("B站运营工具箱")
     app.setOrganizationName("BiliOpsToolbox")
 

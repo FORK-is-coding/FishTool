@@ -181,7 +181,8 @@ def test_intro_controller_follows_core() -> None:
     scripts = re.findall(r'<script src="/static/js/(app\.[a-z]+\.js)', _html())
     assert scripts[:2] == ["app.core.js", "app.intro.js"], scripts
     tag = re.search(r'<script src="/static/js/app\.intro\.js\?v=([^"]+)"([^>]*)>', _html())
-    assert tag and tag.group(1) == "ui20261101"
+    # 开场 PR 引入时是 ui20261101；之后的 PR 只在其后追加后缀（v0.2.9 改了开场里的 BUILD 号）。
+    assert tag and tag.group(1).startswith("ui20261101"), tag and tag.group(1)
     assert 'data-three="/static/vendor/three.min.js?v=r160"' in tag.group(2)
     assert 'data-logo="/static/intro/logo-mark.js?v=ui20261101"' in tag.group(2)
 

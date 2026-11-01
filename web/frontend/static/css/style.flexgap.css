@@ -45,6 +45,7 @@
 .no-flex-gap .usage-card-stack > * + * { margin-top: 20px; }                        /* style.help.css */
 .no-flex-gap .event-brief-grid label > .form-control { margin-top: 4px; }           /* style.hotspot.css：前面是文本节点 */
 .no-flex-gap .app-toast-stack > * + * { margin-top: 10px; }                         /* style.modal.css */
+.no-flex-gap .app-modal-actions > * + * { margin-left: 12px; }                      /* style.modal.css */
 
 /* ---------- 可换行容器 ----------
    列距：子项左右各 gap/2，容器左右 -gap/2。水平外边距不折叠，任何换行情况下都精确。

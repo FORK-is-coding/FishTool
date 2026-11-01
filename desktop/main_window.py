@@ -37,7 +37,7 @@ from pathlib import Path
 # 从 PyQt5.QtWidgets 导入符号
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget,
-    QSystemTrayIcon, QMenu, QAction, QMessageBox, QFileDialog
+    QSystemTrayIcon, QMenu, QAction, QFileDialog
 )
 # 从 PyQt5.QtCore 导入符号
 from PyQt5.QtCore import QUrl, Qt, QTimer, pyqtSignal
@@ -64,6 +64,7 @@ import requests
 from core.logger import get_logger
 from desktop.icon_utils import load_app_icon
 from desktop.report_export import save_html_as_pdf
+from desktop.ui_theme import LOADING_HTML, menu_style, show_message
 
 logger = get_logger(__name__)
 
@@ -327,49 +328,8 @@ class MainWindow(QMainWindow):
         # 初始加载页面（等待Web服务启动）
         # 内嵌 HTML 加载动画：渐变背景 + CSS 旋转 spinner
         # 从存储/网络读入数据
-        self.web_view.setHtml("""
-        <html>
-        <head>
-            <style>
-                body {
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    height: 100vh;
-                    margin: 0;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    font-family: "SimHei", "Microsoft YaHei", sans-serif;
-                }
-                .loading {
-                    text-align: center;
-                    color: white;
-                }
-                .spinner {
-                    border: 4px solid rgba(255,255,255,0.3);
-                    border-radius: 50%;
-                    border-top: 4px solid white;
-                    width: 50px;
-                    height: 50px;
-                    animation: spin 1s linear infinite;
-                    margin: 0 auto 20px;
-                }
-                @keyframes spin {
-                    0% { transform: rotate(0deg); }
-                    100% { transform: rotate(360deg); }
-                }
-            </style>
-        </head>
-        <body>
-            <div class="loading">
-                <div class="spinner"></div>
-                <h2>B站运营工具箱正在启动...</h2>
-                # 触发服务/线程开始运行
-                <p>请稍候，正在初始化Web服务</p>
-                # 设置初始值/默认状态，避免后续空引用
-            </div>
-        </body>
-        </html>
-        """)
+        # 白底墨字的启动页，与面板一致（样式见 desktop.ui_theme.LOADING_HTML）。
+        self.web_view.setHtml(LOADING_HTML)
         
         logger.info("[主窗口] UI初始化完成")
     
@@ -389,6 +349,8 @@ class MainWindow(QMainWindow):
         
         # 创建托盘菜单
         tray_menu = QMenu()
+        # 托盘菜单与面板一致：白底、细描边、选中项左侧黄色短条。
+        tray_menu.setStyleSheet(menu_style())
         
         # "显示主窗口"菜单项
         # 将内容呈现到界面上
@@ -878,7 +840,7 @@ class MainWindow(QMainWindow):
             title: 对话框标题
             message: 错误消息内容
         """
-        QMessageBox.critical(self, title, message)
+        show_message(self, title, message, kind="error")
     
     def closeEvent(self, event):
         """窗口关闭事件处理
@@ -913,16 +875,18 @@ class MainWindow(QMainWindow):
         """
         # 弹窗询问用户是否确认退出
         # 默认按钮设为 No，防止误触关掉程序
-        reply = QMessageBox.question(
+        confirmed = show_message(
             self,
             "确认退出",
             "确定要退出B站运营工具箱吗？",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            kind="confirm",
+            confirm_text="退出",
+            cancel_text="取消",
+            danger=True,
         )
         
         # 用户点了确认，进入退出清理流程
-        if reply == QMessageBox.Yes:
+        if confirmed:
             logger.info("[主窗口] 应用程序退出")
             
             # 停止Web服务

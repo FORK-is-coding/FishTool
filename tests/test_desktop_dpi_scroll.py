@@ -61,6 +61,10 @@ class _FakeApp:
     def setOrganizationName(self, name):  # noqa: N802
         """忽略。"""
 
+    def setStyleSheet(self, sheet):  # noqa: N802
+        """记录应用级样式表（悬停提示与菜单，见 desktop.ui_theme.app_style）。"""
+        _FakeApp.calls.append(("styleSheet", None))
+
     def exec_(self):
         """不进入事件循环。"""
         return 0
