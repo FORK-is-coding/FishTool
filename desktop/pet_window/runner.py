@@ -1,7 +1,7 @@
 """桌宠窗口独立进程入口。"""
 import sys
 
-from PyQt5.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 
 from desktop.icon_utils import load_app_icon
 from desktop.ui_theme import app_style
@@ -21,4 +21,4 @@ def run_pet_window():
     pet = PetWindow()
     pet.show()
     
-    sys.exit(app.exec_())
+    sys.exit(app.exec())

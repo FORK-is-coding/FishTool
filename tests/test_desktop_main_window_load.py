@@ -5,15 +5,14 @@
 加载都走一遍中奖名单校验入口。回调应只保留 ``__FISHTOOL_DESKTOP__`` 标记注入。
 
 为什么不构造真实 MainWindow：
-    offscreen 下构造 QWebEnginePage / MainWindow 会触发 0xC0000005
-    （见 tests/test_desktop_webengine_isolation.py），因此这里用最小替身
+    WebEngine 只在子进程里构造（见 tests/test_desktop_webengine_isolation.py），因此这里用最小替身
     直接调用未绑定方法，只验证回调本身的行为。
 """
 from __future__ import annotations
 
 import pytest
 
-# 模块级 import：QtWebEngineWidgets 必须早于任何 QApplication 创建
+# 模块级 import（PySide6 下导入顺序没有要求；保持在模块级只是为了收集期就暴露导入错误）
 from desktop.main_window import MainWindow
 
 WEB_URL = "http://localhost:8000"

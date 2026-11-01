@@ -1,5 +1,7 @@
 # 桌面端窗口版式修复报告
 
+> 历史报告，写于 PyQt5 时期。桌面端已迁到 PySide6（见 CHANGELOG「桌面内核迁到 PySide6」），文中的类名与路径以当时为准。
+
 ## 结论
 
 桌面端实际使用的是 `PyQt5.QWebEngineView`，不是 `pywebview`。原窗口在 `desktop/main_window.py` 中通过 `setGeometry(100, 100, 1200, 800)` 创建，未设置最小尺寸，也未显式设置 QWebEngine 缩放或 Qt 高 DPI 初始化。

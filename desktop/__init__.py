@@ -1,5 +1,5 @@
 """
-PyQt桌面客户端
+PySide6 桌面客户端（Qt 6，WebEngine 内核 Chromium 140）
 内嵌WebUI的桌面应用，包含桌宠悬浮窗
 
 本包提供桌面端两个组件：

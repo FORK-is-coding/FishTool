@@ -9,10 +9,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-from PyQt5.QtCore import QEvent, QPoint, QSettings, Qt, QTimer, QUrl
-from PyQt5.QtGui import QMouseEvent
-from PyQt5.QtWebEngineWidgets import QWebEnginePage, QWebEngineProfile
-from PyQt5.QtWidgets import QApplication
+from PySide6.QtCore import QEvent, QPoint, QSettings, Qt, QTimer, QUrl
+from PySide6.QtGui import QMouseEvent
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
+from PySide6.QtWidgets import QApplication
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -55,7 +55,7 @@ class WebModalProbe:
         """
         QTimer.singleShot(15000, self._on_timeout)
         self.page.load(QUrl(self.url))
-        self.app.exec_()
+        self.app.exec()
         return self.result
 
     def _on_loaded(self, ok: bool) -> None:

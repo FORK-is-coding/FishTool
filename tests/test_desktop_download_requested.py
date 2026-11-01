@@ -6,8 +6,8 @@
 - init_ui 必须连接 profile.downloadRequested（否则 QWebEngine 静默丢弃下载）
 
 测试策略：
-- 不构造 MainWindow / QWebEngineView（offscreen 下构造 WebEngine 会 0xC0000005，
-  见 tests/test_desktop_webengine_isolation.py），用替身 download 对象调用未绑定方法。
+- 不构造 MainWindow / QWebEngineView（WebEngine 只在子进程里构造，见 tests/test_desktop_webengine_isolation.py），
+  用替身 download 对象调用未绑定方法。
 - QFileDialog 用 monkeypatch 替换，不弹真实对话框。
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-# 模块级 import：QtWebEngineWidgets 必须早于任何 QApplication 创建
+# 模块级 import（PySide6 下导入顺序没有要求；保持在模块级只是为了收集期就暴露导入错误）
 from desktop import main_window as main_window_module
 from desktop.main_window import MainWindow
 
@@ -75,7 +75,7 @@ def test_default_download_path_defaults_to_home_downloads(tmp_path, monkeypatch)
 
 
 class _FakeDownload:
-    """QWebEngineDownloadItem 替身，记录 accept / cancel 与目标路径。"""
+    """QWebEngineDownloadRequest 替身（Qt5 时为 QWebEngineDownloadItem），记录 accept / cancel 与目标路径。"""
 
     def __init__(self, suggested: str) -> None:
         """保存建议文件名。"""

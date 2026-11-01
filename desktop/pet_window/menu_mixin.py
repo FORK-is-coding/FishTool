@@ -3,9 +3,9 @@
 拆分自原 pet_window.py 的 PetWindow 菜单部分：
 双击触发功能菜单，支持动画弹出、自动收起与主面板跳转。
 """
-from PyQt5.QtCore import QEasingCurve, QParallelAnimationGroup, QPoint, QPropertyAnimation
-from PyQt5.QtGui import QCursor
-from PyQt5.QtWidgets import QApplication, QToolTip
+from PySide6.QtCore import QEasingCurve, QParallelAnimationGroup, QPoint, QPropertyAnimation
+from PySide6.QtGui import QCursor
+from PySide6.QtWidgets import QApplication, QToolTip
 
 from .assets import logger
 from .menu_panel import PetMenuPanel

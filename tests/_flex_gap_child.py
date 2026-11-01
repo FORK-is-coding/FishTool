@@ -19,9 +19,10 @@ if sys.platform == "win32":
     os.environ["QT_QPA_PLATFORM"] = "windows"
 os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
 
-from PyQt5.QtCore import Qt, QTimer, QUrl  # noqa: E402
-from PyQt5.QtWebEngineWidgets import QWebEnginePage, QWebEngineScript, QWebEngineView  # noqa: E402
-from PyQt5.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtCore import Qt, QTimer, QUrl  # noqa: E402
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineScript  # noqa: E402
+from PySide6.QtWebEngineWidgets import QWebEngineView  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 FRONTEND = Path(sys.argv[1]).resolve()
 
@@ -134,13 +135,22 @@ def main() -> int:
     def poll() -> None:
         page.runJavaScript("window.__probeResult || null", lambda r: done(r) if r else QTimer.singleShot(300, poll))
 
+    def start_probe() -> None:
+        page.runJavaScript(_PROBE)
+        QTimer.singleShot(400, poll)
+
+    def wait_ready() -> None:
+        # 等前端脚本加载完（navigateTo 已定义）再跑探针；固定延时在新内核上偶发 ReferenceError。
+        page.runJavaScript("typeof navigateTo === 'function'",
+                           lambda ok: start_probe() if ok else QTimer.singleShot(200, wait_ready))
+
     def on_load(_ok: bool) -> None:
-        QTimer.singleShot(1200, lambda: (page.runJavaScript(_PROBE), QTimer.singleShot(400, poll)))
+        QTimer.singleShot(300, wait_ready)
 
     page.loadFinished.connect(on_load)
     page.setUrl(QUrl(f"http://127.0.0.1:{port}/"))
     QTimer.singleShot(60000, app.quit)
-    app.exec_()
+    app.exec()
     httpd.shutdown()
     if "raw" not in result:
         print("probe timeout", file=sys.stderr)

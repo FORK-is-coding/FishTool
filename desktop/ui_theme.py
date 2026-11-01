@@ -13,7 +13,7 @@ Web 面板的颜色、圆角、按钮写在 ``web/frontend/static/css/style.base
 """
 from __future__ import annotations
 
-from PyQt5.QtWidgets import QMessageBox, QWidget
+from PySide6.QtWidgets import QMessageBox, QWidget
 
 #: 与 style.base.css :root 同名变量一一对应（去掉前缀 ``--``）。
 TOKENS = {
@@ -237,7 +237,7 @@ def show_message(
         box.setEscapeButton(cancel_button)
     else:
         box.setDefaultButton(confirm_button)
-    box.exec_()
+    box.exec()
     return kind != "confirm" or box.clickedButton() is confirm_button
 
 

@@ -2,7 +2,7 @@
 
 ## 1. 运行入口
 
-- `python app.py`：唯一启动入口，默认启动 PyQt 桌面版（主窗口 + 桌宠）；`MainWindow` 会自动通过 `app.py web` 子进程启动本地 Web 服务，因此浏览器访问 `http://localhost:8000` 同样可用。
+- `python app.py`：唯一启动入口，默认启动 PySide6 桌面版（主窗口 + 桌宠，WebEngine 内核 Chromium 140）；`MainWindow` 会自动通过 `app.py web` 子进程启动本地 Web 服务，因此浏览器访问 `http://localhost:8000` 同样可用。
 - `python app.py web`：仅启动 Web 版；先初始化配置、数据库、目录，再由 uvicorn 加载 `web.main:app`。
 - `python app.py init`：只初始化配置、数据库和目录。
 - `web/main.py` 只是 FastAPI 应用模块（lifespan、路由、静态页、WebSocket），不再作为独立入口；启动统一走 `app.py web`。

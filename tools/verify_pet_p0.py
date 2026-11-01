@@ -9,10 +9,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-from PyQt5.QtCore import QEvent, QPoint, QSettings, Qt
-from PyQt5.QtGui import QMouseEvent
-from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QWidget
+from PySide6.QtCore import QEvent, QPoint, QPointF, QSettings, Qt
+from PySide6.QtGui import QEnterEvent, QMouseEvent
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QWidget
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -87,7 +87,7 @@ def verify_pet_interactions(app: QApplication) -> dict[str, bool]:
         pet.show()
         app.processEvents()
 
-        pet.enterEvent(QEvent(QEvent.Enter))
+        pet.enterEvent(QEnterEvent(QPointF(10, 10), QPointF(10, 10), QPointF(10, 10)))
         QTest.qWait(220)
         hover_in = pet.image_label.scale_factor > 1.0
         pet.leaveEvent(QEvent(QEvent.Leave))

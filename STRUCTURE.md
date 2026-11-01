@@ -64,7 +64,7 @@ bili_ops_toolbox/
 │
 ├── gui/                         # 图形界面（待实现）
 │   ├── __init__.py
-│   ├── main_window.py          # 主窗口（PyQt6 + WebView）
+│   ├── main_window.py          # 主窗口（PySide6 + QtWebEngine）
 │   └── pet_window.py           # 桌宠悬浮窗
 │
 ├── web/                         # WebUI（待实现）

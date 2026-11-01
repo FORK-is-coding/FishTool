@@ -5,7 +5,7 @@
 接收实时预警推送，30 秒心跳保活。
 """
 from typing import Optional
-from PyQt5.QtCore import QThread, pyqtSignal
+from PySide6.QtCore import QThread, Signal
 import json
 import threading
 import websocket
@@ -26,10 +26,10 @@ class WebSocketThread(QThread):
     """
     
     # 信号定义
-    message_received = pyqtSignal(dict)  # 接收到消息
-    connected = pyqtSignal()  # 连接成功
-    disconnected = pyqtSignal()  # 连接断开
-    error = pyqtSignal(str)  # 错误
+    message_received = Signal(dict)  # 接收到消息
+    connected = Signal()  # 连接成功
+    disconnected = Signal()  # 连接断开
+    error = Signal(str)  # 错误
     
     def __init__(self, ws_url: str):
         """初始化WebSocket线程

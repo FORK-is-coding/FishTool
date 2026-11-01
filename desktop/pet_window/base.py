@@ -2,15 +2,34 @@
 
 拆分自原 pet_window.py 的 PetWindow 基础部分。
 """
-from PyQt5.QtWidgets import QApplication, QLabel, QVBoxLayout
-from PyQt5.QtCore import Qt, QPoint, QSettings, QTimer
-from PyQt5.QtGui import QColor, QPainter, QPixmap
+from PySide6.QtWidgets import QApplication, QLabel, QVBoxLayout
+from PySide6.QtCore import Qt, QPoint, QSettings, QTimer
+from PySide6.QtGui import QColor, QPainter, QPixmap
 
 from desktop.icon_utils import load_app_icon
 from desktop.ui_theme import pet_notify_style
 from .assets import PET_ASSET_DIRS, logger
 from .image_label import PetImageLabel
 from .ws_thread import WebSocketThread
+
+
+def default_pet_position(screen, width: int, height: int) -> QPoint:
+    """桌宠首次启动的位置：主屏可用区域右下角，右边留 50px、下边留 100px。
+
+    Args:
+        screen: ``QScreen``；为 None 时退回 (100, 100)。
+        width: 桌宠窗口宽。
+        height: 桌宠窗口高。
+
+    Returns:
+        QPoint: 窗口左上角坐标，保证不小于可用区域的左上角。
+    """
+    if screen is None:
+        return QPoint(100, 100)
+    area = screen.availableGeometry()
+    x = max(area.x(), area.x() + area.width() - width - 50)
+    y = max(area.y(), area.y() + area.height() - height - 100)
+    return QPoint(x, y)
 
 
 class PetWindowBase:
@@ -118,15 +137,13 @@ class PetWindowBase:
         # 初始状态
         self.set_state(self.STATE_IDLE)
         
-        # 定位到屏幕右下角
-        # 留出 50px 边距
-        screen = QApplication.desktop().screenGeometry()
-        # 移动窗口位置
+        # 定位到主屏可用区域（扣除任务栏）的右下角，右边留 50px、下边留 100px。
+        # Qt6 删除了 QApplication.desktop()；用可用区域的 right()/bottom()，任务栏在左边或上边时原点不为 0 也正确。
         saved_position = self.settings.value("position")
         if isinstance(saved_position, QPoint):
             self.move(saved_position)
         else:
-            self.move(screen.width() - self.width() - 50, screen.height() - self.height() - 100)
+            self.move(default_pet_position(QApplication.primaryScreen(), self.width(), self.height()))
         
         logger.info("[桌宠] UI初始化完成")
 

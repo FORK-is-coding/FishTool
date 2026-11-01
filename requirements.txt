@@ -7,10 +7,11 @@ PyYAML==6.0.1
 requests==2.31.0
 # SQLAlchemy
 SQLAlchemy==2.0.23
-# PyQt5桌面客户端
-PyQt5==5.15.10
-# PyQtWebEngine（桌面端QWebEngineView必需，红线勿删）
-PyQtWebEngine==5.15.6
+# 桌面客户端：PySide6（Qt 6.12，WebEngine 内核 Chromium 140）。
+# 必须写元包 PySide6：6.12 起 WebEngine 拆成独立 wheel PySide6_WebEngine，
+# 只装 PySide6-Essentials / PySide6-Addons 会缺 QtWebEngineCore（桌面端 QWebEngineView 必需，红线勿删）。
+# 不要与 PyQt5 装在同一环境：PyInstaller 会因收集到两个 Qt 绑定而中止打包。
+PySide6==6.12.0
 websocket-client==1.6.4
 # Web框架
 fastapi==0.108.0

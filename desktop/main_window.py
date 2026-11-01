@@ -34,19 +34,20 @@ import asyncio
 # 从 typing 导入符号
 from typing import Optional
 from pathlib import Path
-# 从 PyQt5.QtWidgets 导入符号
-from PyQt5.QtWidgets import (
+# 从 PySide6.QtWidgets 导入符号
+from PySide6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget,
-    QSystemTrayIcon, QMenu, QAction, QFileDialog
+    QSystemTrayIcon, QMenu, QFileDialog
 )
-# 从 PyQt5.QtCore 导入符号
-from PyQt5.QtCore import QUrl, Qt, QTimer, pyqtSignal
-# 从 PyQt5.QtGui 导入符号
-from PyQt5.QtGui import QIcon
-# 从 PyQt5.QtWebEngineWidgets 导入符号
-from PyQt5.QtWebEngineWidgets import (
-    QWebEngineView, QWebEngineSettings, QWebEnginePage, QWebEngineProfile, QWebEngineScript
+# 从 PySide6.QtCore 导入符号
+from PySide6.QtCore import QUrl, Qt, QTimer, Signal
+# 从 PySide6.QtGui 导入符号（Qt6 中 QAction 在 QtGui）
+from PySide6.QtGui import QAction, QIcon
+# WebEngine：页面 / profile / 脚本 / 设置在 QtWebEngineCore，只有 QWebEngineView 在 QtWebEngineWidgets
+from PySide6.QtWebEngineCore import (
+    QWebEnginePage, QWebEngineProfile, QWebEngineScript, QWebEngineSettings
 )
+from PySide6.QtWebEngineWidgets import QWebEngineView
 # 导入模块
 import logging
 # 导入模块
@@ -65,6 +66,7 @@ from core.logger import get_logger
 from desktop.icon_utils import load_app_icon
 from desktop.report_export import save_html_as_pdf
 from desktop.ui_theme import LOADING_HTML, menu_style, show_message
+from desktop.webengine_profile import create_persistent_profile
 
 logger = get_logger(__name__)
 
@@ -128,11 +130,19 @@ class DesktopWebPage(QWebEnginePage):
     """桌面端 WebEngine 页面，记录 JS 错误并接收报告保存请求。"""
 
     #: 前端通过 console 发送保存 PDF 请求；参数为 token/html/默认文件名。
-    savePdfRequested = pyqtSignal(str, str, str)
+    savePdfRequested = Signal(str, str, str)
 
-    def __init__(self, parent=None):
-        """初始化分片缓存，避免大报告触发控制台消息长度限制。"""
-        super().__init__(parent)
+    def __init__(self, profile=None, parent=None):
+        """初始化分片缓存，避免大报告触发控制台消息长度限制。
+
+        Args:
+            profile: 页面使用的 ``QWebEngineProfile``。Qt6 下不传时页面用无痕 profile，localStorage 不落盘。
+            parent: Qt 父对象。
+        """
+        if profile is not None:
+            super().__init__(profile, parent)
+        else:
+            super().__init__(parent)
         self._pdf_chunks = {}
 
     def javaScriptConsoleMessage(self, level, message, line_number, source_id):
@@ -162,7 +172,7 @@ class DesktopWebPage(QWebEnginePage):
 
         logger.warning(
             "[桌面Web] JS控制台 level=%s line=%s source=%s message=%s",
-            level,
+            getattr(level, "name", level),
             line_number,
             source_id,
             message,
@@ -193,7 +203,7 @@ class MainWindow(QMainWindow):
     MIN_WINDOW_HEIGHT = 750
     
     # 信号定义
-    web_ready = pyqtSignal()  # Web服务就绪信号
+    web_ready = Signal()  # Web服务就绪信号
     
     def __init__(self, web_port: int = 8000):
         """初始化主窗口
@@ -280,7 +290,14 @@ class MainWindow(QMainWindow):
         # WebView 使用自定义页面记录 JS 控制台错误；windowed exe 没有 stdout，
         # 没有这层日志时脚本 404/语法异常会被误判为按钮失效。
         self.web_view = QWebEngineView()
-        self.web_view.setPage(DesktopWebPage(self.web_view))
+        # 有名的持久化 profile：Qt6 默认 profile 是无痕的，localStorage 重启就丢。
+        # create_persistent_profile 在构造第一个页面之前完成 Qt5 旧数据迁移，profile 挂在 QApplication 上。
+        self._web_profile = create_persistent_profile()
+        self.web_view.setPage(DesktopWebPage(self._web_profile, self.web_view))
+        # 退出时先释放页面再释放 profile；closeEvent 只隐藏到托盘，所以挂在 aboutToQuit 上。
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._release_web_page)
         self.web_view.loadFinished.connect(self._on_web_load_finished)
         page = self.web_view.page()
         # 报告导出桥：页面把打印 HTML 分片发回桌面壳，由这里弹保存对话框。
@@ -298,7 +315,7 @@ class MainWindow(QMainWindow):
         # frozen 客户端的 WebEngine 缓存位于用户目录，会跨 exe 版本保留旧 app.js。
         # 桌面壳禁用 HTTP 缓存，确保每次启动都读取当前 exe 内置的 JS/CSS；
         # 仅影响内嵌客户端，不改变 8000 端口在普通浏览器中的缓存策略。
-        profile = self.web_view.page().profile()
+        profile = self._web_profile
         profile.setHttpCacheType(QWebEngineProfile.NoCache)
         profile.clearHttpCache()
         # QWebEngine 不处理 downloadRequested 时会丢弃所有下载，
@@ -797,7 +814,7 @@ class MainWindow(QMainWindow):
         """处理页面发起的下载：弹保存对话框，确认后接受下载，取消则放弃。
 
         Args:
-            download: ``QWebEngineDownloadItem``。
+            download: ``QWebEngineDownloadRequest``。
         """
         suggested = download.suggestedFileName()
         initial_path = _default_download_path(suggested)
@@ -817,6 +834,16 @@ class MainWindow(QMainWindow):
         download.setDownloadFileName(target.name)
         download.accept()
         logger.info("[桌面Web] 开始下载: %s", target)
+
+    def _release_web_page(self) -> None:
+        """应用退出前释放 WebEngine 页面，保证页面先于 profile 销毁。"""
+        view = getattr(self, "web_view", None)
+        if view is None:
+            return
+        page = view.page()
+        view.setPage(None)
+        if page is not None:
+            page.deleteLater()
 
     def show_toast(self, title: str, message: str, duration: int = 6000):
         """显示非阻塞托盘提示（高优先级错误用，不打断用户操作）。

@@ -3,7 +3,7 @@
 拆分自原 pet_window.py 的 PetWindow 通知部分：
 收到 alert 消息显示通知气泡，5 秒后自动隐藏。
 """
-from PyQt5.QtCore import QEvent, QTimer
+from PySide6.QtCore import QEvent, QTimer
 
 from .assets import logger
 
@@ -69,7 +69,7 @@ class NotifyMixin:
         """处理应用级点击事件，点击菜单和桌宠之外区域时收起菜单。"""
         if event.type() == QEvent.MouseButtonPress and hasattr(self, "menu_panel"):
             if self.menu_panel.isVisible():
-                position = event.globalPos()
+                position = event.globalPosition().toPoint()
                 inside_pet = self.geometry().contains(self.mapFromGlobal(position))
                 inside_menu = self.menu_panel.geometry().contains(position)
                 if not inside_pet and not inside_menu:

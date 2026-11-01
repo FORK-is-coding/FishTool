@@ -3,8 +3,8 @@
 拆分自原 pet_window.py 的 PetMenuPanel：
 仅负责三个动作卡片的视觉承载。
 """
-from PyQt5.QtWidgets import QFrame, QPushButton, QVBoxLayout
-from PyQt5.QtCore import Qt
+from PySide6.QtWidgets import QFrame, QPushButton, QVBoxLayout
+from PySide6.QtCore import Qt
 
 from desktop.ui_theme import pet_menu_style
 
