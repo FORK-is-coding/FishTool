@@ -73,3 +73,36 @@ def test_web_host_can_opt_in_all_interfaces():
     args = entry.build_parser().parse_args(["web", "--host", "0.0.0.0"])
 
     assert args.host == "0.0.0.0"
+
+
+def _capture_uvicorn_run(monkeypatch):
+    """替换 uvicorn.run，记录参数，不真正启动服务。"""
+    import uvicorn
+
+    calls = []
+    monkeypatch.setattr(uvicorn, "run", lambda target, **kwargs: calls.append((target, kwargs)))
+    return calls
+
+
+def test_run_web_frozen_disables_uvicorn_log_config(monkeypatch):
+    """打包后的 exe（无控制台，stdout 为 None）不能用 uvicorn 默认日志配置，否则 `FishTool.exe web` 起不来。"""
+    calls = _capture_uvicorn_run(monkeypatch)
+    monkeypatch.setattr(entry.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(entry.sys, "stdout", None)
+
+    assert entry.run_web(host="127.0.0.1", port=9000, reload=False) == 0
+    assert len(calls) == 1
+    target, kwargs = calls[0]
+    assert target == "web.main:app"
+    assert kwargs["log_config"] is None
+    assert (kwargs["host"], kwargs["port"], kwargs["reload"]) == ("127.0.0.1", 9000, False)
+
+
+def test_run_web_source_keeps_uvicorn_default_logging(monkeypatch):
+    """源码运行（有控制台）保持 uvicorn 默认日志配置，终端里仍能看到彩色访问日志。"""
+    calls = _capture_uvicorn_run(monkeypatch)
+    monkeypatch.delattr(entry.sys, "frozen", raising=False)
+
+    assert entry.run_web(host="127.0.0.1", port=8000, reload=True) == 0
+    assert "log_config" not in calls[0][1]
+    assert calls[0][1]["reload"] is True

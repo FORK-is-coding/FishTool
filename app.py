@@ -153,14 +153,16 @@ def run_web(host: str, port: int, reload: bool) -> int:
     logger.info("启动Web服务器: http://%s:%s", host, port)
     logger.info("开发模式: %s", "开启" if reload else "关闭")
 
+    options = {"host": host, "port": port, "reload": reload, "log_level": "info"}
+    if getattr(sys, "frozen", False):
+        # 打包后的 exe 是无控制台程序，sys.stdout / sys.stderr 为 None；uvicorn 默认的
+        # dictConfig 会在 ColourizedFormatter 里调用 sys.stdout.isatty()，直接抛
+        # AttributeError（Unable to configure formatter 'default'），`FishTool.exe web` 起不来。
+        # 与桌面版进程内启动（desktop/main_window.py）一样禁用 uvicorn 自带日志配置，
+        # 日志改走项目自身的文件 handler。
+        options["log_config"] = None
     try:
-        uvicorn.run(
-            "web.main:app",
-            host=host,
-            port=port,
-            reload=reload,
-            log_level="info",
-        )
+        uvicorn.run("web.main:app", **options)
     except KeyboardInterrupt:
         logger.info("服务器已停止")
         return 0
