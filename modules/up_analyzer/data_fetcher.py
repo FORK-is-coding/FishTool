@@ -616,6 +616,7 @@ class UPDataFetcher:
                         logger.warning("[分区榜单] UID %s 充电人数不可用: %s", owner_uid, exc)
                     try:
                         await self.rate_limiter.acquire('normal')
+                        upstat = await self.bili_api.get_user_upstat(owner_uid)
                         upstat_data = (upstat or {}).get('data') or {}
                         up_info['total_play'] = (upstat_data.get('archive') or {}).get(
                             'view', upstat_data.get('archive_view', 0)
