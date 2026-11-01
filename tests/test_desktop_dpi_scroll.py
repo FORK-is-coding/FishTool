@@ -6,8 +6,8 @@
 - QtWebEngine 的 ScrollAnimatorEnabled 默认 False，滚轮没有平滑滚动。
 - 逻辑屏幕可用高度 912 时，900 高的客户区加标题栏从 y=100 放置，底部超出屏幕。
 
-为什么不构造真实 MainWindow：offscreen 下构造 QWebEngineView 会 0xC0000005
-（见 tests/test_desktop_webengine_isolation.py），这里用替身和纯函数验证。
+为什么不构造真实 MainWindow：WebEngine 只在子进程里构造（见 tests/test_desktop_webengine_isolation.py），
+这里用替身和纯函数验证。
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-# 模块级 import：QtWebEngineWidgets 必须早于任何 QApplication 创建
+# 模块级 import（PySide6 下导入顺序没有要求；保持在模块级只是为了收集期就暴露导入错误）
 import desktop.main_window as mw
 from desktop.main_window import MainWindow, fit_window_geometry
 
@@ -65,7 +65,7 @@ class _FakeApp:
         """记录应用级样式表（悬停提示与菜单，见 desktop.ui_theme.app_style）。"""
         _FakeApp.calls.append(("styleSheet", None))
 
-    def exec_(self):
+    def exec(self):
         """不进入事件循环。"""
         return 0
 
@@ -82,8 +82,8 @@ class _FakeWindow:
 
 def test_run_desktop_sets_passthrough_before_qapplication(monkeypatch):
     """取整策略只在 QApplication 创建前设置才生效。"""
-    import PyQt5.QtWidgets as qtw
-    from PyQt5.QtCore import Qt
+    import PySide6.QtWidgets as qtw
+    from PySide6.QtCore import Qt
 
     import desktop.icon_utils as icon_utils
     import desktop.pet_window as pet
@@ -100,7 +100,7 @@ def test_run_desktop_sets_passthrough_before_qapplication(monkeypatch):
     names = [c[0] for c in _FakeApp.calls]
     assert ("rounding", Qt.HighDpiScaleFactorRoundingPolicy.PassThrough) in _FakeApp.calls
     assert names.index("rounding") < names.index("init")
-    assert ("setAttribute", Qt.AA_EnableHighDpiScaling) in _FakeApp.calls
+    assert not any(c[0] == "setAttribute" for c in _FakeApp.calls), _FakeApp.calls  # Qt6 默认开启高 DPI
 
 
 # ---------- 平滑滚动：init_ui 打开 ScrollAnimatorEnabled ----------
@@ -133,18 +133,18 @@ def test_init_ui_enables_scroll_animator():
 
 _DEFAULT_PROBE = (
     "import sys\n"
-    "from PyQt5.QtWebEngineWidgets import QWebEngineSettings as S\n"
-    "from PyQt5.QtWidgets import QApplication\n"
+    "from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEngineSettings as S\n"
+    "from PySide6.QtWidgets import QApplication\n"
     "app = QApplication(sys.argv[:1])\n"
-    "print('SCROLL_ANIMATOR_DEFAULT', S.defaultSettings().testAttribute(S.ScrollAnimatorEnabled))\n"
+    "print('SCROLL_ANIMATOR_DEFAULT', QWebEngineProfile.defaultProfile().settings().testAttribute(S.ScrollAnimatorEnabled))\n"
 )
 
 
 def test_scroll_animator_default_is_off():
     """对照：确认默认值确实是关闭的，否则这条设置没有意义。
 
-    读取 WebEngine 默认设置会初始化 WebEngine，offscreen 下会 0xC0000005，
-    因此放到子进程里用系统原生平台跑；子进程起不来（无桌面会话等）时跳过。
+    读取 WebEngine 默认设置会初始化 WebEngine，按约定放到子进程里用系统原生平台跑；
+    子进程起不来（无桌面会话等）时跳过。
     """
     env = dict(os.environ, QT_QPA_PLATFORM="windows" if sys.platform == "win32" else os.environ.get("QT_QPA_PLATFORM", ""))
     proc = subprocess.run([sys.executable, "-c", _DEFAULT_PROBE], capture_output=True, text=True, timeout=60, env=env)

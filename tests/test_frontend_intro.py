@@ -347,11 +347,17 @@ def test_gate_fallback_timer_removes_mask(gate_results) -> None:
 
 # ---------------- 真实内核（QtWebEngine） ----------------
 
+def _chrome_major(ua: str) -> int:
+    """从 UA 里取 Chrome 主版本号；取不到返回 0。"""
+    match = re.search(r"Chrome/(\d+)\.", ua or "")
+    return int(match.group(1)) if match else 0
+
+
 def _qt_available() -> bool:
     try:
-        import PyQt5.QtWebEngineWidgets  # noqa: F401
+        import PySide6.QtWebEngineWidgets  # noqa: F401
     except ImportError:
-        # 没装 PyQtWebEngine：真实内核用例跳过，静态断言仍然覆盖。
+        # 没装 PySide6 WebEngine：真实内核用例跳过，静态断言仍然覆盖。
         return False
     return True
 
@@ -359,7 +365,7 @@ def _qt_available() -> bool:
 @pytest.fixture(scope="module")
 def qt_results(tmp_path_factory) -> dict:
     if not _qt_available():
-        pytest.skip("未安装 PyQtWebEngine")
+        pytest.skip("未安装 PySide6 WebEngine")
     proc = subprocess.run(
         [sys.executable, str(_CHILD), str(_FRONTEND)],
         cwd=str(tmp_path_factory.mktemp("intro")), capture_output=True, text=True,
@@ -374,7 +380,7 @@ def qt_results(tmp_path_factory) -> dict:
 def test_real_qtwebengine_full_intro_finishes(qt_results) -> None:
     """?intro=full：10 秒内播完，无 JS 报错，开场层与 intro-pending 都已移除，主界面可见。"""
     result = qt_results["full"]
-    assert "Chrome/83." in result["ua"], result["ua"]
+    assert _chrome_major(result["ua"]) >= 140, result["ua"]
     assert result["errors"] == [], result["errors"]
     assert result["state"] == "done", result
     assert result["playAt"] is not None and result["doneAt"] is not None, result
@@ -392,6 +398,15 @@ def test_real_qtwebengine_escape_skips_quickly(qt_results) -> None:
     assert result["doneAt"] > result["skipAt"], result
     assert result["doneAt"] - result["skipAt"] <= 1200, result
     assert result["pending"] is False and result["overlay"] is False, result
+
+
+def test_real_qtwebengine_console_errors_are_captured(qt_results) -> None:
+    """反向验证：探针确实能收到 console.error（否则上面几条「errors == []」形同虚设）。
+
+    PySide6 的 console 级别是不可比较大小的枚举；判断写错时回调里抛异常被吞掉，错误一条都收不到，测试却全绿。
+    """
+    errors = qt_results["canary"]["errors"]
+    assert any("FishIntro canary" in e for e in errors), errors
 
 
 def test_real_qtwebengine_browser_stays_idle(qt_results) -> None:

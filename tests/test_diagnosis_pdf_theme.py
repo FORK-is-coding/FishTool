@@ -9,8 +9,12 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import re
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -106,17 +110,17 @@ def test_body_security_and_charts_preserved(tmp_path):
 
 # ---------------------------------------------------------------- 桌面端渲染
 
-qt = pytest.importorskip("PyQt5.QtWidgets")
+qt = pytest.importorskip("PySide6.QtWidgets")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-# desktop 包的 __init__ 会导入 main_window → QtWebEngineWidgets；它必须先于 QApplication 导入
-# （同 tests/test_desktop_pet_ui.py 的约定），因此在模块级完成导入。
+# desktop 包的 __init__ 会导入 main_window → QtWebEngineWidgets；PySide6 下导入顺序没有要求，
+# 仍在模块级导入，收集期就能暴露导入错误。
 from desktop.report_export import parse_report_meta, save_html_as_pdf, to_qt_body  # noqa: E402
 
 
 @pytest.fixture(scope="module")
 def qapp():
     """离屏 QApplication（QPdfWriter / QTextDocument 需要）。"""
-    from PyQt5.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
 
     return QApplication.instance() or QApplication([])
 
@@ -164,3 +168,48 @@ def test_desktop_export_rejects_empty_html(tmp_path, qapp):
     """空内容不生成文件，返回明确文案。"""
     ok, detail = save_html_as_pdf("   ", str(tmp_path / "x.pdf"))
     assert ok is False and "内容为空" in detail
+
+
+_PDF_FONT_PROBE = r"""
+import json, os, re, sys, tempfile
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+os.environ["QT_QPA_PLATFORM"] = "windows"
+from PySide6.QtWidgets import QApplication
+app = QApplication(sys.argv[:1])
+from desktop.report_export import save_html_as_pdf
+html = Path(sys.argv[2]).read_text(encoding="utf-8")
+out = Path(sys.argv[3])
+ok, detail = save_html_as_pdf(html, str(out))
+data = out.read_bytes() if ok else b""
+print(json.dumps({"ok": ok, "detail": detail, "size": len(data),
+                  "fontfiles": len(re.findall(rb"/FontFile2\s+\d+\s+0\s+R", data)),
+                  "fonts": sorted(set(m.decode("latin1") for m in re.findall(rb"/BaseFont\s*/([^\s/\[\]<>]+)", data)))}))
+"""
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="需要 Windows 原生平台与系统字体")
+def test_desktop_export_embeds_subset_fonts_on_real_platform(tmp_path):
+    """真实 windows 平台导出：嵌入了子集字体、不回退到宋体、体积在百 KB 量级。
+
+    offscreen 平台下 Qt6 找不到字体目录（Qt no longer ships fonts），PDF 里一个字体都不嵌入，
+    上面那条「嵌入字体小于 2MB」的断言因此必然成立、证明不了子集化；这里在子进程里用原生平台补上。
+    中文回退到宋体（SimSun）的问题见 desktop/report_export.py 的 _font()。
+    """
+    html_path = tmp_path / "report.html"
+    # 去掉数据采集时间：封面该字段显示中文「未记录」，且用拉丁字体画——正是会回退到宋体的情形。
+    html = re.sub(r'<meta name="report-fetched-at" content="[^"]*">', "", _html(tmp_path, ai_report=AI_OK))
+    html_path.write_text(html, encoding="utf-8")
+    target = tmp_path / "out" / "report.pdf"
+    proc = subprocess.run(
+        [sys.executable, "-c", _PDF_FONT_PROBE, str(Path(__file__).resolve().parents[1]), str(html_path), str(target)],
+        cwd=str(tmp_path), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,
+    )
+    line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("{")), None)
+    if proc.returncode != 0 or line is None:
+        pytest.skip(f"原生平台子进程不可用 rc={proc.returncode}: {proc.stderr[-400:]}")
+    out = json.loads(line)
+    assert out["ok"], out["detail"]
+    assert out["fontfiles"] >= 1, out
+    assert not any("SimSun" in name for name in out["fonts"]), out["fonts"]
+    assert out["size"] < 1_500_000, out["size"]

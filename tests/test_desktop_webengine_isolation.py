@@ -1,17 +1,14 @@
 """WebEngine 红线的 subprocess 隔离用例（批5 · A 组）。
 
-红线事实（实测两次稳定复现）：
-    QT_QPA_PLATFORM=offscreen 下
-      - desktop/main_window.py:65  DesktopWebPage(QWebEnginePage)
-      - desktop/main_window.py:80  MainWindow(QMainWindow)
-    一构造即 STATUS_ACCESS_VIOLATION（0xC0000005，进程退出码 3221225477）。
-    这是访问违规而非 Python 异常，try/except BaseException 拦不住，裸收进全量
-    会让整个 pytest 进程 crash、把 1394 全绿打没。
+历史：PyQt5（Chromium 83）时代，QT_QPA_PLATFORM=offscreen 下构造 DesktopWebPage / MainWindow
+    一构造即 STATUS_ACCESS_VIOLATION（0xC0000005），try/except 拦不住，裸收进全量会带走整个 pytest 进程。
+    迁到 PySide6 6.12 后实测 offscreen 下可以正常构造（exit=0）。
 
 收编策略（按「碰不碰 WebEngine」切刀，不按「是不是 desktop」切）：
     - 导入面（import QtWebEngineWidgets / import desktop）在 offscreen 下安全，
       可放进主套件；
-    - 构造面必须放子进程，父进程只读 exit code，崩溃不影响主套件。
+    - 构造面仍放子进程，父进程只读 exit code 与输出：WebEngine 不在主 pytest 进程里启动，
+      避免拖慢全量，也避免没有 GPU 的机器上出问题。
 
 硬约束 #5：子进程不继承 pytest 的落盘隔离，因此一律以 cwd=tmp_path 启动，
     避免裸 import desktop 按 cwd 重建仓库 data/logs。
@@ -62,23 +59,18 @@ def test_webengine_import_surface_is_process_safe(tmp_path):
     assert "IMPORT-SURFACE OK" in proc.stdout
 
 
-def test_webengine_construction_crash_is_contained_in_subprocess(tmp_path):
-    """构造 DesktopWebPage / MainWindow 必须崩在子进程，父进程存活并读到退出码。"""
-    outcomes: dict = {}
+def test_webengine_construction_runs_in_subprocess(tmp_path):
+    """构造 DesktopWebPage / MainWindow 在子进程里完成，正常退出，且没有写到 cwd 之外。
 
-    for mode in ("construct-page", "construct-mainwindow"):
+    PyQt5（Chromium 83）时代 offscreen 下构造必然 0xC0000005；PySide6 6.12 实测可以正常构造。
+    仍放在子进程：WebEngine 在主 pytest 进程里启动会拖慢全量，也可能在没有 GPU 的机器上出问题。
+    """
+    for mode, marker in (("construct-page", "CONSTRUCT-PAGE OK"), ("construct-mainwindow", "CONSTRUCT-MAINWINDOW OK")):
         proc = _run_child(mode, tmp_path)
-        outcomes[mode] = proc.returncode
-        assert proc.returncode != 0, (
-            f"{mode} 竟然构造成功（rc=0）；说明 offscreen 红线上移，"
-            f"需要重新评估是否可裸收编\nSTDOUT={proc.stdout}"
+        assert proc.returncode == 0, (
+            f"{mode} 退出码 {proc.returncode}（0x{proc.returncode & 0xFFFFFFFF:X}）\n"
+            f"STDOUT={proc.stdout}\nSTDERR={proc.stderr[-2000:]}"
         )
-
-    if sys.platform == "win32":
-        for mode, returncode in outcomes.items():
-            assert returncode == STATUS_ACCESS_VIOLATION, (
-                f"{mode} 退出码 {returncode} != 0x{STATUS_ACCESS_VIOLATION:X}（访问违规）"
-            )
-
-    # 能执行到这里即证明：子进程的访问违规没有带走父进程（pytest 主进程）。
-    # 这正是「按 WebEngine 切刀 + subprocess 隔离」要达到的效果。
+        assert marker in proc.stdout, proc.stdout
+    # MainWindow 的持久化 profile 落在 cwd（临时目录）下，不写真实用户目录。
+    assert (tmp_path / "webengine" / "Default").is_dir(), sorted(p.name for p in tmp_path.iterdir())

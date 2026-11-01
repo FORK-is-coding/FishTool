@@ -90,7 +90,9 @@
 - 打包命令是 `pyinstaller --clean --noconfirm build.spec`（需先 `pip install pyinstaller`），与 README 快速开始一致；项目没有 `build.py`。
 - 打包阶段报图标格式错误：环境里缺 Pillow（`assets/图标.png` 需要它转换），先执行 `pip install -r requirements.txt`。
 - 查 `build/build/warn-build.txt` 和 exe 旁 `data/logs/error.log`。
-- 检查 frontend 静态资源、PyQtWebEngine hidden import、可写 config/data 目录。
+- 检查 frontend 静态资源、PySide6 WebEngine hidden import（`PySide6.QtWebEngineCore` / `PySide6.QtWebEngineWidgets`）、可写 config/data 目录。
+- 打包时报 `attempt to collect multiple Qt bindings packages`：同一环境里装了 PyQt5 和 PySide6，换一个只装 PySide6 的虚拟环境。
+- 升级到 PySide6 版后开场动画又播了一次：WebEngine 数据目录从 `%LOCALAPPDATA%\BiliOpsToolbox\...\QtWebEngine\Default` 变成 `%APPDATA%\BiliOpsToolbox\...\QtWebEngine\Default`，首次启动会复制旧 localStorage；看 `app.log` 里的「迁移 Qt5 localStorage」记录。
 - PDF 单独失败时检查系统 `wkhtmltopdf`，不是重装整个程序。
 
 ## 12. 测试与归档

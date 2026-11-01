@@ -89,18 +89,24 @@ def test_detection_only_adds_class_when_unsupported() -> None:
     assert "if (!supported) root.classList.add('no-flex-gap');" in body
 
 
+def _chrome_major(ua: str) -> int:
+    """从 UA 里取 Chrome 主版本号；取不到返回 0。"""
+    match = re.search(r"Chrome/(\d+)\.", ua or "")
+    return int(match.group(1)) if match else 0
+
+
 def _qt_available() -> bool:
     try:
-        import PyQt5.QtWebEngineWidgets  # noqa: F401
+        import PySide6.QtWebEngineWidgets  # noqa: F401
     except ImportError:
-        # 没装 PyQtWebEngine：真实内核用例跳过，静态断言仍然覆盖。
+        # 没装 PySide6 WebEngine：真实内核用例跳过，静态断言仍然覆盖。
         return False
     return True
 
 
-@pytest.mark.skipif(not _qt_available(), reason="未安装 PyQtWebEngine")
+@pytest.mark.skipif(not _qt_available(), reason="未安装 PySide6 WebEngine")
 def test_real_qtwebengine_restores_flex_spacing(tmp_path) -> None:
-    """真实桌面内核：加了 no-flex-gap，抽样容器的相邻间距等于原 gap 声明。"""
+    """真实桌面内核（Chromium 140）：原生支持 flex gap，不加 no-flex-gap，抽样容器的相邻间距等于原 gap 声明。"""
     proc = subprocess.run(
         [sys.executable, str(_CHILD), str(_ROOT / "web" / "frontend")],
         cwd=str(tmp_path), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,
@@ -108,9 +114,9 @@ def test_real_qtwebengine_restores_flex_spacing(tmp_path) -> None:
     if proc.returncode != 0 or not proc.stdout.strip().startswith("{"):
         pytest.skip(f"QtWebEngine 子进程不可用 rc={proc.returncode}: {proc.stderr[-400:]}")
     result = json.loads(proc.stdout)
-    assert "Chrome/83." in result["ua"], result["ua"]
+    assert _chrome_major(result["ua"]) >= 140, result["ua"]
     assert result["errors"] == [], result["errors"]
-    assert result["noFlexGapClass"] is True
+    assert result["noFlexGapClass"] is False  # 新内核原生支持 flex gap，兜底规则不生效
     for name, sample in result["samples"].items():
         assert sample["spacing"], f"{name} 未找到可见子项：{sample}"
         assert all(abs(s - sample["expected"]) <= 1 for s in sample["spacing"]), f"{name}: {sample}"

@@ -1,14 +1,14 @@
-"""桌面端内核兼容契约：前端不得使用 QtWebEngine 5.15.2（Chromium 83）不支持的语法。
+"""前端兼容契约：前端不得使用 Chromium 83 不支持的语法。
 
-桌面主窗口用 PyQtWebEngine 加载同一套前端。requirements 固定 PyQtWebEngine==5.15.6，
-其 Qt5WebEngineCore 为 5.15.2，UA 为 Chrome/83.0.4103.122。下列语法在 83 上会被整条丢弃或抛错：
+桌面端已迁到 PySide6（Chromium 140），但这组静态约束暂时保留（见 PR1030/PR-J PLAN.md §8）：
+用户浏览器版本不受控，旧桌面版回退时也还是 Chromium 83。下列语法在 83 上会被整条丢弃或抛错：
 
 - ``inset`` 简写（87 起）：声明失效，position:fixed 的遮罩宽高为 0；
 - ``:is()`` / ``:where()``（88 起）：整组选择器无效，规则全部不生效；
 - ``String.prototype.replaceAll``（85 起）：调用即 TypeError。
 
 1. 静态断言：扫描 web/frontend 下的 CSS / JS / 模板，命中即失败，并给出 文件:行号；
-2. 有 Qt 时，在子进程里用真实 QtWebEngine 加载 index.html，复核抽屉遮罩铺满视口、
+2. 有 PySide6 WebEngine 时，在子进程里用真实内核加载 index.html，复核抽屉遮罩铺满视口、
    卡片规则（isolation / overflow）生效、导出问题日志不抛错（子进程隔离，与 test_desktop_webengine_isolation 同一策略）。
 """
 from __future__ import annotations
@@ -72,16 +72,22 @@ def test_js_and_template_have_no_chromium83_unsupported_api() -> None:
     assert _hits(files, _JS_RULES, _strip_js_line_comments) == []
 
 
+def _chrome_major(ua: str) -> int:
+    """从 UA 里取 Chrome 主版本号；取不到返回 0。"""
+    match = re.search(r"Chrome/(\d+)\.", ua or "")
+    return int(match.group(1)) if match else 0
+
+
 def _qt_available() -> bool:
     try:
-        import PyQt5.QtWebEngineWidgets  # noqa: F401
+        import PySide6.QtWebEngineWidgets  # noqa: F401
     except ImportError:
-        # 没装 PyQtWebEngine：真实内核用例跳过，静态断言仍然覆盖。
+        # 没装 PySide6 WebEngine：真实内核用例跳过，静态断言仍然覆盖。
         return False
     return True
 
 
-@pytest.mark.skipif(not _qt_available(), reason="未安装 PyQtWebEngine")
+@pytest.mark.skipif(not _qt_available(), reason="未安装 PySide6 WebEngine")
 def test_real_qtwebengine_renders_fixed_features(tmp_path) -> None:
     """真实桌面内核：抽屉遮罩铺满视口、卡片规则（isolation / overflow）生效、导出问题日志不抛错。"""
     proc = subprocess.run(
@@ -92,7 +98,7 @@ def test_real_qtwebengine_renders_fixed_features(tmp_path) -> None:
         # 无图形环境（CI 或 offscreen 下构造视图崩溃）时只能跳过，静态断言仍然覆盖。
         pytest.skip(f"QtWebEngine 子进程不可用 rc={proc.returncode}: {proc.stderr[-400:]}")
     result = json.loads(proc.stdout)
-    assert "Chrome/83." in result["ua"], result["ua"]
+    assert _chrome_major(result["ua"]) >= 140, result["ua"]
     assert result["errors"] == [], result["errors"]
     mask = result["drawerMask"]
     assert mask["w"] >= mask["vw"] and mask["h"] >= mask["vh"], mask

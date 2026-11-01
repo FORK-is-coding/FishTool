@@ -2,7 +2,7 @@
 
 ## 1. 环境
 
-建议 Windows 10/11、Python 3.11 或 3.12、独立虚拟环境。项目依赖见 `requirements.txt`，包括 aiohttp/FastAPI/SQLAlchemy、PyQt5/PyQtWebEngine、数据分析和 LLM 客户端。
+建议 Windows 10/11、Python 3.11 或 3.12、独立虚拟环境。项目依赖见 `requirements.txt`，包括 aiohttp/FastAPI/SQLAlchemy、PySide6（含 WebEngine）、数据分析和 LLM 客户端。PySide6 不能与 PyQt5 装在同一个虚拟环境：PyInstaller 收集到两个 Qt 绑定会中止打包。
 
 ```powershell
 cd D:\tasks\cola\bili_ops_toolbox
@@ -81,7 +81,7 @@ pyinstaller --clean --noconfirm build.spec
 
 PyInstaller 不在 `requirements.txt` 中，需要单独安装。图标是 PNG，PyInstaller 要靠 Pillow 转成 ico；Pillow 已由 `requirements.txt` 中的 `qrcode[pil]` 带入，缺失时打包会在图标处理阶段报错。
 
-输出：`dist/FishTool.exe`。spec 打包 `config/*.yaml`、前端 templates/static，并声明 PyQt、FastAPI、SQLAlchemy、数据分析等 hidden imports。
+输出：`dist/FishTool.exe`。spec 打包 `config/*.yaml`、前端 templates/static，并声明 PySide6、FastAPI、SQLAlchemy、数据分析等 hidden imports；WebEngine 调试资源（*.debug.pak）不打进包，不用 UPX。
 
 构建前检查：
 

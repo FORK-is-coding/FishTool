@@ -21,9 +21,10 @@ from pathlib import Path
 if sys.platform == "win32":
     os.environ["QT_QPA_PLATFORM"] = "windows"
 
-from PyQt5.QtCore import Qt, QTimer, QUrl  # noqa: E402
-from PyQt5.QtWebEngineWidgets import QWebEnginePage, QWebEngineProfile, QWebEngineScript, QWebEngineView  # noqa: E402
-from PyQt5.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtCore import Qt, QTimer, QUrl  # noqa: E402
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineScript  # noqa: E402
+from PySide6.QtWebEngineWidgets import QWebEngineView  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 FRONTEND = Path(sys.argv[1]).resolve()
 
@@ -82,6 +83,11 @@ JSON.stringify({
 })
 """
 
+_CANARY = r"""
+console.error('FishIntro canary: console capture check');
+true
+"""
+
 _ESCAPE = r"""
 window.__skipAt = performance.now();
 window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -93,6 +99,7 @@ _SCENARIOS = [
     {"name": "full", "query": "?intro=full", "report_ms": 12500},
     {"name": "skip", "query": "?intro=full", "report_ms": 4500, "escape_ms": 1500},
     {"name": "idle", "query": "", "report_ms": 3000},
+    {"name": "canary", "query": "", "report_ms": 2000, "canary": True},
 ]
 
 
@@ -106,7 +113,7 @@ class _Page(QWebEnginePage):
         self._sink = sink
 
     def javaScriptConsoleMessage(self, level, message, line, source) -> None:  # noqa: N802 - Qt 方法名
-        if level < QWebEnginePage.ErrorMessageLevel:
+        if level != QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessageLevel:
             return
         name = (source or "").split("?", 1)[0].split("/")[-1]
         if name in self._SOURCES or "FishIntro" in message:
@@ -165,6 +172,8 @@ def main() -> int:
             if loaded["done"]:
                 return
             loaded["done"] = True
+            if scenario.get("canary"):
+                QTimer.singleShot(500, lambda: page.runJavaScript(_CANARY))
             if scenario.get("escape_ms"):
                 QTimer.singleShot(scenario["escape_ms"], lambda: page.runJavaScript(_ESCAPE))
             QTimer.singleShot(scenario["report_ms"], lambda: page.runJavaScript(_REPORT, got))
@@ -174,7 +183,7 @@ def main() -> int:
 
     QTimer.singleShot(0, run_next)
     QTimer.singleShot(90000, app.quit)
-    app.exec_()
+    app.exec()
     httpd.shutdown()
     if len(results) != len(_SCENARIOS):
         print(f"probe timeout: {sorted(results)}", file=sys.stderr)

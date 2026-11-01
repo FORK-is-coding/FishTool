@@ -3,8 +3,8 @@
 拆分自原 pet_window.py 的 PetWindow 交互部分：
 支持长按/拖拽移动、悬停缩放与单击菜单触发。
 """
-from PyQt5.QtCore import QEasingCurve, QPropertyAnimation, QTimer, Qt
-from PyQt5.QtWidgets import QApplication
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QTimer, Qt
+from PySide6.QtWidgets import QApplication
 
 from .assets import logger
 
@@ -84,8 +84,8 @@ class DragMixin:
         """鼠标按下时记录起点并启动长按计时；超过 100ms 才进入拖拽态。"""
         try:
             if event.button() == Qt.LeftButton:
-                self.drag_position = event.globalPos() - self.frameGeometry().topLeft()
-                self._drag_start_position = event.globalPos()
+                self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                self._drag_start_position = event.globalPosition().toPoint()
                 # 关键：按下瞬间不能切 STATE_DRAGGING，否则单击会闪拖拽素材。
                 self._is_dragging = False
                 self._left_button_pressed = True
@@ -113,7 +113,7 @@ class DragMixin:
         """
         if event.buttons() & Qt.LeftButton:
             if not getattr(self, "_is_dragging", False):
-                if self._drag_distance(event.globalPos()) < self._drag_threshold():
+                if self._drag_distance(event.globalPosition().toPoint()) < self._drag_threshold():
                     # 还没达到拖拽阈值：吞掉事件，防止窗口被 1~2px 抖动带偏。
                     event.accept()
                     return
@@ -124,7 +124,7 @@ class DragMixin:
                 self._is_dragging = True
                 self.set_state(self.STATE_DRAGGING)
             # 先移动桌宠窗口，再按新位置同步快捷卡片；后续菜单功能改动不能省略 move。
-            self.move(event.globalPos() - self.drag_position)
+            self.move(event.globalPosition().toPoint() - self.drag_position)
             self._sync_menu_position()
             event.accept()
         else:
@@ -148,7 +148,7 @@ class DragMixin:
             if timer is not None:
                 timer.stop()
             self._left_button_pressed = False
-            moved_enough = self._drag_distance(event.globalPos()) >= self._drag_threshold()
+            moved_enough = self._drag_distance(event.globalPosition().toPoint()) >= self._drag_threshold()
             was_dragging = getattr(self, "_is_dragging", False) or moved_enough
             self._is_dragging = False
             self.set_state(self.STATE_IDLE)

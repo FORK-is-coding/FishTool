@@ -3,9 +3,9 @@
 拆分自原 pet_window.py 的 PetImageLabel：
 支持平滑缩放绘制的桌宠图片控件，独立于状态和通信逻辑。
 """
-from PyQt5.QtWidgets import QLabel
-from PyQt5.QtCore import QSize, Qt, pyqtProperty
-from PyQt5.QtGui import QPainter, QPixmap
+from PySide6.QtWidgets import QLabel
+from PySide6.QtCore import Property, QSize, Qt
+from PySide6.QtGui import QPainter, QPixmap
 
 class PetImageLabel(QLabel):
     """支持平滑缩放绘制的桌宠图片控件，独立于状态和通信逻辑。"""
@@ -43,7 +43,7 @@ class PetImageLabel(QLabel):
         self._scale_factor = max(1.0, min(float(value), 1.08))
         self.update()
 
-    scale_factor = pyqtProperty(float, get_scale_factor, set_scale_factor)
+    scale_factor = Property(float, get_scale_factor, set_scale_factor)
 
     def paintEvent(self, event):
         """按宽高比绘制图片，避免素材变形。

@@ -7,9 +7,9 @@
 - 封面、每页左侧档案脊、页眉页脚由 QPainter 直接绘制（不依赖 HTML/CSS 能力）；
 - 正文由 QTextDocument 排版，章节标题 / 引用块转换为 QTextDocument 支持的表格写法。
 
-为什么不用 Chromium 打印（QWebEnginePage.printToPdf）：QtWebEngine 5.15 的 PDF 后端不做字体子集化，
+为什么不用 Chromium 打印（QWebEnginePage.printToPdf）：当初的内核 QtWebEngine 5.15 的 PDF 后端不做字体子集化，
 静态中文字体会整套嵌入（微软雅黑单字重约 12MB），一份报告 20MB+；Qt 自身的 PDF 引擎会子集化，
-同一份报告在百 KB 量级。浏览器端仍走 Chrome/Edge 自带打印，使用 report_theme 的完整 CSS 版本。
+同一份报告在百 KB 量级。迁到 PySide6（Chromium 140）后仍用 Qt 自身的 PDF 引擎，未重新评估 printToPdf。浏览器端仍走 Chrome/Edge 自带打印，使用 report_theme 的完整 CSS 版本。
 """
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ import re
 from pathlib import Path
 from typing import Dict
 
-from PyQt5.QtCore import QMarginsF, QPointF, QRectF, QSizeF, Qt
-from PyQt5.QtGui import (
+from PySide6.QtCore import QMarginsF, QPointF, QRectF, QSizeF, Qt
+from PySide6.QtGui import (
     QColor, QFont, QPageLayout, QPageSize, QPainter, QPdfWriter, QPen, QTextDocument,
 )
 
@@ -112,9 +112,12 @@ def to_qt_body(html_content: str) -> str:
     return body
 
 
-def _font(family: str, point_size: float, weight: int = QFont.Normal, spacing: float = 0.0) -> QFont:
+def _font(family: str, point_size: float, weight: QFont.Weight = QFont.Normal, spacing: float = 0.0) -> QFont:
     """构造字体；spacing 为字距百分比增量（0 表示原始字距）。"""
     font = QFont(family)
+    # 中文明确回退到微软雅黑：Bahnschrift 没有中文字形，不指定时 Qt6 会回退到 SimSun（Qt5 回退到微软雅黑），
+    # 封面上的中文会变成宋体，PDF 还会多嵌一套字体。
+    font.setFamilies([family, CJK_FAMILY] if family != CJK_FAMILY else [family])
     font.setPointSizeF(point_size)
     font.setWeight(weight)
     if spacing:

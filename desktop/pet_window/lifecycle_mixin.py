@@ -2,7 +2,7 @@
 
 拆分自原 pet_window.py 的 PetWindow 生命周期部分。
 """
-from PyQt5.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 
 from .assets import logger
 

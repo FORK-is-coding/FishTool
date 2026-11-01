@@ -6,8 +6,7 @@
 
 为什么这些能直接收编（不 subprocess 隔离）：
     实测 QT_QPA_PLATFORM=offscreen 下 PetMenuPanel(220x156)、PetImageLabel、
-    QPropertyAnimation 均可正常构造（子进程探针 exit=0）。它们不构造
-    QWebEnginePage / QWebEngineView，因此不存在 0xC0000005 风险。
+    QPropertyAnimation 均可正常构造。它们不构造 QWebEnginePage / QWebEngineView。
 
 为什么不直接构造真 PetWindow：
     PetWindowBase.__init__ 会 setup_websocket() 真起 WebSocketThread 连
@@ -15,13 +14,9 @@
     为了不引入真实网络/注册表副作用，这里用「最小 QObject 宿主 + 真实 mixin
     方法」驱动被测逻辑。
 
-Qt 顺序约束（实测）：
-    QtWebEngineWidgets 必须在 QApplication 之前 import，否则抛
-    ImportError("...must be imported or Qt.AA_ShareOpenGLContexts must be set
-    before a QCoreApplication instance is created")。
-    `import desktop` 会经 desktop/__init__ -> main_window 连带 import
-    QtWebEngineWidgets，因此本模块的 desktop.* import 必须留在**模块级**
-    （collection 期执行，早于任何 QApplication 创建）。
+Qt 导入顺序：
+    PyQt5 时代要求 QtWebEngineWidgets 在 QApplication 之前 import（否则报 AA_ShareOpenGLContexts）。
+    PySide6 6.12 实测没有这个要求；desktop.* 的 import 仍留在模块级，收集期就能暴露导入错误。
 """
 from __future__ import annotations
 
@@ -44,11 +39,11 @@ if _qt_platform and _qt_platform.strip() != "offscreen":
         "（本文件硬约束：必须 offscreen；防解释器级崩溃污染全量）"
     )
 
-from PyQt5.QtCore import QEvent, QObject, QPoint, QPropertyAnimation, QRect, Qt
-from PyQt5.QtGui import QPixmap
-from PyQt5.QtWidgets import QApplication, QLabel, QWidget
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QPropertyAnimation, QRect, Qt
+from PySide6.QtGui import QPixmap
+from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
-# 模块级 import：必须早于 QApplication 创建（见模块 docstring 的 Qt 顺序约束）
+# 模块级 import（见模块 docstring 的「Qt 导入顺序」）
 from desktop.pet_window import assets as pet_assets
 from desktop.pet_window.base import PetWindowBase
 from desktop.pet_window.drag_mixin import DragMixin
@@ -135,6 +130,10 @@ class _FakeMouseEvent:
     def globalPos(self):
         """返回全局坐标（真实 QPoint，供减法/曼哈顿距离使用）。"""
         return QPoint(self._global_pos)
+
+    def globalPosition(self):
+        """Qt6 接口：返回 QPointF 全局坐标（生产代码调用 .toPoint()）。"""
+        return QPointF(self._global_pos)
 
     def accept(self) -> None:
         """标记事件已处理。"""
@@ -652,3 +651,35 @@ def test_pet_window_base_set_state_ignores_unknown_and_delegates_pixmap(qt_app):
     host.set_state(999)
     assert host.current_state == PetWindowBase.STATE_IDLE
     assert len(spy.pixmaps) == 1
+
+
+class _FakeScreen:
+    """QScreen 替身：只提供 availableGeometry。"""
+
+    def __init__(self, rect: QRect) -> None:
+        """保存可用区域。"""
+        self._rect = rect
+
+    def availableGeometry(self) -> QRect:  # noqa: N802 - 对齐 Qt API
+        """返回可用区域。"""
+        return self._rect
+
+
+def test_default_pet_position_uses_available_area_corner():
+    """首次启动位置：主屏可用区域右下角（右 50px、下 100px），原点不为 0 时也落在可用区域内。
+
+    Qt6 删除了 QApplication.desktop()，旧代码按整屏宽高计算，会压到任务栏下面。
+    """
+    from desktop.pet_window.base import default_pet_position
+
+    pos = default_pet_position(_FakeScreen(QRect(0, 0, 1707, 912)), 150, 200)
+    assert (pos.x(), pos.y()) == (1707 - 150 - 50, 912 - 200 - 100)
+    # 任务栏在左边 / 上边：可用区域原点不为 0
+    pos = default_pet_position(_FakeScreen(QRect(60, 40, 1647, 920)), 150, 200)
+    assert (pos.x(), pos.y()) == (60 + 1647 - 150 - 50, 40 + 920 - 200 - 100)
+    # 屏幕比桌宠还小：不跑到可用区域左上角之外
+    pos = default_pet_position(_FakeScreen(QRect(10, 20, 100, 100)), 150, 200)
+    assert (pos.x(), pos.y()) == (10, 20)
+    # 拿不到主屏
+    pos = default_pet_position(None, 150, 200)
+    assert (pos.x(), pos.y()) == (100, 100)

@@ -11,7 +11,7 @@
 - 评论：热门/普通/完整评论采集、增量采集、四层去重、情感分析、关键词和预警。
 - UP 主：分区头部 UP 榜单、公开数据采集、多源降级、运营策略拆解。
 - 自诊：账号公开数据分析、基准对比、Markdown/PDF 报告。
-- 运行形态：FastAPI WebUI；PyQt5 桌面壳内嵌 WebUI；PyInstaller 单文件 exe。
+- 运行形态：FastAPI WebUI；PySide6 桌面壳（Qt 6.12，WebEngine 内核 Chromium 140）内嵌 WebUI；PyInstaller 单文件 exe。
 - 后台任务：FastAPI lifespan 启动 Cookie 巡检和评论常驻监控两个 asyncio 循环。
 
 项目是个人运营分析工具，必须遵守 B 站服务条款、robots/接口约束和合理请求频率；不要把它改造成高并发或绕过风控的抓取器。
@@ -49,7 +49,7 @@ bili_ops_toolbox/
 │  ├─ main.py                # lifespan、路由挂载、静态页、WebSocket
 │  ├─ routers/               # auth/config/logs/hotspot/comment/analysis
 │  └─ frontend/              # index.html、app.js、style.css、ECharts
-├─ desktop/                  # PyQt 主窗口、桌宠、图标与报告导出（无首次运行向导）
+├─ desktop/                  # PySide6 主窗口、桌宠、图标与报告导出（无首次运行向导）
 ├─ llm/                      # OpenAI 兼容客户端和用量统计
 ├─ config/                   # config.yaml；.key/.secrets 为敏感文件
 ├─ data/                     # bili_ops.db 与 data/logs

@@ -6,7 +6,7 @@ import logging
 import sys
 from pathlib import Path
 
-from PyQt5.QtGui import QIcon
+from PySide6.QtGui import QIcon
 
 logger = logging.getLogger(__name__)
 APP_USER_MODEL_ID = "BiliOpsToolbox.FishTool"

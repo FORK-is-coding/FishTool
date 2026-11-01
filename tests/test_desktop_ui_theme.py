@@ -6,8 +6,8 @@
 3. 前端不再调用原生 confirm()（桌面端会弹 Qt 系统对话框），改用 showAppConfirm；
 4. 侧栏顶部是「FISH / TOOL」文字标，双端可见版本号统一为 v0.2.9。
 
-为什么不构造真实 MainWindow：offscreen 下构造 QWebEngineView 会 0xC0000005
-（见 tests/test_desktop_webengine_isolation.py）；这里只构造不碰 WebEngine 的控件，其余用源码断言。
+为什么不构造真实 MainWindow：WebEngine 只在子进程里构造（见 tests/test_desktop_webengine_isolation.py）；
+这里只构造不碰 WebEngine 的控件，其余用源码断言。
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-# 与 test_desktop_pet_ui.py 一致：QtWebEngineWidgets 必须早于 QApplication 导入；desktop 包会导入 main_window。
+# desktop 包会导入 main_window（含 QtWebEngineWidgets）；PySide6 下导入顺序没有要求。
 os.environ["QT_QPA_PLATFORM"] = os.environ.get("QT_QPA_PLATFORM", "").strip() or "offscreen"
 import desktop.main_window  # noqa: E402,F401
 from desktop import ui_theme  # noqa: E402
@@ -36,7 +36,7 @@ _LEGACY_COLORS = ("#fffdf9", "#d4a373", "#c48f61", "#faf7f2", "#fb7299", "#667ee
 @pytest.fixture(scope="module")
 def qapp():
     """离屏 QApplication（只构造不碰 WebEngine 的控件）。"""
-    from PyQt5.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
 
     return QApplication.instance() or QApplication([])
 
@@ -120,7 +120,7 @@ def test_pet_notify_label_and_app_level_styles_are_wired() -> None:
 
 def test_show_message_confirm_defaults_to_cancel(qapp, monkeypatch) -> None:
     """退出确认：默认按钮与 Esc 都是「取消」，确认按钮用危险样式；只有点确认才返回 True。"""
-    from PyQt5.QtWidgets import QMessageBox
+    from PySide6.QtWidgets import QMessageBox
 
     seen = {}
 
@@ -134,7 +134,7 @@ def test_show_message_confirm_defaults_to_cancel(qapp, monkeypatch) -> None:
         self._clicked = buttons[seen.pop("click")]
         return 0
 
-    monkeypatch.setattr(QMessageBox, "exec_", fake_exec)
+    monkeypatch.setattr(QMessageBox, "exec", fake_exec)
     monkeypatch.setattr(QMessageBox, "clickedButton", lambda self: self._clicked)
 
     seen["click"] = "取消"

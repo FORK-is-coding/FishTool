@@ -3,9 +3,8 @@
 不作为 pytest 用例：文件名不以 test_ 开头。
 
 为什么是子进程、为什么不用 offscreen：
-    QT_QPA_PLATFORM=offscreen 下构造 QWebEngineView 会 STATUS_ACCESS_VIOLATION
-    （见 test_desktop_webengine_isolation.py），所以这里显式使用系统原生平台，
-    窗口加 WA_DontShowOnScreen 不弹出。无图形环境时父进程按 skip 处理。
+    WebEngine 不在主 pytest 进程里启动（见 test_desktop_webengine_isolation.py）；这里显式使用系统原生平台，
+    与真实桌面端的渲染一致，窗口加 WA_DontShowOnScreen 不弹出。无图形环境时父进程按 skip 处理。
 
 做法：本地起只读静态服务器托管 web/frontend（/api、/ws 一律 503，不依赖后端），
     1280x800 加载真实 index.html，输出一行 JSON 给父进程断言。
@@ -26,9 +25,10 @@ if sys.platform == "win32":
     os.environ["QT_QPA_PLATFORM"] = "windows"
 os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
 
-from PyQt5.QtCore import Qt, QTimer, QUrl  # noqa: E402
-from PyQt5.QtWebEngineWidgets import QWebEnginePage, QWebEngineScript, QWebEngineView  # noqa: E402
-from PyQt5.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtCore import Qt, QTimer, QUrl  # noqa: E402
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineScript  # noqa: E402
+from PySide6.QtWebEngineWidgets import QWebEngineView  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 FRONTEND = Path(sys.argv[1]).resolve()
 
@@ -120,13 +120,22 @@ def main() -> int:
     def poll() -> None:
         page.runJavaScript("window.__probeResult || null", lambda r: done(r) if r else QTimer.singleShot(300, poll))
 
+    def start_probe() -> None:
+        page.runJavaScript(_PROBE)
+        QTimer.singleShot(400, poll)
+
+    def wait_ready() -> None:
+        # 等前端脚本加载完（navigateTo 已定义）再跑探针；固定延时在新内核上偶发 ReferenceError。
+        page.runJavaScript("typeof navigateTo === 'function'",
+                           lambda ok: start_probe() if ok else QTimer.singleShot(200, wait_ready))
+
     def on_load(_ok: bool) -> None:
-        QTimer.singleShot(1200, lambda: (page.runJavaScript(_PROBE), QTimer.singleShot(400, poll)))
+        QTimer.singleShot(300, wait_ready)
 
     page.loadFinished.connect(on_load)
     page.setUrl(QUrl(f"http://127.0.0.1:{port}/"))
     QTimer.singleShot(60000, app.quit)
-    app.exec_()
+    app.exec()
     httpd.shutdown()
     if "raw" not in result:
         print("probe timeout", file=sys.stderr)

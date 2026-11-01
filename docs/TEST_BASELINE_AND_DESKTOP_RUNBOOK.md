@@ -24,9 +24,9 @@ python -m pytest -q ^
 
 | 文件 | 排除原因 |
 |---|---|
-| `tests/test_desktop_pet_ui.py` | 需 `QT_QPA_PLATFORM=offscreen` 且 `desktop.*` 模块级 import（早于任何 `QApplication`）；历史上曾因**环境变量被污染**导致解释器级崩溃 `0xC0000409` |
+| `tests/test_desktop_pet_ui.py` | 需 `QT_QPA_PLATFORM=offscreen`；历史上曾因**环境变量被污染**导致解释器级崩溃 `0xC0000409` |
 | `tests/test_desktop_websocket.py` | 桌面 WebSocket 链路，依赖桌面运行时装配 |
-| `tests/test_desktop_webengine_isolation.py` | 其 `construct-*` 子进程**故意**触发 `0xC0000005`（访问违规），只验证「崩在子进程、父进程存活」 |
+| `tests/test_desktop_webengine_isolation.py` | 在子进程里构造 `DesktopWebPage` / `MainWindow`。PyQt5 时代 offscreen 下必然 `0xC0000005`；迁到 PySide6 后应正常退出（rc=0），profile 数据落在子进程 cwd 下 |
 
 > 口径 A 用于「与桌面 Qt 运行时解耦」的稳定基线。
 
@@ -72,8 +72,8 @@ python -X faulthandler -m pytest tests/test_desktop_pet_ui.py -v
 
 **前置硬约束**（文件头 docstring 自陈）：
 1. 必须 `QT_QPA_PLATFORM=offscreen`；
-2. `desktop.*` 必须**模块级 import**（早于任何 `QApplication` 创建）；
-3. 依赖 `QtWebEngineWidgets` 在 `QApplication` 之前 import。
+2. `desktop.*` 保持**模块级 import**（收集期就能暴露导入错误）。
+   PyQt5 时代还要求 `QtWebEngineWidgets` 在 `QApplication` 之前 import；PySide6 6.12 实测没有这个要求。
 
 ---
 

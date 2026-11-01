@@ -10,6 +10,19 @@
 
 ## [未发布]
 
+### 桌面内核迁到 PySide6
+
+- 桌面壳从 PyQt5 5.15 + PyQtWebEngine 5.15（Chromium 83）迁到 **PySide6 6.12（Chromium 140）**。
+  `requirements.txt` 改为 `PySide6==6.12.0`；不能与 PyQt5 装在同一环境（PyInstaller 会中止打包）。
+- **WebEngine 数据目录变化**：Qt6 默认 profile 是无痕的，改用有名的持久化 profile，数据目录从
+  `%LOCALAPPDATA%\BiliOpsToolbox\B站运营工具箱\QtWebEngine\Default` 变为
+  `%APPDATA%\BiliOpsToolbox\B站运营工具箱\QtWebEngine\Default`。首次启动复制旧目录的 `Local Storage`
+  （只复制、不移动，旧目录原样保留；成功后写 `.fishtool_migrated_from_qt5` 标记）。
+- 桌宠首次启动位置改按主屏可用区域计算（Qt6 删除了 `QApplication.desktop()`）。
+- 报告 PDF 封面中文明确回退到微软雅黑（Qt6 下 Bahnschrift 缺字会回退到宋体）。
+- 打包：WebEngine 调试资源（`*.debug.pak` / `*.debug.bin`）不打进包；关闭 UPX。
+- 前端的 Chromium 83 兼容写法与静态扫描测试**暂时保留**，迁移稳定后另行清理。
+
 ### Windows 一键启动 Web 版
 
 - 新增根目录 `start_web.bat`：双击即启动 Web 版（`app.py web`，只监听 127.0.0.1），

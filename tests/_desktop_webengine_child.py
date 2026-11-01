@@ -1,11 +1,10 @@
 """WebEngine 子进程探针（由 tests/test_desktop_webengine_isolation.py 启动）。
 
-为什么必须是子进程：
-    QT_QPA_PLATFORM=offscreen 下 `class DesktopWebPage(QWebEnginePage)`（main_window.py:65）
-    与 `class MainWindow(QMainWindow)`（main_window.py:80）一构造就触发
-    STATUS_ACCESS_VIOLATION（0xC0000005，exit=3221225477），Python 层
-    try/except BaseException 完全拦不住，会把整个 pytest 进程带走。
-    因此构造面只在这里跑，父进程只读 exit code。
+为什么放在子进程：
+    PyQt5（Chromium 83）时代，offscreen 下构造 DesktopWebPage / MainWindow 会
+    STATUS_ACCESS_VIOLATION（0xC0000005），会把整个 pytest 进程带走。PySide6 6.12 实测可以正常构造，
+    但 WebEngine 在主 pytest 进程里启动会拖慢全量，也可能在没有 GPU 的机器上出问题，
+    所以构造面仍只在这里跑，父进程只读 exit code 和输出。
 
 不作为 pytest 用例：
     文件名不以 test_ 开头、也不以 _test 结尾，pytest 默认 python_files 不会收集。
@@ -50,14 +49,13 @@ def _construct_page() -> int:
     Returns:
         int: 若能构造成功返回 0（正常环境下会被访问违规打断，走不到这里）。
     """
-    # QtWebEngineWidgets 必须先于 QApplication import
-    from PyQt5.QtWebEngineWidgets import QWebEngineView
+    from PySide6.QtWebEngineWidgets import QWebEngineView
     from desktop.main_window import DesktopWebPage
-    from PyQt5.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
 
     app = QApplication([])  # noqa: F841
     view = QWebEngineView()
-    page = DesktopWebPage(view)
+    page = DesktopWebPage(parent=view)
     print(f"CONSTRUCT-PAGE OK {page!r}", flush=True)
     return 0
 
@@ -72,10 +70,13 @@ def _construct_mainwindow() -> int:
         int: 若能构造成功返回 0（正常环境下会被访问违规打断，走不到这里）。
     """
     from desktop.main_window import MainWindow
-    from PyQt5.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
 
     # 只测 WebEngine 构造面，屏蔽真实启动 Web 服务的副作用
     MainWindow.start_web_service = lambda self: None
+    # MainWindow 会建落盘的有名 profile：把数据放到 cwd（父进程给的临时目录），不碰真实用户目录，也不触发旧数据迁移。
+    from desktop.webengine_profile import STORAGE_ROOT_ENV
+    os.environ[STORAGE_ROOT_ENV] = str(Path.cwd() / "webengine")
 
     app = QApplication([])  # noqa: F841
     window = MainWindow()

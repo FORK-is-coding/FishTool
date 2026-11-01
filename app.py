@@ -179,8 +179,8 @@ def run_desktop(port: int) -> int:
     Returns:
         int: Qt 事件循环退出码。
     """
-    from PyQt5.QtCore import Qt
-    from PyQt5.QtWidgets import QApplication
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
 
     from core.logger import get_logger
     from desktop.icon_utils import load_app_icon, set_windows_app_user_model_id
@@ -189,12 +189,13 @@ def run_desktop(port: int) -> int:
 
     logger = get_logger(__name__)
 
-    # 在创建 QApplication 前启用 Qt 高 DPI，保证 Windows 缩放下 CSS 像素与浏览器一致。
-    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
-    # Qt5 默认把缩放倍率四舍五入成整数：150% 的屏幕按 2 倍渲染，页面整体比浏览器大三分之一，
-    # 逻辑屏幕也从 1707x960 缩成 1280x720。PassThrough 保留小数倍率，与浏览器的 devicePixelRatio 一致。
+    # Qt6 默认开启高 DPI 缩放与高 DPI 图标，不再需要 AA_EnableHighDpiScaling / AA_UseHighDpiPixmaps。
+    # 保留小数缩放倍率（150% 屏按 1.5 倍渲染），与浏览器的 devicePixelRatio 一致。
+    # Qt6 默认已是 PassThrough，这里显式声明，避免将来默认值或环境变量变化时退回取整（Qt5 时 150% 被取整成 2）。
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+    # WebEngine 合成改用 OpenGL：默认的 Direct3D 11 在双显卡机器上悬停时整页闪烁。必须在 QApplication 之前设置。
+    from desktop.webengine_profile import select_graphics_api
+    graphics_api = select_graphics_api()
     set_windows_app_user_model_id()
 
     # 只把程序名传给 Qt，避免 argparse 的 desktop/--port 参数被 Qt 当成未知选项。
@@ -208,6 +209,7 @@ def run_desktop(port: int) -> int:
 
     try:
         logger.info("===== 桌面应用启动 =====")
+        logger.info("[启动] WebEngine 图形接口: %s", graphics_api)
         logger.info("[启动] 创建主窗口（内嵌 Web 服务端口 %s）", port)
         main_window = MainWindow(web_port=port)
         main_window.show()
@@ -218,7 +220,7 @@ def run_desktop(port: int) -> int:
         pet_window.show()
 
         logger.info("===== 桌面应用启动完成 =====")
-        return app.exec_()
+        return app.exec()
     except Exception as exc:  # noqa: BLE001 - 桌面入口最后兜底，记录完整堆栈
         logger.error("[启动] 应用启动失败: %s", exc, exc_info=True)
         return 1

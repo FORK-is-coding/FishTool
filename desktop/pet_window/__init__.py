@@ -39,18 +39,18 @@ import sys
 import asyncio
 # 从 typing 导入符号
 from typing import Optional
-# 从 PyQt5.QtWidgets 导入符号
-from PyQt5.QtWidgets import (
+# 从 PySide6.QtWidgets 导入符号
+from PySide6.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QFrame, QPushButton, QApplication,
     QToolTip
 )
-# 从 PyQt5.QtCore 导入窗口、动画、配置和信号相关类型。
-from PyQt5.QtCore import (
-    Qt, QPoint, QSize, QTimer, QEvent, pyqtSignal, QThread, pyqtProperty,
+# 从 PySide6.QtCore 导入窗口、动画、配置和信号相关类型。
+from PySide6.QtCore import (
+    Qt, QPoint, QSize, QTimer, QEvent, Signal, QThread, Property,
     QPropertyAnimation, QParallelAnimationGroup, QEasingCurve, QSettings
 )
-# 从 PyQt5.QtGui 导入图像、绘制和鼠标相关类型。
-from PyQt5.QtGui import QPixmap, QPainter, QCursor, QColor
+# 从 PySide6.QtGui 导入图像、绘制和鼠标相关类型。
+from PySide6.QtGui import QPixmap, QPainter, QCursor, QColor
 
 from desktop.icon_utils import load_app_icon
 # 导入模块
