@@ -1,7 +1,29 @@
 /* ===== style.logviewer.css —— 拆分自 style.css（日志流式查看器），原始行 L1937-L2029 ===== */
-/* 日志流式查看器：结构化分级日志与增量轮询。 */
-/* 日志工具栏：筛选控件与刷新按钮的统一容器。 */
-.logs-toolbar { margin-bottom: 18px; }
+/* 日志流式查看器：结构化分级日志与增量轮询。工具栏为 C+ 深色面板，日志列表为白卡行。 */
+/* 日志工具栏：深色面板（#191919 + 斜纹 + 顶部三色段）。.section 的白卡外观由前缀规则压过。 */
+.logs-toolbar { margin-bottom: 24px; }
+.section.logs-toolbar,
+.section.logs-toolbar:hover {
+    padding: 30px 32px 24px;
+    color: #fff;
+    border: 0;
+    border-radius: var(--r-card);
+    background: #191919 url("/static/tex/hatch-dark.svg");
+    box-shadow: none;
+}
+/* 顶部三色段，向右淡出；占用 ::after，不与共享卡片规则的 ::before 光晕冲突。 */
+.section.logs-toolbar::after {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    height: 2px;
+    pointer-events: none;
+    content: "";
+    background: var(--tri);
+    -webkit-mask-image: linear-gradient(90deg, #000 30%, transparent 70%);
+}
+.section.logs-toolbar::before { content: none; }
 .logs-toolbar-row {
     display: flex;
     align-items: flex-end;
@@ -9,83 +31,135 @@
     gap: 14px;
 }
 .logs-toolbar-row .form-group { flex: 0 1 210px; margin: 0; }
-.logs-toolbar-row .btn { min-height: 42px; }
+.logs-toolbar-row .form-group label { color: #8a8a8a; }
+.logs-toolbar-row .btn { min-height: 36px; }
+/* 相邻按钮只留 gap 的 14px，抵消全局 .btn + .btn 的左外边距；不支持 gap 时由后加载的兜底文件覆盖。 */
+.logs-toolbar-row > .btn { margin-left: 0; }
 .logs-keyword-field { flex: 1 1 260px !important; }
+/* 深色面板上的输入框：近黑底 + 暗色细框，聚焦时左侧黄色短条。 */
+.logs-toolbar .form-control {
+    color: #fff;
+    border: 0;
+    background-color: #111;
+    box-shadow: inset 0 0 0 1px var(--dark-rule);
+}
+.logs-toolbar .form-control::placeholder { color: #6f6f6f; }
+.logs-toolbar .form-control:focus { box-shadow: inset 0 0 0 1px #8a8a8a, inset 3px 0 0 var(--signal); }
+.logs-toolbar select.form-control { background-image: linear-gradient(45deg, transparent 50%, #b3b3b3 50%); }
+.logs-toolbar select.form-control option { color: var(--ink); background: #fff; }
+/* 深色面板上的按钮：主按钮改浅底深字，次按钮改暗色线框。 */
+.logs-toolbar .btn-primary {
+    color: var(--ink);
+    border-color: transparent;
+    background-color: #fafafa;
+    background-image: none;
+}
+.logs-toolbar .btn-primary:hover { color: var(--ink); background-color: #fff; }
+.logs-toolbar .btn-secondary {
+    color: #d9d9d9;
+    border-color: transparent;
+    background: rgba(255, 255, 255, .04);
+    box-shadow: inset 0 0 0 1px var(--dark-rule);
+}
+.logs-toolbar .btn-secondary:hover { color: #fff; background: rgba(255, 255, 255, .08); box-shadow: inset 0 0 0 1px #8a8a8a; }
 /* 级别筛选：复选框横排，用于按 DEBUG/INFO/WARNING/ERROR 过滤日志。 */
 .log-level-filters {
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
-    margin-top: 18px;
+    margin-top: 20px;
 }
-.log-level-filters label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
-.log-level-filters input { accent-color: var(--primary-color); }
-/* 级别胶囊：按日志级别着色，帮助快速扫读异常。 */
+.log-level-filters label { display: inline-flex; align-items: center; gap: 6px; color: #d9d9d9; cursor: pointer; }
+.log-level-filters input { accent-color: #fafafa; }
+/* 级别标：方角等宽小字，按日志级别着色，帮助快速扫读异常。 */
 .log-level-chip {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     min-width: 72px;
-    padding: 4px 9px;
-    border-radius: 999px;
-    font-size: 11px;
-    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 2px;
+    font: 600 11px/1.2 var(--f-mono);
+    letter-spacing: .06em;
 }
-.level-debug { background: var(--info-soft); color: var(--info-color); }
-.level-info { background: var(--success-soft); color: var(--success-color); }
-.level-warning { background: var(--warning-soft); color: var(--warning-color); }
-.level-error, .level-critical { background: var(--danger-soft); color: var(--danger-color); }
+/* 深色工具栏上的级别标。 */
+.level-debug { background: rgba(255, 255, 255, .06); color: #8a8a8a; }
+.level-info { background: rgba(45, 91, 216, .22); color: #8fb0ff; }
+.level-warning { background: rgba(224, 138, 0, .2); color: #ffbf5c; }
+.level-error, .level-critical { background: rgba(224, 54, 44, .22); color: #ff7f77; }
+/* 白色日志行里的级别标。 */
+.log-entry .level-debug { background: var(--paper-2); color: var(--ink-3); }
+.log-entry .level-info { background: rgba(45, 91, 216, .1); color: var(--info); }
+.log-entry .level-warning { background: rgba(224, 138, 0, .12); color: var(--warn); }
+.log-entry .level-error, .log-entry .level-critical { background: rgba(224, 54, 44, .1); color: var(--danger); }
+/* 连接状态条：暗色斜纹信息条（官网 Lore_activeName）。 */
 .logs-status-row {
     display: flex;
+    align-items: center;
     justify-content: space-between;
     gap: 12px;
-    margin-top: 14px;
-    color: var(--text-secondary);
-    font-size: 12px;
+    min-height: 36px;
+    margin-top: 16px;
+    padding: 0 16px;
+    color: #b3b3b3;
+    border-radius: 2px;
+    background: #131315 repeating-linear-gradient(-45deg, #1f1f22 0 3px, transparent 3px 6px);
+    box-shadow: inset 0 0 0 1px var(--dark-rule);
+    font: 500 12px/1 var(--f-mono);
+    letter-spacing: .06em;
 }
+#logs-count { color: #8a8a8a; }
 .logs-area {
-    display: grid;
-    gap: 8px;
-    padding: 14px;
+    display: block;
+    padding: 6px 0;
     max-height: 660px;
     overflow-y: auto;
 }
-/* 单条日志行：时间 | 级别 | 来源 | 消息 | 复制按钮 五列布局。 */
+/* 单条日志行：时间 | 级别 | 来源 | 消息 | 复制按钮 五列布局；行间只留浅灰细线，不再逐行套框。 */
 .log-entry {
     display: grid;
-    grid-template-columns: 154px 82px minmax(120px, .35fr) minmax(0, 1fr) auto;
-    align-items: start;
-    gap: 10px;
-    padding: 12px 14px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--inner-radius);
-    background: var(--bg-secondary);
+    grid-template-columns: 168px 82px minmax(120px, .35fr) minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 14px;
+    padding: 9px 22px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: 0 1px 0 var(--paper-2);
 }
-.log-timestamp, .log-source { padding-top: 4px; color: var(--text-secondary); font-size: 12px; }
-.log-source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-entry:last-child { box-shadow: none; }
+.log-entry:hover { background: var(--paper); }
+.log-timestamp, .log-source { color: var(--ink-4); font-size: 12px; }
+.log-source { color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 日志消息：保留换行与空白，超长自动换行，不撑破卡片。 */
 .log-message {
     min-width: 0;
     margin: 0;
     overflow: auto;
-    color: var(--text-primary);
+    color: var(--ink);
     font: inherit;
-    font-size: 13px;
-    line-height: 1.55;
+    line-height: 1.6;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
 }
+/* 复制按钮：悬停该行时才显示。 */
 .log-copy-button {
-    padding: 4px 8px;
-    border: 1px solid var(--border-color);
-    border-radius: 10px;
-    background: var(--bg-elevated);
-    color: var(--text-secondary);
+    height: 24px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 2px;
+    background: var(--paper-2);
+    color: var(--ink-3);
+    font: 500 11px/1 var(--f-body);
     cursor: pointer;
+    opacity: 0;
+    transition: opacity .15s, color .15s;
 }
-.log-copy-button:hover { border-color: var(--primary-border-hover); color: var(--primary-color); }
+.log-entry:hover .log-copy-button,
+.log-copy-button:focus { opacity: 1; }
+.log-copy-button:hover { color: var(--ink); }
 /* 日志空态：无匹配记录时居中提示。 */
-.logs-empty { padding: 40px 16px; color: var(--text-secondary); text-align: center; }
+.logs-empty { padding: 40px 16px; color: var(--ink-3); text-align: center; font-family: var(--f-mono); }
 @media (max-width: 900px) {
     .log-entry { grid-template-columns: 1fr auto; }
     .log-entry .log-timestamp, .log-entry .log-source { grid-column: 1; }

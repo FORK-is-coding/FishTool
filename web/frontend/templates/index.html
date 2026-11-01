@@ -11,25 +11,47 @@
     <!-- 内嵌空图标，避免浏览器默认请求 /favicon.ico 产生无关 404 console 错误。 -->
     <link rel="icon" href="data:,">
     <!-- 版本参数用于让 8000 端口在修复后主动获取最新前端资源，避免浏览器继续使用旧缓存。 -->
-    <link rel="stylesheet" href="/static/css/style.lottery.css?v=split-20260824">
-<link rel="stylesheet" href="/static/css/style.resident.css?v=split-20260824">
-<link rel="stylesheet" href="/static/css/style.base.css?v=split-20260824">
-<link rel="stylesheet" href="/static/css/style.pages.css?v=ui-20261026">
-<link rel="stylesheet" href="/static/css/style.log.css?v=progress-20261026">
-<link rel="stylesheet" href="/static/css/style.config.css?v=split-20260824">
-<link rel="stylesheet" href="/static/css/style.comment.css?v=progress-20261026">
-<link rel="stylesheet" href="/static/css/style.up.css?v=split-20260824">
-<link rel="stylesheet" href="/static/css/style.modal.css?v=split-20261026-toast-fix20261030">
-<link rel="stylesheet" href="/static/css/style.responsive.css?v=split-20260824">
-<link rel="stylesheet" href="/static/css/style.logviewer.css?v=split-20260824">
-<link rel="stylesheet" href="/static/css/style.help.css?v=split-20260824">
-<link rel="stylesheet" href="/static/css/style.hotspot.css?v=spacing3-20261026-fix20261030">
+    <link rel="stylesheet" href="/static/css/style.lottery.css?v=split-20260824-ui20261101">
+<link rel="stylesheet" href="/static/css/style.resident.css?v=split-20260824-ui20261101">
+<link rel="stylesheet" href="/static/css/style.base.css?v=split-20260824-ui20261101">
+<link rel="stylesheet" href="/static/css/style.pages.css?v=ui-20261026-ui20261101">
+<link rel="stylesheet" href="/static/css/style.log.css?v=progress-20261026-ui20261101">
+<link rel="stylesheet" href="/static/css/style.config.css?v=split-20260824-ui20261101">
+<link rel="stylesheet" href="/static/css/style.comment.css?v=progress-20261026-ui20261101">
+<link rel="stylesheet" href="/static/css/style.up.css?v=split-20260824-ui20261101">
+<link rel="stylesheet" href="/static/css/style.modal.css?v=split-20261026-toast-fix20261030-ui20261101">
+<link rel="stylesheet" href="/static/css/style.responsive.css?v=split-20260824-ui20261101">
+<link rel="stylesheet" href="/static/css/style.logviewer.css?v=split-20260824-ui20261101">
+<link rel="stylesheet" href="/static/css/style.help.css?v=split-20260824-ui20261101">
+<link rel="stylesheet" href="/static/css/style.hotspot.css?v=spacing3-20261026-fix20261030-ui20261101">
 <!-- 桌面端 Chromium 83 的 flex gap 兜底：只在 <html class="no-flex-gap"> 下生效，必须最后加载。 -->
-<link rel="stylesheet" href="/static/css/style.flexgap.css?v=flexgap-20261030">
+<link rel="stylesheet" href="/static/css/style.flexgap.css?v=flexgap-20261030-ui20261101">
 </head>
 <body>
     <div class="container">
-        <!-- 侧边栏导航：nav-item 的 data-page 与下方 page 容器 id 对应，点击即切换页面。 -->
+        <!-- 线性图标：<symbol> 定义，侧栏导航、侧栏主操作与「更多」卡片用 <use href="#i-xxx"> 引用。
+             放在 .container 的首个 flex 子项、宽高为 0：不占位，也不需要内联样式。 -->
+        <svg width="0" height="0" aria-hidden="true" focusable="false">
+            <defs>
+                <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/></symbol>
+                <symbol id="i-hot" viewBox="0 0 24 24"><path d="M12 3c1 4 5 5.5 5 10a5 5 0 0 1-10 0c0-2.5 1.5-4 2.5-5 .3 2 1.3 3 2.5 3-1-3 0-6 0-8Z"/></symbol>
+                <symbol id="i-comment" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></symbol>
+                <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></symbol>
+                <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 1v5M12 18v5M1 12h5M18 12h5"/></symbol>
+                <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M2 12h5l2-5 4 10 2-5h7"/></symbol>
+                <symbol id="i-gift" viewBox="0 0 24 24"><path d="M3 9h18v4H3zM5 13v8h14v-8M12 9v12"/></symbol>
+                <symbol id="i-log" viewBox="0 0 24 24"><path d="M5 3h10l4 4v14H5z"/><path d="M8 11h8M8 15h8M8 7h4"/></symbol>
+                <symbol id="i-info" viewBox="0 0 24 24"><path d="M12 2 22 20H2Z"/><path d="M12 9v5M12 17v.5"/></symbol>
+                <symbol id="i-mark" viewBox="0 0 24 24"><path d="M3 5h18l-9 15z" fill="currentColor" stroke="none"/><path d="M8.5 8h7L12 14z" fill="#191919" stroke="none"/></symbol>
+                <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h13M13 6l6 6-6 6"/></symbol>
+                <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></symbol>
+                <symbol id="i-chat" viewBox="0 0 24 24"><path d="M3 6h12v8H8l-5 4z"/><path d="M15 9h6v8l-3-2h-5v-1"/></symbol>
+            </defs>
+        </svg>
+
+        <!-- 侧边栏导航：nav-item 的 data-page 与下方 page 容器 id 对应，点击即切换页面。
+             60px 图标栏：激活块 .nav-indicator 与导航项同处 .nav-menu 坐标系，由 app.core.js 的 moveNavIndicator 平移；
+             文字放在 .nav-label 里作为悬停标签，<b> 为页码。 -->
         <aside class="sidebar">
             <div class="logo">
                 <!-- 使用项目内静态图标作为品牌徽标，避免打包后引用桌面路径失效。 -->
@@ -40,124 +62,192 @@
                 </div>
             </div>
             <nav class="nav-menu">
+                <i class="nav-indicator" aria-hidden="true"></i>
                 <a href="#welcome" class="nav-item active" data-page="welcome">
-                    <span class="icon">🏠</span>
-                    <span>欢迎</span>
+                    <span class="icon"><svg><use href="#i-home"/></svg></span>
+                    <span class="nav-label">欢迎<b>00</b></span>
                 </a>
                 <a href="#hotspot" class="nav-item" data-page="hotspot">
-                    <span class="icon">🔥</span>
-                    <span>热点发现</span>
+                    <span class="icon"><svg><use href="#i-hot"/></svg></span>
+                    <span class="nav-label">热点发现<b>01</b></span>
                 </a>
                 <a href="#comment" class="nav-item" data-page="comment">
-                    <span class="icon">💬</span>
-                    <span>评论监控</span>
+                    <span class="icon"><svg><use href="#i-comment"/></svg></span>
+                    <span class="nav-label">评论监控<b>02</b></span>
                 </a>
                 <a href="#config" class="nav-item" data-page="config">
-                    <span class="icon">⚙️</span>
-                    <span>配置</span>
+                    <span class="icon"><svg><use href="#i-gear"/></svg></span>
+                    <span class="nav-label">配置<b>03</b></span>
                 </a>
                 <a href="#analysis" class="nav-item" data-page="analysis">
-                    <span class="icon">🎯</span>
-                    <span>头部UP拆解</span>
+                    <span class="icon"><svg><use href="#i-target"/></svg></span>
+                    <span class="nav-label">头部UP拆解<b>04</b></span>
                 </a>
                 <a href="#self-diagnosis" class="nav-item" data-page="self-diagnosis">
-                    <span class="icon">🏥</span>
-                    <span>账号自诊</span>
+                    <span class="icon"><svg><use href="#i-pulse"/></svg></span>
+                    <span class="nav-label">账号自诊<b>05</b></span>
                 </a>
                 <a href="#lottery" class="nav-item" data-page="lottery">
-                    <span class="icon">🎁</span>
-                    <span>抽奖工具</span>
+                    <span class="icon"><svg><use href="#i-gift"/></svg></span>
+                    <span class="nav-label">抽奖工具<b>06</b></span>
                 </a>
                 <a href="#logs" class="nav-item" data-page="logs">
-                    <span class="icon">📋</span>
-                    <span>日志</span>
+                    <span class="icon"><svg><use href="#i-log"/></svg></span>
+                    <span class="nav-label">日志<b>07</b></span>
                 </a>
                 <a href="#usage" class="nav-item" data-page="usage">
-                    <span class="icon">⚠️</span>
-                    <span>使用说明</span>
+                    <span class="icon"><svg><use href="#i-info"/></svg></span>
+                    <span class="nav-label">使用说明<b>08</b></span>
                 </a>
             </nav>
+            <!-- 系统状态胶囊：本 PR 只放三个静态灰点，暂不接入实时数据。 -->
+            <div class="side-capsule" aria-hidden="true">
+                <span class="cap-item"><i class="dot"></i></span>
+                <span class="cap-item"><i class="dot"></i></span>
+                <span class="cap-item"><i class="dot"></i></span>
+            </div>
+            <!-- 侧栏主操作：直达评论监控页。 -->
+            <a class="side-cta" href="#comment" onclick="navigateTo('comment'); return false;">
+                <svg><use href="#i-mark"/></svg>
+                <i class="cta-rule"></i>
+                <span>开始<br>监控</span>
+            </a>
+            <span class="side-ver">v0.2.5</span>
         </aside>
 
-        <!-- 主内容区 -->
+        <!-- 主内容区：首个子元素是吸顶细条，面包屑 / 页码 / 时钟由 app.core.js 更新。 -->
         <main class="main-content">
-            <!-- 欢迎页：默认激活，承载登录态与快速开始入口。 -->
+            <header class="app-topbar">
+                <span class="tb-rec">[ <b>REC</b> ]</span>
+                <span class="tb-path">FISHTOOL // <b id="crumb-current">OVERVIEW</b></span>
+                <span class="tb-fill" aria-hidden="true"></span>
+                <span class="tb-page"><b id="tb-index">00</b> / 08</span>
+                <span class="tb-clock" id="topbar-clock">--:--:--</span>
+            </header>
+            <!-- 欢迎页：默认激活。主视觉（测绘环 + 空心大字 + 网点波形带）右侧承载 B站登录态，下接指标行、快速开始与「更多」。 -->
             <div id="welcome-page" class="page active">
-                <div class="welcome-header">
-                    <h1>欢迎使用 FishTool运营工具箱</h1>
-                    <p class="subtitle">瞄准真实业务痛点·面向新手个人创作者·无需学习成本·个人自媒体的智能运营助理</p>
-                </div>
+                <section class="hero">
+                    <div class="hero-rings" aria-hidden="true"></div>
+                    <div class="hero-hollow" aria-hidden="true">OPERATOR</div>
+                    <div class="hero-tape" aria-hidden="true"></div>
+                    <div class="hero-meta">
+                        <span class="meta-lattice" aria-hidden="true"></span>
+                        <span>INFO.// FISHTOOL OPERATIONS CONSOLE</span>
+                        <span class="meta-r">BUILD 0.2.5</span>
+                    </div>
+                    <div class="hero-title">
+                        <p class="hero-kicker"><i class="tri-block" aria-hidden="true"></i>个人自媒体的智能运营助理</p>
+                        <h1>FishTool<br>运营工具箱</h1>
+                        <div class="hero-plate"><i class="plate-tri" aria-hidden="true"></i><span>热点 · 舆情 · 竞品 · 自诊 · 抽奖</span></div>
+                        <p class="subtitle">让运营不再成为企业特权。</p>
+                    </div>
 
-                <!-- B站登录态配置模块：扫码二维码由后端生成，登录态用于解锁身份功能。 -->
-                <section class="section auth-section">
-                    <h2>🔑 B站登录态</h2>
-                    <div class="auth-status-box" style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
-                        <span id="auth-status-badge" class="auth-status-badge" style="background:#eee;color:#666;padding:4px 12px;border-radius:12px;font-size:13px;">检测中...</span>
-                        <span id="auth-user-info" class="auth-user-info" style="color: var(--text-secondary); font-size: 14px;"></span>
-                    </div>
-                    <div class="auth-actions" style="margin-bottom: 12px;">
-                        <button class="btn btn-primary" id="auth-login-btn" onclick="toggleQrPanel()">扫码登录</button>
-                        <button class="btn btn-secondary" id="auth-logout-btn" onclick="logoutBili()" style="display:none; background:#c62828; color:white;">清除登录态</button>
-                    </div>
-                    <div id="auth-qr-panel" class="auth-qr-panel" style="display:none; text-align: center; padding: 16px; background: white; border-radius: 12px;">
-                        <div class="form-group">
-                            <img id="auth-qr-img" alt="登录二维码" style="width: 220px; height: 220px; background: white; border-radius: 8px; padding: 8px; border: 1px solid #e0e0e0;"/>
+                    <!-- B站登录态配置模块：扫码二维码由后端生成，登录态用于解锁身份功能。
+                         徽标状态类（is-ok / is-warn / is-error）由 app.auth.js 设置；
+                         退出按钮与扫码面板的显隐由 JS 通过 style.display 控制，初始 display:none 必须保留。 -->
+                    <aside class="hero-side auth-section">
+                        <div class="side-head"><span class="ch-tag">auth</span><span class="side-no">01 / 01</span></div>
+                        <p class="side-title">B站登录态</p>
+                        <div class="auth-status-box">
+                            <span id="auth-status-badge" class="auth-status-badge">检测中...</span>
                         </div>
-                        <p id="auth-qr-status" style="font-size: 14px; min-height: 20px;">正在获取二维码...</p>
-                        <p id="auth-qr-countdown" style="font-size: 12px; color: #888; min-height: 16px;"></p>
-                        <div class="form-group" style="display: flex; gap: 12px; justify-content: center;">
-                            <button class="btn btn-secondary" onclick="startQrLogin()">重新生成</button>
-                            <button class="btn btn-secondary" onclick="closeQrPanel()">关闭</button>
+                        <p id="auth-user-info" class="auth-user-info"></p>
+                        <div class="auth-actions">
+                            <button class="btn btn-primary" id="auth-login-btn" onclick="toggleQrPanel()">扫码登录</button>
+                            <button class="btn btn-line" id="auth-logout-btn" onclick="logoutBili()" style="display:none">清除登录态</button>
                         </div>
-                    </div>
+                        <div id="auth-qr-panel" class="auth-qr-panel" style="display:none">
+                            <div class="form-group">
+                                <img id="auth-qr-img" alt="登录二维码"/>
+                            </div>
+                            <p id="auth-qr-status">正在获取二维码...</p>
+                            <p id="auth-qr-countdown"></p>
+                            <div class="form-group">
+                                <button class="btn btn-secondary" onclick="startQrLogin()">重新生成</button>
+                                <button class="btn btn-secondary" onclick="closeQrPanel()">关闭</button>
+                            </div>
+                        </div>
+                    </aside>
+                </section>
+
+                <i class="tri-line" aria-hidden="true"></i>
+
+                <!-- 指标行：本 PR 只放占位「—」，不接入真实数据。 -->
+                <section class="stat-row" aria-label="运营指标">
+                    <div class="stat-cell"><em>01 / SIGNALS</em><strong>—</strong><span>热点信号</span></div>
+                    <div class="stat-cell"><em>02 / WATCHING</em><strong>—</strong><span>跟踪视频</span></div>
+                    <div class="stat-cell"><em>03 / COMMENTS</em><strong>—</strong><span>今日新增评论</span></div>
+                    <div class="stat-cell is-accent"><em>04 / TOKENS</em><strong>—</strong><span>K Token 用量</span></div>
                 </section>
 
                 <!-- 快速开始：三个入口卡片引导新用户按顺序配置并体验核心能力。 -->
-                <div class="quick-start">
-                    <h2>快速开始</h2>
+                <section class="chapter quick-start">
+                    <div class="chapter-head">
+                        <span class="ch-tag">quick start</span>
+                        <h2>快速开始</h2>
+                        <span class="ch-hollow" aria-hidden="true">START</span>
+                    </div>
                     <div class="cards">
                         <div class="card">
-                            <div class="card-icon">⚙️</div>
+                            <div class="card-top"><span class="card-no">01</span><span class="card-en">CONFIG</span></div>
                             <h3>1. 配置AI大模型</h3>
                             <p>配置OpenAI兼容的API以启用AI功能</p>
                             <button class="btn btn-primary" onclick="navigateTo('config')">前往配置</button>
                         </div>
                         <div class="card">
-                            <div class="card-icon">🔥</div>
+                            <div class="card-top"><span class="card-no">02</span><span class="card-en">DISCOVER</span></div>
                             <h3>2. 探索热点</h3>
                             <p>查看分区热门tag和活动情报</p>
                             <button class="btn btn-primary" onclick="navigateTo('hotspot')">开始探索</button>
                         </div>
                         <div class="card">
-                            <div class="card-icon">💬</div>
+                            <div class="card-top"><span class="card-no">03</span><span class="card-en">MONITOR</span></div>
                             <h3>3. 监控评论</h3>
                             <p>实时监控视频评论和舆情预警</p>
                             <button class="btn btn-primary" onclick="navigateTo('comment')">开始监控</button>
                         </div>
                     </div>
+                </section>
 
-                    <!-- 社区支持卡片：与前三个功能入口分组展示，方便用户识别外部支持入口。 -->
+                <!-- 「更多」：社区支持卡片与功能入口分组展示，方便用户识别外部支持入口。 -->
+                <section class="chapter more">
+                    <div class="chapter-head">
+                        <span class="ch-tag">more</span>
+                        <h2>更多</h2>
+                        <span class="ch-hollow" aria-hidden="true">MORE</span>
+                    </div>
                     <div class="cards support-cards">
-                        <div class="card">
-                            <div class="card-icon">⭐</div>
-                            <h3>支持作者</h3>
-                            <p>为作者在github上点个⭐吧拜托了！</p>
-                            <!-- 已配置作者仓库地址，供用户直接访问项目源码。 -->
-                            <a class="btn btn-primary" href="https://github.com/FORK-is-coding/FishTool" aria-label="前往github">前往github</a>
+                        <div class="card card-support">
+                            <div class="sup-art" aria-hidden="true"><svg><use href="#i-star"/></svg></div>
+                            <div class="sup-body">
+                                <span class="card-en">GITHUB · OPEN SOURCE</span>
+                                <h3>支持作者</h3>
+                                <p>为作者在github上点个⭐吧拜托了！</p>
+                                <!-- 已配置作者仓库地址，供用户直接访问项目源码。 -->
+                                <a class="btn btn-primary" href="https://github.com/FORK-is-coding/FishTool" aria-label="前往github">前往github</a>
+                            </div>
                         </div>
-                        <div class="card">
-                            <div class="card-icon">👥</div>
-                            <h3>意见反馈</h3>
-                            <p>点击加入QQ群</p>
-                            <button class="btn btn-primary" type="button" onclick="showGroupQrModal()">加入群聊</button>
+                        <div class="card card-support">
+                            <div class="sup-art" aria-hidden="true"><svg><use href="#i-chat"/></svg></div>
+                            <div class="sup-body">
+                                <span class="card-en">FEEDBACK · QQ GROUP</span>
+                                <h3>意见反馈</h3>
+                                <p>点击加入QQ群</p>
+                                <button class="btn btn-primary" type="button" onclick="showGroupQrModal()">加入群聊</button>
+                            </div>
                         </div>
                     </div>
-                </div>
+                </section>
             </div>
 
             <!-- 热点发现页：Tag词云 + 活动情报 + AI选题助手三个独立功能区块。 -->
             <div id="hotspot-page" class="page">
-                <h1>🔥 热点发现</h1>
+                <div class="page-head">
+                    <span class="ph-no">01</span>
+                    <div class="ph-title"><span class="ch-tag">signals</span><h1>热点发现</h1></div>
+                    <span class="ph-hollow" aria-hidden="true">SIGNALS</span>
+                    <p class="subtitle">追踪热点生命周期、单视频跟踪与聚合入口发现，为选题和事件研判提供依据。</p>
+                </div>
                 
                 <section class="section hotspot-lifecycle-section">
                     <div class="hotspot-section-heading">
@@ -366,7 +456,12 @@
 
             <!-- 评论监控页：常驻监控卡片 + 单次监控表单 + 可视化大屏 + 预警记录。 -->
             <div id="comment-page" class="page">
-                <h1>💬 评论监控</h1>
+                <div class="page-head">
+                    <span class="ph-no">02</span>
+                    <div class="ph-title"><span class="ch-tag">monitor</span><h1>评论监控</h1></div>
+                    <span class="ph-hollow" aria-hidden="true">MONITOR</span>
+                    <p class="subtitle">常驻监控与单次采集，评论去重、情感分析与负面舆情预警。</p>
+                </div>
                 
                 <!-- 常驻监控卡片：状态、统计、控制和运行态右侧波形保持在同一操作区域。
                     开启/恢复/暂停/停止 对应后端 /comment/resident/* 四个接口。 -->
@@ -417,11 +512,11 @@
                     <!-- 采集策略下拉栏：快速(默认100条) / 全面(全量采集) -->
                     <div class="form-group monitor-option-row">
                         <label for="monitor-strategy">采集策略：</label>
-                        <select id="monitor-strategy" class="form-control" style="max-width: 220px; display: inline-block; width: auto;">
+                        <select id="monitor-strategy" class="form-control monitor-strategy-select">
                             <option value="normal" selected>快速（默认，100条采集）</option>
                             <option value="full">全面（全量采集）</option>
                         </select>
-                        <span style="margin-left: 8px; color: #888; font-size: 12px;">全面模式评论较多时耗时较长，可查看采集进度</span>
+                        <span class="monitor-option-note">全面模式评论较多时耗时较长，可查看采集进度</span>
                     </div>
                     <!-- 去重和情感开关继续服务原有 BV 采集路径，保持既有功能不变。 -->
                     <div class="form-group monitor-option-row">
@@ -429,7 +524,7 @@
                             <input type="checkbox" id="enable-dedup" checked>
                             启用去重
                         </label>
-                        <label style="margin-left: 20px;">
+                        <label>
                             <input type="checkbox" id="enable-sentiment" checked>
                             启用情感分析
                         </label>
@@ -495,8 +590,12 @@
 
             <!-- 头部UP主拆解页：先拉分区头部UP列表，再对单个UP做运营策略分析。 -->
             <div id="analysis-page" class="page">
-                <h1>🎯 头部UP主拆解</h1>
-                <p class="subtitle">分析分区头部UP主的运营策略与数据表现</p>
+                <div class="page-head">
+                    <span class="ph-no">04</span>
+                    <div class="ph-title"><span class="ch-tag">analysis</span><h1>头部UP主拆解</h1></div>
+                    <span class="ph-hollow" aria-hidden="true">ANALYSIS</span>
+                    <p class="subtitle">分析分区头部UP主的运营策略与数据表现</p>
+                </div>
 
                 <section class="section">
                     <h2>选择分析目标</h2>
@@ -527,8 +626,12 @@
 
             <!-- 账号自诊页：对比分区基准，输出账号健康度、互动效率与 AI 运营建议。 -->
             <div id="self-diagnosis-page" class="page">
-                <h1>🏥 账号自诊</h1>
-                <p class="subtitle">对比分区数据，发现账号增长瓶颈</p>
+                <div class="page-head">
+                    <span class="ph-no">05</span>
+                    <div class="ph-title"><span class="ch-tag">diagnosis</span><h1>账号自诊</h1></div>
+                    <span class="ph-hollow" aria-hidden="true">DIAGNOSIS</span>
+                    <p class="subtitle">对比分区数据，发现账号增长瓶颈</p>
+                </div>
 
                 <section class="section">
                     <h2>诊断我的账号</h2>
@@ -550,7 +653,7 @@
 
                 <!-- 01 同行排名：有限参评集合内的真实名次（不代表全站排名） -->
                 <section class="section">
-                    <h2>🏆 同行排名（有限参评集合）</h2>
+                    <h2>同行排名（有限参评集合）</h2>
                     <p class="subtitle">在这些明确参评账号中按同一指标排名，不代表全站排名</p>
                     <div class="form-group">
                         <label>同行 UID（每行一个，或用逗号/空格分隔，最多 50 个）：</label>
@@ -589,8 +692,12 @@
 
             <!-- 配置页：AI大模型教程引导 + 密钥/地址/模型配置 + 用量统计。 -->
             <div id="config-page" class="page">
-                <h1>⚙️ 配置管理</h1>
-                <p class="config-intro">模型可由用户自由灵活配置，不同水平的AI会影响工具箱内涉及AI功能模块的产出效果</p>
+                <div class="page-head">
+                    <span class="ph-no">03</span>
+                    <div class="ph-title"><span class="ch-tag">config</span><h1>配置管理</h1></div>
+                    <span class="ph-hollow" aria-hidden="true">CONFIG</span>
+                    <p class="subtitle config-intro">模型可由用户自由灵活配置，不同水平的AI会影响工具箱内涉及AI功能模块的产出效果</p>
+                </div>
 
                 <section class="section ai-guide-card">
                     <div class="guide-heading">
@@ -647,7 +754,7 @@
                         <!-- 成功获取模型后由 JS 替换为下拉框，失败时保留手填能力。 -->
                         <input type="text" id="llm-model" class="form-control" value="gpt-3.5-turbo" autocomplete="off">
                         <select id="llm-model-select" class="form-control" style="display: none;"></select>
-                        <small id="llm-model-status" style="color: var(--text-secondary);"></small>
+                        <small id="llm-model-status"></small>
                     </div>
                     <button class="btn btn-primary" onclick="saveLLMConfig()">保存配置</button>
                 </section>
@@ -661,8 +768,12 @@
 
             <!-- 抽奖工具页：真人筛选、受约束 AI 快筛与评论区随机抽奖。 -->
             <div id="lottery-page" class="page">
-                <h1>🎁 抽奖工具</h1>
-                <p class="subtitle">先核对内容，再复用本地评论数据完成真人筛选或随机抽取</p>
+                <div class="page-head">
+                    <span class="ph-no">06</span>
+                    <div class="ph-title"><span class="ch-tag">lottery</span><h1>抽奖工具</h1></div>
+                    <span class="ph-hollow" aria-hidden="true">LOTTERY</span>
+                    <p class="subtitle">先核对内容，再复用本地评论数据完成真人筛选或随机抽取</p>
+                </div>
 
                 <div class="lottery-layout">
                     <section class="section lottery-workbench">
@@ -760,7 +871,12 @@
 
             <!-- 日志页：来源/级别/关键词筛选 + 2 秒增量轮询 + 问题日志导出。 -->
             <div id="logs-page" class="page">
-                <h1>📋 平台日志</h1>
+                <div class="page-head">
+                    <span class="ph-no">07</span>
+                    <div class="ph-title"><span class="ch-tag">logs</span><h1>平台日志</h1></div>
+                    <span class="ph-hollow" aria-hidden="true">LOGS</span>
+                    <p class="subtitle">实时滚动全项目日志，按来源、关键词与级别筛选，可导出问题日志。</p>
+                </div>
 
                 <section class="section logs-toolbar">
                     <div class="logs-toolbar-row">
@@ -794,12 +910,18 @@
 
             <!-- 使用说明页：展示项目说明与后续补充说明。 -->
             <div id="usage-page" class="page usage-page">
-                <h1>⚠️ 使用说明</h1>
+                <div class="page-head">
+                    <span class="ph-no">08</span>
+                    <div class="ph-title"><span class="ch-tag">notice</span><h1>使用说明</h1></div>
+                    <span class="ph-hollow" aria-hidden="true">NOTICE</span>
+                    <p class="subtitle">项目背景、使用声明与免责协议。</p>
+                </div>
                 <div class="usage-card-stack">
                     <section class="card usage-card">
                         <div class="usage-card-heading">
-                            <span class="card-icon" aria-hidden="true">🧭</span>
+                            <span class="card-no">01</span>
                             <div>
+                                <span class="card-en">ABOUT</span>
                                 <h2>项目说明</h2><!-- 第一张卡片的模块标题。 -->
                                 <p class="usage-card-subtitle">项目背景、定位与使用声明</p><!-- 概括正文涵盖的信息。 -->
                             </div>
@@ -814,8 +936,9 @@
                     </section>
                     <section class="card usage-card">
                         <div class="usage-card-heading">
-                            <span class="card-icon" aria-hidden="true">📝</span>
+                            <span class="card-no">02</span>
                             <div>
+                                <span class="card-en">DISCLAIMER</span>
                                 <h2>免责声明</h2><!-- 第二张卡片展示完整的免责声明与边界限定协议。 -->
                                 <p class="usage-card-subtitle">使用本工具前请完整阅读以下协议</p><!-- 提醒用户先阅读协议内容。 -->
                             </div>
@@ -840,14 +963,14 @@
     <!-- ECharts 固定为本地静态资源，断网环境不依赖 CDN。 -->
     <script src="/static/vendor/echarts.min.js"></script>
     <!-- 版本参数用于让 8000 端口加载本次弹窗修复后的脚本，避免旧 JS 缓存导致 onclick 无响应。 -->
-    <script src="/static/js/app.core.js?v=progress-20261026-fix20261027-fix20261030"></script>
-<script src="/static/js/app.hotspot.js?v=progress-20261026-fix20261027-fix20261030"></script>
+    <script src="/static/js/app.core.js?v=progress-20261026-fix20261027-fix20261030-ui20261101"></script>
+<script src="/static/js/app.hotspot.js?v=progress-20261026-fix20261027-fix20261030-ui20261101"></script>
 <!-- 第三批 g：事件工作台 / 机会列表 / 证据回看 / 最小反馈（新增脚本，不改既有结构）。 -->
 <script src="/static/js/app.events.js?v=batch3h-20261003-fix20261027"></script>
-<script src="/static/js/app.comment.js?v=progress-20261026"></script>
+<script src="/static/js/app.comment.js?v=progress-20261026-ui20261101"></script>
 <script src="/static/js/app.config.js?v=split-20260824-fix20261030"></script>
-<script src="/static/js/app.up.js?v=report5-20261026-fix20261027"></script>
-<script src="/static/js/app.auth.js?v=split-20260824-fix20261027-fix20261030"></script>
+<script src="/static/js/app.up.js?v=report5-20261026-fix20261027-ui20261101"></script>
+<script src="/static/js/app.auth.js?v=split-20260824-fix20261027-fix20261030-ui20261101"></script>
 <script src="/static/js/app.lottery.js?v=welcomefix-20261026-fix20261027-fix20261030"></script>
 <script src="/static/js/app.ui.js?v=split-20261026-toast-fix20261030"></script>
 

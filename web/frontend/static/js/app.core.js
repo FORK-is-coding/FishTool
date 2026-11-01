@@ -83,7 +83,61 @@ function updateNavState(pageName) {
             item.classList.add('active');
         }
     });
+    // 侧栏激活块跟随激活项平移，顶部细条同步面包屑与页码。
+    moveNavIndicator();
+    updateTopbarCrumb(pageName);
 }
+
+// ============ 侧栏激活块 / 顶部细条 ============
+// 面包屑英文名与页码：与 index.html 各页 .page-head 的编号一致。
+const PAGE_EN = {
+    welcome: 'OVERVIEW', hotspot: 'SIGNALS', comment: 'MONITOR', config: 'CONFIG', analysis: 'ANALYSIS',
+    'self-diagnosis': 'DIAGNOSIS', lottery: 'LOTTERY', logs: 'LOGS', usage: 'NOTICE'
+};
+const PAGE_NO = {
+    welcome: '00', hotspot: '01', comment: '02', config: '03', analysis: '04',
+    'self-diagnosis': '05', lottery: '06', logs: '07', usage: '08'
+};
+
+// 激活块与导航项同处 .nav-menu（定位上下文），CSS 中激活块为 top:0，只需平移到激活项的 offsetTop。
+// 测试用 node vm 只桩了部分 document，缺 querySelector 时直接跳过。
+function moveNavIndicator() {
+    if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return;
+    const active = document.querySelector('.nav-item.active');
+    const bar = document.querySelector('.nav-indicator');
+    if (!active || !bar) return;
+    bar.style.height = `${active.offsetHeight}px`;
+    bar.style.transform = `translateY(${active.offsetTop}px)`;
+}
+
+// 顶部细条：面包屑写当前页英文名，页码写 00–08；未知页回退为空 / 00。
+function updateTopbarCrumb(pageName) {
+    if (typeof document === 'undefined' || typeof document.getElementById !== 'function') return;
+    const crumb = document.getElementById('crumb-current');
+    if (crumb) crumb.textContent = PAGE_EN[pageName] || '';
+    const index = document.getElementById('tb-index');
+    if (index) index.textContent = PAGE_NO[pageName] || '00';
+}
+
+// 顶部细条时钟：本地时间 HH:MM:SS，每秒刷新一次。
+function tickTopbarClock() {
+    if (typeof document === 'undefined' || typeof document.getElementById !== 'function') return;
+    const clock = document.getElementById('topbar-clock');
+    if (clock) clock.textContent = new Date().toTimeString().slice(0, 8);
+}
+
+// 页面就绪后定位一次激活块并启动时钟；窗口尺寸变化时重新定位。
+// 非浏览器环境（测试用 node vm 的 window 桩没有 addEventListener）直接跳过。
+(function initNavChrome() {
+    if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
+    window.addEventListener('DOMContentLoaded', () => {
+        moveNavIndicator();
+        tickTopbarClock();
+    });
+    window.addEventListener('load', moveNavIndicator);
+    window.addEventListener('resize', moveNavIndicator);
+    if (typeof window.setInterval === 'function') window.setInterval(tickTopbarClock, 1000);
+})();
 
 // 导航点击事件
 document.querySelectorAll('.nav-item').forEach(item => {
