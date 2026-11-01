@@ -153,7 +153,12 @@ function stopQrPoll() {
 }
 
 async function logoutBili() {
-    if (!confirm('确定要清除B站登录态吗？清除后需要重新扫码才能使用身份功能。')) return;
+    const confirmed = await showAppConfirm('确定要清除B站登录态吗？清除后需要重新扫码才能使用身份功能。', {
+        title: '清除登录态',
+        confirmText: '清除',
+        danger: true,
+    });
+    if (!confirmed) return;
     try {
         const result = await apiRequest('/auth/logout', { method: 'POST' });
         loadAuthStatus();

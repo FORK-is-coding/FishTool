@@ -4,6 +4,7 @@ import sys
 from PyQt5.QtWidgets import QApplication
 
 from desktop.icon_utils import load_app_icon
+from desktop.ui_theme import app_style
 
 
 def run_pet_window():
@@ -15,6 +16,7 @@ def run_pet_window():
 
     app = QApplication(sys.argv)
     app.setWindowIcon(load_app_icon())
+    app.setStyleSheet(app_style())
     
     pet = PetWindow()
     pet.show()

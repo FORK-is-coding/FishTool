@@ -269,9 +269,10 @@ def test_lottery_page_can_cancel_background_task() -> None:
 
     lottery_js = Path("web/frontend/static/js/app.lottery.js").read_text(encoding="utf-8")
     cancel_body = lottery_js.split("async function cancelLotteryTask", 1)[1].split("\n}\n", 1)[0]
-    # 先二次确认，再调用取消接口。
-    assert "confirm(" in cancel_body
-    assert cancel_body.index("confirm(") < cancel_body.index("/cancel`")
+    # 先二次确认，再调用取消接口。确认框用应用弹窗 showAppConfirm，不用原生 confirm()（桌面端会弹 Qt 系统对话框）。
+    assert "await showAppConfirm(" in cancel_body
+    assert "if (!confirmed) return;" in cancel_body
+    assert cancel_body.index("await showAppConfirm(") < cancel_body.index("/cancel`")
     assert "/lottery/tasks/${encodeURIComponent(taskId)}/cancel`" in cancel_body
     assert "method: 'POST'" in cancel_body
     assert "lotteryWriteActiveTask(kind, '');" in cancel_body

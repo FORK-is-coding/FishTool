@@ -7,6 +7,7 @@ from PyQt5.QtCore import Qt, QPoint, QSettings, QTimer
 from PyQt5.QtGui import QColor, QPainter, QPixmap
 
 from desktop.icon_utils import load_app_icon
+from desktop.ui_theme import pet_notify_style
 from .assets import PET_ASSET_DIRS, logger
 from .image_label import PetImageLabel
 from .ws_thread import WebSocketThread
@@ -102,16 +103,7 @@ class PetWindowBase:
         # 粉白配色气泡，显示预警消息
         # 将内容呈现到界面上
         self.notify_label = QLabel()
-        self.notify_label.setStyleSheet("""
-            QLabel {
-                background-color: rgba(255, 255, 255, 0.95);
-                border: 2px solid #fb7299;
-                border-radius: 10px;
-                padding: 10px;
-                color: #333;
-                font-size: 12px;
-            }
-        """)
+        self.notify_label.setStyleSheet(pet_notify_style())
         self.notify_label.setWordWrap(True)
         # 隐藏窗口/内容
         self.notify_label.hide()

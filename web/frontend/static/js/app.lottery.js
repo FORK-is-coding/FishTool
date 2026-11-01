@@ -142,7 +142,13 @@ function lotteryShowCancelButton(kind, visible) {
 async function cancelLotteryTask(kind) {
     const taskId = lotteryReadActiveTask(kind);
     if (!taskId) return;
-    if (!confirm('确定要取消这个任务吗？已采集的评论与用户资料会保留，下次发起时可直接复用。')) return;
+    const confirmed = await showAppConfirm('确定要取消这个任务吗？已采集的评论与用户资料会保留，下次发起时可直接复用。', {
+        title: '取消任务',
+        confirmText: '取消任务',
+        cancelText: '继续运行',
+        danger: true,
+    });
+    if (!confirmed) return;
     try {
         await apiRequest(`/lottery/tasks/${encodeURIComponent(taskId)}/cancel`, { method: 'POST' }, false);
         lotteryWriteActiveTask(kind, '');

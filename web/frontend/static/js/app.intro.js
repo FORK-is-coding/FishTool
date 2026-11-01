@@ -111,7 +111,7 @@
             '<div class="fi-step" aria-hidden="true"><span class="fi-step-no">01 / 05</span><b class="fi-step-name">BOOT</b></div>' +
             '<div class="fi-pct" aria-hidden="true"><b>0</b><small>%</small></div>' +
             '<div class="fi-caption" aria-hidden="true"></div>' +
-            '<div class="fi-meta" aria-hidden="true">ARCHIVE CASSETTE · FT-0425<br>BUILD 0.2.5</div>' +
+            '<div class="fi-meta" aria-hidden="true">ARCHIVE CASSETTE · FT-0425<br>BUILD 0.2.9</div>' +
             '<div class="fi-divider" aria-hidden="true"><div class="fi-divider-title"><span>FISHTOOL // CONSOLE</span><b>WELCOME</b></div></div>' +
             '<button type="button" class="btn btn-line-dark fi-skip">跳过 SKIP</button>';
         document.body.insertBefore(el, document.body.firstChild);

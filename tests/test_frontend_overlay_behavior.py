@@ -28,6 +28,7 @@ def test_modals_mount_through_single_entry() -> None:
     ui, lottery = _read("app.ui.js"), _read("app.lottery.js")
     assert len(re.findall(r"\bfunction mountAppModal\s*\(", ui)) == 1
     for name, src, fn in (("app.ui.js", ui, "showGroupQrModal"), ("app.ui.js", ui, "showAppAlert"),
+                          ("app.ui.js", ui, "showAppConfirm"),
                           ("app.lottery.js", lottery, "buildLotteryConfirmModal")):
         start = src.index(f"function {fn}(")
         body = src[start:src.index("\n}\n", start)]
@@ -161,6 +162,23 @@ const out = {};
   esc();
   out.lotteryEscResult = await Promise.race([p, new Promise(r => setTimeout(() => r('pending'), 50))]);
   out.lotteryAfterEsc = backdrops();
+  // 通用确认弹窗（替代原生 confirm）：点确认得 true、点取消得 false、Esc / 点遮罩 / 切页都按取消
+  const buttons = () => all(body).filter(e => e.tagName === 'BUTTON' && e.parent && e.parent.classList.contains('app-modal-actions'));
+  const race = q => Promise.race([q, new Promise(r => setTimeout(() => r('pending'), 50))]);
+  let q = ctx.showAppConfirm('sure?', { title: 'T', confirmText: 'OK', cancelText: 'NO', danger: true });
+  out.confirmMounted = backdrops();
+  out.confirmButtons = buttons().map(b => [b.textContent, b.className]);
+  out.confirmDefaultFocus = doc.activeElement && doc.activeElement.textContent;
+  buttons()[1].click();
+  out.confirmOk = await race(q); out.confirmAfterOk = backdrops();
+  q = ctx.showAppConfirm('sure?'); buttons()[0].click();
+  out.confirmCancel = await race(q);
+  q = ctx.showAppConfirm('sure?'); esc();
+  out.confirmEsc = await race(q);
+  q = ctx.showAppConfirm('sure?'); const bd = doc.querySelector('.app-modal-backdrop'); bd.dispatch('click', { target: bd });
+  out.confirmBackdrop = await race(q);
+  q = ctx.showAppConfirm('sure?'); ctx.navigateTo('comment');
+  out.confirmNavigate = await race(q); out.confirmAfterAll = backdrops();
   process.stdout.write(JSON.stringify(out));
 })().catch(e => process.stdout.write(JSON.stringify({ fatal: String(e && e.stack || e) })));
 """
@@ -184,3 +202,12 @@ def test_overlay_behavior_with_real_scripts() -> None:
     assert out["modalAfterNavigate"] == 0
     assert out["lotteryEscResult"] is False
     assert out["lotteryAfterEsc"] == 0
+    # showAppConfirm：取消在左、确认在右；默认焦点在取消；只有点确认才 resolve(true)
+    assert out["confirmMounted"] == 1
+    assert out["confirmButtons"] == [["NO", "btn btn-secondary"], ["OK", "btn btn-danger"]]
+    assert out["confirmDefaultFocus"] == "NO"
+    assert out["confirmOk"] is True and out["confirmAfterOk"] == 0
+    assert out["confirmCancel"] is False
+    assert out["confirmEsc"] is False
+    assert out["confirmBackdrop"] is False
+    assert out["confirmNavigate"] is False and out["confirmAfterAll"] == 0

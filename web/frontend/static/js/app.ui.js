@@ -178,6 +178,58 @@ function showAppAlert(message) {
     closeButton.focus();
 }
 
+/**
+ * 使用应用弹窗替代浏览器原生 confirm()。
+ * 桌面端 QtWebEngine 会把原生 confirm 渲染成 Qt 系统对话框，与面板风格不一致；改用 .app-modal 后双端一致。
+ * 按 Esc、点遮罩、切换页面或挂载新弹窗都按「取消」处理，调用方不会一直等待。
+ * @param {unknown} message 确认内容。
+ * @param {{title?: string, confirmText?: string, cancelText?: string, danger?: boolean}} [options] 标题与按钮文案。
+ * @returns {Promise<boolean>} 点「确认」为 true，其余情况为 false。
+ */
+function showAppConfirm(message, options = {}) {
+    const opts = options || {};
+    return new Promise(resolve => {
+        const backdrop = document.createElement('div');
+        backdrop.className = 'app-modal-backdrop';
+        backdrop.setAttribute('role', 'alertdialog');
+        backdrop.setAttribute('aria-modal', 'true');
+
+        const modal = document.createElement('div');
+        modal.className = 'app-modal app-confirm-modal';
+
+        const title = document.createElement('h3');
+        title.textContent = String(opts.title || '请确认');
+
+        const content = document.createElement('p');
+        content.textContent = String(message);
+
+        const actions = document.createElement('div');
+        actions.className = 'app-modal-actions';
+        const cancelButton = document.createElement('button');
+        cancelButton.type = 'button';
+        cancelButton.className = 'btn btn-secondary';
+        cancelButton.textContent = String(opts.cancelText || '取消');
+        const confirmButton = document.createElement('button');
+        confirmButton.type = 'button';
+        confirmButton.className = opts.danger ? 'btn btn-danger' : 'btn btn-primary';
+        confirmButton.textContent = String(opts.confirmText || '确定');
+        actions.append(cancelButton, confirmButton);
+
+        modal.append(title, content, actions);
+        backdrop.append(modal);
+        let result = false;
+        const close = mountAppModal(backdrop, () => resolve(result));
+        const finish = value => { result = value; close(); };
+        cancelButton.addEventListener('click', () => finish(false));
+        confirmButton.addEventListener('click', () => finish(true));
+        backdrop.addEventListener('click', event => {
+            if (event.target === backdrop) finish(false);
+        });
+        // 默认焦点放在「取消」：误按回车不会执行不可撤销的操作。
+        cancelButton.focus();
+    });
+}
+
 // ============ 高优先级错误 Toast ============
 // 后端 core.toast 通过 /ws 推送 type=toast；这里只负责展示，不反向影响业务流程。
 const APP_TOAST_TITLES = { info: '提示', warning: '注意', error: '操作失败' };

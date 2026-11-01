@@ -181,8 +181,8 @@ h3 {
     box-shadow: 1px 0 0 var(--paper-3);
 }
 
-/* Logo：只显示 32px 徽标；产品名与版本号视觉隐藏但保留给读屏。
-   保留 flex gap 10（真实内核用例抽样），隐藏的文字块占 1px 宽，左侧补 11px 让徽标居中。 */
+/* Logo：只显示「FISH / TOOL」两行宽体文字标（与设计稿 c-plus 一致）；产品名与版本号视觉隐藏但保留给读屏。
+   保留 flex gap 10（真实内核用例抽样），隐藏的文字块占 1px 宽，左侧补 11px 让文字标居中。 */
 .logo {
     display: flex;
     flex: 0 0 auto;
@@ -220,9 +220,10 @@ h3 {
     font-size: 12px;
 }
 
-/* 文字标识（阶段 2 可选）：两行宽体字母。 */
+/* 文字标识：两行宽体字母，侧栏顶部品牌标。 */
 .logo-mark {
     display: block;
+    flex: 0 0 auto;
     color: var(--ink);
     font: 800 12px/1.05 var(--f-wide);
     letter-spacing: -.02em;

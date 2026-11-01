@@ -5,7 +5,8 @@
 
 - ``-fix20261027``：PR-04/07/08/09/13/14/24/25 改动过的脚本；
 - ``-fix20261030``：本轮改动过的脚本与样式表；
-- ``-ui20261101``：前端视觉改版 PR（C+ 白色档案）改动过的脚本与全部样式表，必须是最后一段后缀。
+- ``-ui20261101``：前端视觉改版 PR（C+ 白色档案）改动过的脚本与全部样式表；
+- ``-v029ui20261101``：桌面端 UI 对齐 + v0.2.9 PR 改动过的脚本与样式表，必须是最后一段后缀。
 """
 from pathlib import Path
 import re
@@ -23,6 +24,10 @@ BUMPED_UI_1101 = {
         "style.config.css", "style.comment.css", "style.up.css", "style.modal.css", "style.responsive.css",
         "style.logviewer.css", "style.help.css", "style.hotspot.css", "style.flexgap.css",
     ),
+}
+BUMPED_V029 = {
+    "js": ("app.ui.js", "app.auth.js", "app.lottery.js", "app.intro.js"),
+    "css": ("style.base.css", "style.modal.css", "style.flexgap.css"),
 }
 
 
@@ -50,20 +55,32 @@ def test_assets_changed_in_1030_carry_bumped_version() -> None:
 
 
 def test_assets_changed_in_ui_redesign_end_with_ui_suffix() -> None:
-    """视觉改版 PR 改过的脚本与样式表都以 -ui20261101 结尾。"""
+    """视觉改版 PR 改过的脚本与样式表都带 -ui20261101；没被后续轮次改过的仍以它结尾。"""
+    later = set(BUMPED_V029["js"]) | set(BUMPED_V029["css"])
     for kind, names in BUMPED_UI_1101.items():
         versions = _versions(kind)
         for name in names:
             assert name in versions, f"index.html 未引用 {name}"
-            assert versions[name].endswith("-ui20261101"), f"{name} 版本号未更新: {versions[name]}"
+            assert "-ui20261101" in versions[name], f"{name} 版本号未更新: {versions[name]}"
+            if name not in later:
+                assert versions[name].endswith("-ui20261101"), f"{name} 版本号未更新: {versions[name]}"
+
+
+def test_assets_changed_in_v029_end_with_v029_suffix() -> None:
+    """桌面端 UI 对齐 + v0.2.9 PR 改过的脚本与样式表都以 -v029ui20261101 结尾。"""
+    for kind, names in BUMPED_V029.items():
+        versions = _versions(kind)
+        for name in names:
+            assert name in versions, f"index.html 未引用 {name}"
+            assert versions[name].endswith("-v029ui20261101"), f"{name} 版本号未更新: {versions[name]}"
 
 
 def test_each_asset_is_referenced_once() -> None:
     """每个业务脚本与样式表只引用一次，避免新旧两个版本同时加载。"""
     html = INDEX_HTML.read_text(encoding="utf-8")
     groups = (
-        ("js", BUMPED_SCRIPTS + BUMPED_1030["js"] + BUMPED_UI_1101["js"]),
-        ("css", BUMPED_1030["css"] + BUMPED_UI_1101["css"]),
+        ("js", BUMPED_SCRIPTS + BUMPED_1030["js"] + BUMPED_UI_1101["js"] + BUMPED_V029["js"]),
+        ("css", BUMPED_1030["css"] + BUMPED_UI_1101["css"] + BUMPED_V029["css"]),
     )
     for kind, names in groups:
         for name in set(names):
