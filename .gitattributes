@@ -1,0 +1,3 @@
+# Windows 批处理必须是 CRLF：LF 换行下 cmd 的 goto/call 标签定位会错位，脚本行为不可预期。
+*.bat text eol=crlf
+*.cmd text eol=crlf

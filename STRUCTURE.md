@@ -3,6 +3,7 @@
 ```
 bili_ops_toolbox/
 ├── app.py                       # 唯一启动入口（默认桌面版；app.py web 为纯 Web）
+├── start_web.bat                # Windows 一键启动 Web 版并打开浏览器（调用 app.py web）
 ├── requirements.txt             # 依赖列表
 ├── README.md                    # 项目说明
 ├── PROGRESS.md                  # 开发进度记录
