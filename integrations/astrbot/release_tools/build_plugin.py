@@ -165,6 +165,9 @@ def build(out: Path, version: str | None = None, repo_root: Path = REPO_ROOT) ->
     describe = _git(repo_root, "describe", "--tags", "--always", "--dirty")
     (out / "engine" / "VERSION").write_text(f"{commit or 'unknown'} {describe or ''}".strip() + "\n", "utf-8")
     (out / "engine_requirements.txt").write_text(build_engine_requirements(repo_root), "utf-8")
+    # 插件包内含 FishTool 引擎快照，必须随附仓库许可证；发布到插件仓库时会整树替换，
+    # 不带 LICENSE 会把目标仓库已有的许可证文件删掉。
+    shutil.copy2(repo_root / "LICENSE", out / "LICENSE")
 
     views_out = out / "views" / "console"
     transform_views(

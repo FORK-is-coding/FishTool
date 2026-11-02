@@ -17,6 +17,7 @@ from pathlib import Path
 REQUIRED_FILES = (
     "main.py",
     "README.md",
+    "LICENSE",
     "metadata.yaml",
     "_conf_schema.json",
     "requirements.txt",
@@ -92,6 +93,9 @@ def verify(root: Path, max_zip_mb: float = 16.0) -> list[str]:
     reqs = (root / "requirements.txt").read_text("utf-8") if (root / "requirements.txt").is_file() else ""
     if any(line.strip() and not line.strip().startswith("#") for line in reqs.splitlines()):
         errors.append("requirements.txt must stay empty: engine deps belong in engine_requirements.txt")
+    license_text = (root / "LICENSE").read_text("utf-8", errors="replace") if (root / "LICENSE").is_file() else ""
+    if "GNU AFFERO GENERAL PUBLIC LICENSE" not in license_text[:400]:
+        errors.append("LICENSE must be the AGPL-3.0 text copied from the FishTool repository")
     eng_text = (root / "engine_requirements.txt").read_text("utf-8") if (root / "engine_requirements.txt").is_file() else ""
     eng = "\n".join(l for l in eng_text.lower().splitlines() if l.strip() and not l.strip().startswith("#"))
     if "pyside6" in eng:
