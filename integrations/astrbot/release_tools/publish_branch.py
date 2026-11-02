@@ -38,6 +38,11 @@ from pathlib import Path
 
 logger = logging.getLogger("fishtool.publish")
 REPO_ROOT = Path(__file__).resolve().parents[3]
+#: 调用方仓库没有配置提交身份时使用（GitHub Actions 的检出仓库默认没有）。
+BOT_IDENTITY = {
+    "user.name": "github-actions[bot]",
+    "user.email": "41898282+github-actions[bot]@users.noreply.github.com",
+}
 
 
 class PublishError(RuntimeError):
@@ -78,12 +83,11 @@ def auth_config(token: str) -> tuple[list[str], list[str]]:
 
 
 def _identity(repo: Path) -> list[str]:
-    """沿用调用方仓库的提交身份（CI 中由 workflow 设置为 github-actions[bot]）。"""
+    """沿用调用方仓库的提交身份；没有配置时用 github-actions[bot]（CI 的检出仓库默认没有身份）。"""
     out = []
     for key in ("user.name", "user.email"):
-        value = git("config", key, cwd=repo, check=False).stdout.strip()
-        if value:
-            out.append(f"{key}={value}")
+        value = git("config", key, cwd=repo, check=False).stdout.strip() or BOT_IDENTITY[key]
+        out.append(f"{key}={value}")
     return out
 
 
