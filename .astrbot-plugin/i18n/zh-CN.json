@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "display_name": "FishTool B站运营工具箱",
+    "short_desc": "B站评论舆情监控、账号自诊、热点选题、抽奖筛选",
+    "desc": "FishTool 的 AstrBot 插件版。引擎以独立进程运行，控制台在插件视图中使用。"
+  },
+  "config": {
+    "engine": {
+      "description": "引擎进程",
+      "autostart": { "description": "插件启用时自动启动引擎" },
+      "python": {
+        "description": "引擎 Python 解释器",
+        "hint": "留空=用 AstrBot 当前解释器创建独立 venv。必须是 3.11 或 3.12。"
+      },
+      "pip_index_url": { "description": "pip 镜像地址（可选）" },
+      "port": { "description": "引擎端口，0=自动分配（仅监听 127.0.0.1）" },
+      "request_timeout_s": { "description": "普通请求超时（秒）" },
+      "long_request_timeout_s": { "description": "长请求超时（秒）" },
+      "block_api_key_write": { "description": "禁止 Open API Key 调用写接口与凭据接口" }
+    }
+  },
+  "views": {
+    "console": {
+      "title": "FishTool 控制台",
+      "description": "评论监控、热点发现、账号自诊、抽奖工具与配置"
+    }
+  }
+}

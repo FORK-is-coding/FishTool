@@ -1,0 +1,87 @@
+/* ===== style.responsive.css —— 响应式适配 =====
+   C+ v2：侧栏在所有宽度下都是 60px 图标栏（文字改为悬停标签），这里不再收窄侧栏；
+   版心留白 --gutter / 区块间距 --block 的断点在 style.base.css。 */
+
+/* 窄屏下采集目标、账号指标和视频明细全部改为单列，避免文字相互遮挡。 */
+@media (max-width: 768px) {
+    .monitor-target-grid,
+    .account-report-metrics {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .account-report-header {
+        flex-direction: column;
+    }
+
+    .account-video-row {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 6px;
+    }
+}
+
+/* 中屏适配：指标卡与声量列表降为两列。 */
+@media (max-width: 900px) {
+    .dashboard-metrics,
+    .voice-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+/* 窄屏适配：看板与卡片网格改为单列，标题行改为纵向排列。 */
+@media (max-width: 768px) {
+    .app-topbar > .tb-path,
+    .app-topbar > .tb-rec {
+        display: none;
+    }
+
+    .app-topbar > .tb-fill {
+        margin-left: 0;
+    }
+
+    .comment-dashboard {
+        padding: 14px;
+    }
+
+    .dashboard-header,
+    .voice-module-header {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .dashboard-chart-grid,
+    .voice-list,
+    .strategy-card-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .strategy-card:last-child {
+        grid-column: auto;
+    }
+
+    .up-summary-card {
+        grid-template-columns: 58px minmax(0, 1fr);
+    }
+
+    .up-avatar {
+        width: 58px;
+        height: 58px;
+    }
+
+    .up-summary-metrics {
+        grid-column: 1 / -1;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .chart-panel-wide {
+        grid-column: auto;
+    }
+
+    .voice-item {
+        grid-template-columns: 30px minmax(0, 1fr);
+    }
+
+    .voice-score {
+        grid-column: 2;
+        text-align: left;
+    }
+}

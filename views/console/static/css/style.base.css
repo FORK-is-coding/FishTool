@@ -1,0 +1,1626 @@
+@import url("../fonts/fonts.css");
+/* ===== style.base.css —— 全局基础：令牌 / 重置 / 侧栏 / 顶部细条 / 页头 / 章节 / 按钮 / 表单 / 状态牌 / 指标 / 卡片 / 白卡底纹 =====
+   视觉基线：C+ v2「白色档案 / 工业平面」，组件数值按终末地官网实测。
+   兼容红线（桌面端 QtWebEngine 5.15.2 = Chromium 83）：四边定位分写 top/right/bottom/left；焦点只用 :focus；
+   遮罩只写 -webkit- 前缀；新写的 flex 容器一律用 margin 做间距。
+   本文件保留的 flex gap：.logo（10）、.btn（6），兜底见 style.flexgap.css。 */
+:root {
+    color-scheme: light;
+    /* 纸面与墨色：6 级灰 */
+    --paper: #fafafa;
+    --paper-2: #f2f2f2;
+    --paper-3: #e6e6e6;
+    --rule: #d9d9d9;
+    --rule-2: #bfbfbf;
+    --ink: #191919;
+    --ink-2: #3c3c3c;
+    --ink-3: #8a8a8a;
+    --ink-4: #b3b3b3;
+    /* 深色：主按钮底色用深灰 #383838，不用纯黑 */
+    --btn: #383838;
+    --dark: #191919;
+    --dark-2: #252726;
+    --dark-rule: #35373c;
+    /* 三色段：黄只做细线 / 短条 / 渐变，全页不出现大面积纯黄 */
+    --signal: #fffa00;
+    --magenta: #ff1aac;
+    --mint: #00ffa2;
+    --tri: linear-gradient(90deg, var(--magenta) 0 84px, var(--mint) 84px 168px, var(--signal) 168px);
+    /* 状态色 */
+    --ok: #1f9d6a;
+    --warn: #e08a00;
+    --danger: #e0362c;
+    --info: #2d5bd8;
+    /* 圆角与阴影 */
+    --r-btn: 2px;
+    --r-card: 4px;
+    --shadow-card: 0 0 4px rgba(0, 0, 0, .14);
+    --shadow-round: 0 0 5px rgba(2, 2, 2, .3);
+    /* 字体：标题 Archivo Expanded，数字 Outfit，等宽 JetBrains Mono，中文 HarmonyOS Sans SC / MiSans，回退微软雅黑 */
+    --f-wide: "Archivo Expanded", "Archivo", "Outfit", "HarmonyOS Sans SC", "Microsoft YaHei UI", sans-serif;
+    --f-en: "Outfit", "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei UI", sans-serif;
+    --f-body: "HarmonyOS Sans SC", "MiSans", "Source Han Sans SC", "Noto Sans SC", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+    --f-mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+    /* 缓动与布局 */
+    --ease: cubic-bezier(.16, 1, .3, 1);
+    --snap: cubic-bezier(.7, 0, .2, 1);
+    --side: 60px;
+    --gutter: 64px;
+    --block: 96px;
+    /* 旧令牌：变量名不变，映射到新值；各页样式里的 var() 与 JS 的 cssVar('--primary-color') 直接读取 */
+    --primary-color: #383838;
+    --secondary-color: #3c3c3c;
+    --accent-color: #fffa00;  /* 只用于细线、短条，不做大面积底色 */
+    --bg-primary: #fafafa;
+    --bg-secondary: #ffffff;
+    --bg-tertiary: #f2f2f2;
+    --bg-elevated: #ffffff;
+    --text-primary: #191919;
+    --text-secondary: #8a8a8a;
+    --text-muted: #b3b3b3;
+    --border-color: #d9d9d9;
+    --success-color: #1f9d6a;
+    --warning-color: #e08a00;
+    --danger-color: #e0362c;
+    --primary-soft: rgba(56, 56, 56, .08);
+    --primary-border-hover: #8a8a8a;
+    --card-radius: 4px;
+    --inner-radius: 2px;
+    --control-radius: 2px;
+    --modal-radius: 4px;
+    --shadow: 0 0 4px rgba(0, 0, 0, .14);
+    --shadow-hover: 0 6px 22px rgba(0, 0, 0, .10);
+    --glow-color: rgba(25, 25, 25, .10);
+}
+
+/* 注册 CSS 变量 --x / --y：app.ui.js 的 bindGlowCards 写入光标坐标，供卡片光晕定位并支持过渡。 */
+@property --x {
+    syntax: "<length-percentage>";
+    initial-value: 50%;
+    inherits: true;
+}
+
+@property --y {
+    syntax: "<length-percentage>";
+    initial-value: 50%;
+    inherits: true;
+}
+
+/* 全局重置：清除默认内外边距，统一 border-box。 */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html,
+body {
+    height: 100%;
+}
+
+/* 全局字体与底色：纸面 #fafafa + 墨色 #191919，数字等宽对齐。 */
+body {
+    font-family: var(--f-body);
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--ink);
+    background-color: var(--paper);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "tnum" 1;
+}
+
+a {
+    color: inherit;
+}
+
+button {
+    font: inherit;
+}
+
+/* 线性图标（阶段 2 换成内联 SVG）：方头线条、跟随文字色。 */
+.sidebar svg,
+.btn svg,
+.round-btn svg,
+.sup-art svg {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: square;
+    stroke-linejoin: miter;
+}
+
+/* 通用标题：去掉旧主题色，统一墨色粗体。 */
+h1 {
+    color: var(--ink);
+    font-weight: 800;
+    line-height: 1.15;
+}
+
+h2 {
+    margin-bottom: 20px;
+    color: var(--ink);
+    font-size: 22px;
+    font-weight: 800;
+    line-height: 1.3;
+}
+
+h3 {
+    color: var(--ink);
+}
+
+/* 辅助文字：JS 模板里的占位提示（“加载中…”“暂无…”）。 */
+.text-muted {
+    color: var(--ink-3);
+    font-size: 13px;
+}
+
+/* 整体布局容器：占满视口，滚动交给右侧主内容区。 */
+.container {
+    position: relative;
+    display: flex;
+    width: 100%;
+    height: 100vh;
+    overflow: hidden;
+}
+
+/* ---------------- 侧栏：60px 白色窄栏 ---------------- */
+.sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: var(--side);
+    background: #fff;
+    box-shadow: 1px 0 0 var(--paper-3);
+}
+
+/* Logo：只显示「FISH / TOOL」两行宽体文字标（与设计稿 c-plus 一致）；产品名与版本号视觉隐藏但保留给读屏。
+   保留 flex gap 10（真实内核用例抽样），隐藏的文字块占 1px 宽，左侧补 11px 让文字标居中。 */
+.logo {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    padding: 16px 0 14px 11px;
+    color: var(--ink);
+    text-decoration: none;
+}
+
+.logo-badge {
+    display: block;
+    flex: 0 0 32px;
+    width: 32px;
+    height: 32px;
+    object-fit: contain;
+    border-radius: var(--r-btn);
+}
+
+.logo-copy {
+    flex: 0 0 1px;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    white-space: nowrap;
+    -webkit-clip-path: inset(50%);
+    clip-path: inset(50%);
+}
+
+.logo-copy h2,
+.logo-version {
+    margin: 0;
+    font-size: 12px;
+}
+
+/* 文字标识：两行宽体字母，侧栏顶部品牌标。 */
+.logo-mark {
+    display: block;
+    flex: 0 0 auto;
+    color: var(--ink);
+    font: 800 12px/1.05 var(--f-wide);
+    letter-spacing: -.02em;
+    text-align: center;
+}
+/* 导航：激活块与图标同处 .nav-menu 坐标系。 */
+.nav-menu {
+    position: relative;
+    flex: 1 1 auto;
+    width: 100%;
+    margin-top: 18px;
+    padding: 0;
+}
+
+.nav-item {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 40px;
+    margin-bottom: 8px;
+    color: var(--ink-4);
+    text-decoration: none;
+    transition: color .2s;
+}
+
+.nav-item:last-of-type {
+    margin-bottom: 0;
+}
+
+.nav-item:hover,
+.nav-item.active {
+    color: var(--ink);
+}
+
+/* 图标：现为 emoji（灰度化），阶段 2 换成 20px 内联 SVG。 */
+.nav-item .icon {
+    display: block;
+    width: 20px;
+    height: 20px;
+    margin: 0;
+    font-size: 17px;
+    line-height: 20px;
+    text-align: center;
+    -webkit-filter: grayscale(1);
+    filter: grayscale(1);
+}
+
+.nav-item .icon svg {
+    display: block;
+}
+
+/* 激活块 52x40：#e6e6e6 底 + 左侧 6px 深色竖条；JS 以 top:0 + translateY(item.offsetTop) 移动。 */
+.nav-indicator {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 0;
+    width: 52px;
+    height: 40px;
+    background: var(--paper-3);
+    border-left: 6px solid var(--ink);
+    border-radius: 0 2px 2px 0;
+    transition: transform .45s var(--ease);
+}
+
+/* 兜底激活块：页面还没有 .nav-indicator 时，由激活项自身画同样的块；有了指示块就关掉。 */
+.nav-item.active::before {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: -1;
+    width: 52px;
+    height: 40px;
+    content: "";
+    background: var(--paper-3);
+    border-left: 6px solid var(--ink);
+    border-radius: 0 2px 2px 0;
+    box-sizing: border-box;
+}
+
+.nav-indicator ~ .nav-item.active::before {
+    content: none;
+}
+
+/* 悬停标签：深灰小牌 + 左侧黄色短竖条；兼容现有的无类名文字 span。 */
+.nav-label,
+.nav-item > span:not(.icon) {
+    position: absolute;
+    top: 50%;
+    left: calc(100% - 4px);
+    z-index: 5;
+    padding: 7px 12px 7px 10px;
+    white-space: nowrap;
+    color: #eee;
+    background: var(--btn);
+    border-radius: 2px;
+    box-shadow: var(--shadow-card);
+    font: 600 12px/1 var(--f-body);
+    letter-spacing: .04em;
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-6px, -50%);
+    transition: opacity .18s, transform .25s var(--ease);
+}
+
+.nav-label::before,
+.nav-item > span:not(.icon)::before {
+    position: absolute;
+    top: 6px;
+    bottom: 6px;
+    left: 0;
+    width: 3px;
+    content: "";
+    background: var(--signal);
+}
+
+.nav-label b {
+    margin-left: 10px;
+    color: var(--ink-4);
+    font: 500 10px/1 var(--f-mono);
+}
+
+.nav-item:hover .nav-label,
+.nav-item:hover > span:not(.icon) {
+    opacity: 1;
+    transform: translate(0, -50%);
+}
+
+/* 工具胶囊：30px 宽、#f2f2f2、15px 圆角，内放系统状态点。 */
+.side-capsule {
+    flex: 0 0 auto;
+    width: 30px;
+    margin-bottom: 12px;
+    padding: 8px 0;
+    border-radius: 15px;
+    background: var(--paper-2);
+}
+
+.cap-item {
+    display: block;
+    height: 22px;
+}
+
+.cap-item .dot,
+.dot {
+    display: block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--ink-4);
+}
+
+.cap-item .dot {
+    margin: 8px auto;
+}
+
+.dot.is-ok {
+    background: var(--ok);
+}
+
+.dot.is-warn {
+    background: var(--warn);
+}
+
+.dot.is-error {
+    background: var(--danger);
+}
+
+/* 侧栏主操作：#191919 + 细斜纹 + 白色 30% 分隔线 + 4px 圆角。 */
+.side-cta {
+    position: relative;
+    display: block;
+    flex: 0 0 auto;
+    width: 36px;
+    margin-bottom: 10px;
+    padding: 10px 0 9px;
+    overflow: hidden;
+    color: #fff;
+    text-align: center;
+    text-decoration: none;
+    border-radius: 4px;
+    background: #191919 url("../tex/hatch-dark.svg");
+    font: 600 10px/1.3 var(--f-body);
+    transition: background-color .2s;
+}
+
+.side-cta svg {
+    display: block;
+    width: 16px;
+    height: 14px;
+    margin: 0 auto;
+    color: var(--signal);
+}
+
+.cta-rule {
+    display: block;
+    width: 24px;
+    height: 2px;
+    margin: 9px auto 8px;
+    background: rgba(255, 255, 255, .3);
+}
+
+.side-cta:hover {
+    background-color: #383838;
+}
+
+.side-ver {
+    flex: 0 0 auto;
+    margin-bottom: 14px;
+    color: var(--ink-4);
+    font: 500 9px/1 var(--f-mono);
+    letter-spacing: .04em;
+}
+
+/* ---------------- 主区 / 顶部细条 ---------------- */
+.main-content {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 100vh;
+    margin-left: var(--side);
+    padding: 0;
+    overflow-y: auto;
+}
+
+.main-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.main-content::-webkit-scrollbar-thumb {
+    background: var(--rule-2);
+    border-radius: 3px;
+}
+
+/* 顶部细条：等宽小字 + 虚线填充，吸顶。 */
+.app-topbar {
+    position: -webkit-sticky;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    height: 36px;
+    padding: 0 var(--gutter);
+    color: var(--ink-3);
+    background: rgba(250, 250, 250, .94);
+    font: 500 11px/1 var(--f-mono);
+    letter-spacing: .06em;
+}
+
+.app-topbar > * + * {
+    margin-left: 18px;
+}
+
+.tb-rec b,
+.tb-path b,
+.tb-page b {
+    color: var(--ink);
+}
+
+.tb-fill {
+    flex: 1 1 auto;
+    height: 1px;
+    background: repeating-linear-gradient(90deg, var(--rule-2) 0 2px, transparent 2px 6px);
+}
+
+.tb-clock {
+    color: var(--ink-2);
+}
+
+/* ---------------- 页面容器：默认隐藏，激活页显示并逐块上浮入场 ---------------- */
+/* 不设 z-index：抽屉（position:fixed，z-index 41）要压过吸顶细条和侧栏。 */
+.page {
+    position: relative;
+    display: none;
+    padding: 0 var(--gutter) var(--block);
+}
+
+.page.active {
+    display: block;
+}
+
+/* 入场动画只给页面内容块；浮层（抽屉 / 遮罩）不参与，否则 transform 会顶掉抽屉的收起位移。 */
+.page.active > :not(.hotspot-drawer):not(.hotspot-drawer-mask) {
+    animation: rise .7s var(--ease) both;
+}
+
+.page.active > :nth-child(2) { animation-delay: .07s; }
+.page.active > :nth-child(3) { animation-delay: .14s; }
+.page.active > :nth-child(4) { animation-delay: .21s; }
+.page.active > :nth-child(5) { animation-delay: .28s; }
+
+@keyframes rise {
+    from { opacity: 0; transform: translateY(18px); }
+    to { opacity: 1; transform: none; }
+}
+/* ---------------- 子页页头：大号细体编号 + 章节标签 + 标题 + 斜纹空心大字；底部三色段线 ---------------- */
+.page-head {
+    position: relative;
+    z-index: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    margin-bottom: 8px;
+    padding: 56px 0 32px;
+}
+
+.ph-no {
+    margin-right: 24px;
+    color: var(--ink);
+    font: 300 80px/.8 var(--f-en);
+    letter-spacing: -.04em;
+}
+
+.ph-title h1 {
+    margin: 12px 0 0;
+    color: var(--ink);
+    font: 800 36px/1 var(--f-body);
+    letter-spacing: .02em;
+}
+
+.page-head .subtitle {
+    flex: 1 1 100%;
+    max-width: 760px;
+    margin-top: 20px;
+    color: var(--ink-3);
+    font-size: 13px;
+}
+
+.ph-hollow {
+    position: absolute;
+    top: 26px;
+    right: -8px;
+    z-index: -1;
+    white-space: nowrap;
+    color: transparent;
+    font: 800 132px/1 var(--f-wide);
+    letter-spacing: -.06em;
+    -webkit-text-stroke: 1px rgba(25, 25, 25, .08);
+    background: repeating-linear-gradient(-45deg, rgba(25, 25, 25, .10) 0 1px, transparent 1px 5px);
+    -webkit-background-clip: text;
+    background-clip: text;
+    pointer-events: none;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.page-head::after {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    height: 2px;
+    content: "";
+    background: var(--tri);
+    -webkit-mask-image: linear-gradient(90deg, #000 30%, transparent 75%);
+}
+
+/* 旧页头（阶段 2 换成 .page-head 之前）：.page > h1 + .subtitle 用同一套视觉——灰色标签块 + 粗标题 + 三色段线。 */
+.page > h1 {
+    position: relative;
+    margin: 0 0 32px;
+    padding: 56px 0 28px;
+    color: var(--ink);
+    font: 800 36px/1.1 var(--f-body);
+    letter-spacing: .02em;
+}
+
+.page > h1::before {
+    display: block;
+    width: 52px;
+    height: 16px;
+    margin-bottom: 16px;
+    content: "";
+    border-radius: 1px;
+    /* 色块内的右向箭头：上下两片半格渐变拼成三角，::after 留给底部三色段线 */
+    background:
+        linear-gradient(to top right, var(--ink) 50%, transparent 50%) 6px 4px / 6px 4px no-repeat,
+        linear-gradient(to bottom right, var(--ink) 50%, transparent 50%) 6px 8px / 6px 4px no-repeat,
+        var(--rule);
+}
+
+.page > h1::after {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    height: 2px;
+    content: "";
+    background: var(--tri);
+    -webkit-mask-image: linear-gradient(90deg, #000 30%, transparent 75%);
+}
+
+.page > .subtitle,
+.page > h1 + .subtitle {
+    max-width: 760px;
+    margin: -16px 0 32px;
+    color: var(--ink-3);
+    font-size: 13px;
+}
+
+/* 通用副标题：说明性灰字。 */
+.subtitle {
+    color: var(--ink-3);
+    font-size: 13px;
+    line-height: 1.7;
+}
+
+/* ---------------- 章节头：52x16 灰色色块 + 英文小写 + 中文粗标题 ---------------- */
+.chapter {
+    position: relative;
+    margin-top: var(--block);
+}
+
+.chapter-head {
+    position: relative;
+    z-index: 0;
+    display: flex;
+    align-items: flex-end;
+    margin-bottom: 40px;
+    padding-top: 24px;
+}
+
+.chapter-head > h2 + * {
+    margin-left: 18px;
+}
+
+.chapter-head .ch-tag {
+    position: absolute;
+    top: 0;
+    left: 0;
+}
+
+.chapter-head h2 {
+    margin: 4px 0 0;
+    color: var(--ink);
+    font: 800 24px/1.1 var(--f-body);
+    letter-spacing: .02em;
+}
+
+.ch-tag {
+    position: relative;
+    display: inline-block;
+    height: 16px;
+    padding-left: 60px;
+    color: var(--ink);
+    font: 500 16px/16px var(--f-en);
+    letter-spacing: .01em;
+    text-transform: lowercase;
+}
+
+.ch-tag::before {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 52px;
+    height: 16px;
+    content: "";
+    border-radius: 1px;
+    background: var(--rule);
+}
+
+/* 色块内的箭头 */
+.ch-tag::after {
+    position: absolute;
+    top: 4px;
+    left: 6px;
+    width: 0;
+    height: 0;
+    content: "";
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    border-left: 6px solid var(--ink);
+}
+
+.ch-count {
+    margin-left: auto !important;
+    color: var(--ink-3);
+    font: 500 11px/1 var(--f-mono);
+    letter-spacing: .08em;
+}
+
+.ch-hollow {
+    position: absolute;
+    right: 0;
+    bottom: -18px;
+    z-index: -1;
+    white-space: nowrap;
+    color: transparent;
+    font: 800 96px/1 var(--f-wide);
+    letter-spacing: -.05em;
+    -webkit-text-stroke: 1px rgba(25, 25, 25, .07);
+    background: repeating-linear-gradient(-45deg, rgba(25, 25, 25, .08) 0 1px, transparent 1px 5px);
+    -webkit-background-clip: text;
+    background-clip: text;
+    pointer-events: none;
+}
+
+/* 区块分隔：2px 三色段线，右侧淡出。 */
+.tri-line {
+    display: block;
+    height: 2px;
+    margin: 0 calc(var(--gutter) * -1);
+    background: var(--tri);
+    -webkit-mask-image: linear-gradient(90deg, #000 40%, transparent 85%);
+}
+
+/* 双栏 / 分页行（grid gap 在 Chromium 83 可用） */
+.split {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-gap: 24px;
+}
+
+.split > .chapter {
+    margin-top: var(--block);
+}
+
+.pager-row {
+    display: flex;
+    align-items: center;
+    margin-top: 32px;
+}
+
+.pager-row .btn {
+    margin-left: 30px;
+}
+/* ---------------- 按钮：2px 圆角，高 36px ----------------
+   基础 .btn 即次按钮外观（浅灰底 + 颗粒纹理 + 细边）；.btn-primary 叠三层：#383838 底 + 斜向排线 + 左侧 6px 黄色短竖条。
+   保留原有 flex gap 6（图标与文字之间），兜底见 style.flexgap.css。 */
+.btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 36px;
+    min-width: 0;
+    padding: 8px 18px;
+    overflow: hidden;
+    color: var(--ink-2);
+    text-align: center;
+    text-decoration: none;
+    vertical-align: middle;
+    border: 0;
+    border-radius: var(--r-btn);
+    background: var(--paper-2) url("../tex/grain.svg");
+    box-shadow: inset 0 0 0 1px var(--rule);
+    cursor: pointer;
+    font: 500 14px/1.2 var(--f-body);
+    letter-spacing: .06em;
+    transition: background-color .2s, color .2s, box-shadow .2s, transform .1s;
+}
+
+.btn:hover {
+    color: var(--ink);
+    box-shadow: inset 0 0 0 1px var(--ink-3);
+}
+
+.btn:active {
+    transform: translateY(1px);
+}
+
+.btn + .btn {
+    margin-left: 10px;
+}
+
+.btn:disabled,
+.btn.is-disabled,
+.btn[aria-disabled="true"] {
+    color: var(--ink-4);
+    cursor: not-allowed;
+    opacity: .6;
+    transform: none;
+}
+
+/* 主按钮 */
+.btn-primary {
+    min-width: 120px;
+    padding: 8px 24px 8px 28px;
+    color: #eee;
+    background: var(--btn) url("../tex/btn-hatch.svg") right center / auto 100% no-repeat;
+    box-shadow: none;
+}
+
+.btn-primary::after {
+    position: absolute;
+    top: 8px;
+    bottom: 8px;
+    left: 4px;
+    width: 6px;
+    content: "";
+    background: var(--signal);
+    transition: width .3s var(--ease);
+}
+
+.btn-primary:hover {
+    color: #fff;
+    background-color: #2a2a2a;
+    box-shadow: none;
+}
+
+.btn-primary:hover::after {
+    width: 10px;
+}
+
+.btn-primary:disabled,
+.btn-primary.is-disabled {
+    color: #b3b3b3;
+    background-color: #5a5a5a;
+}
+
+.btn-primary:disabled::after,
+.btn-primary.is-disabled::after {
+    width: 6px;
+    background: #8a8a8a;
+}
+
+/* 次按钮：.btn-secondary 与 .btn-line 同一外观；.btn-line 悬停转危险色（用于“清除登录态”这类操作）。 */
+.btn-secondary,
+.btn-line {
+    min-width: 0;
+    padding: 8px 18px;
+    color: var(--ink-2);
+    background: var(--paper-2) url("../tex/grain.svg");
+    box-shadow: inset 0 0 0 1px var(--rule);
+}
+
+.btn-secondary:hover {
+    color: var(--ink);
+    box-shadow: inset 0 0 0 1px var(--ink-3);
+}
+
+.btn-line:hover {
+    color: var(--danger);
+    box-shadow: inset 0 0 0 1px var(--danger);
+}
+
+/* 危险按钮：浅底 + 危险色细框，悬停实底，不做大面积红块。 */
+.btn-danger {
+    color: var(--danger);
+    background: #fff;
+    box-shadow: inset 0 0 0 1px rgba(224, 54, 44, .45);
+}
+
+.btn-danger:hover {
+    color: #fff;
+    background: var(--danger);
+    box-shadow: none;
+}
+
+/* 深色面板上的按钮：主按钮改浅底深字，避免黑上叠黑。 */
+.btn-on-dark {
+    color: var(--ink);
+    background-color: #fafafa;
+    background-image: none;
+}
+
+.btn-on-dark::before {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 60%;
+    content: "";
+    background: url("../tex/btn-hatch.svg") right center / auto 100% no-repeat;
+    -webkit-filter: invert(1);
+    filter: invert(1);
+    opacity: .5;
+}
+
+.btn-on-dark:hover {
+    color: var(--ink);
+    background-color: #fff;
+}
+
+.btn-line-dark {
+    min-width: 0;
+    padding: 8px 18px;
+    color: #d9d9d9;
+    background: rgba(255, 255, 255, .04);
+    box-shadow: inset 0 0 0 1px var(--dark-rule);
+}
+
+.btn-line-dark:hover {
+    color: #fff;
+    box-shadow: inset 0 0 0 1px #8a8a8a;
+}
+
+.btn-sm {
+    min-height: 28px;
+    min-width: 0;
+    padding: 5px 12px;
+    font-size: 12px;
+}
+
+.btn-sm.btn-primary {
+    padding: 5px 14px 5px 20px;
+}
+
+.btn-sm.btn-primary::after {
+    top: 7px;
+    bottom: 7px;
+    width: 4px;
+}
+
+/* 圆钮：#fafafa + 颗粒纹理 + 双环 + 阴影 */
+.round-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 37px;
+    height: 37px;
+    color: var(--ink-2);
+    border: 0;
+    border-radius: 50%;
+    background: #fafafa url("../tex/grain.svg");
+    box-shadow: var(--shadow-round), inset 0 0 0 2.6px var(--paper-3), inset 0 0 0 4.6px #fff;
+    cursor: pointer;
+    transition: color .2s, box-shadow .2s;
+}
+
+.round-btn svg {
+    width: 16px;
+    height: 16px;
+}
+
+.round-btn:hover {
+    color: var(--ink);
+    box-shadow: var(--shadow-round), inset 0 0 0 2.6px var(--ink-4), inset 0 0 0 4.6px #fff;
+}
+
+.round-btn:disabled {
+    color: var(--ink-4);
+    cursor: not-allowed;
+}
+
+.round-btn + .round-btn {
+    margin-left: 30px;
+}
+
+/* ---------------- 表单：标签 + 控件，控件 36px 高、2px 圆角、内描边 ---------------- */
+.form-group {
+    margin-bottom: 18px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--ink-2);
+    font: 600 12px/1.4 var(--f-body);
+    letter-spacing: .06em;
+}
+
+.form-group small {
+    display: block;
+    margin-top: 6px;
+    color: var(--ink-3);
+    font: 500 11px/1.5 var(--f-mono);
+}
+
+.form-control {
+    width: 100%;
+    max-width: 500px;
+    height: 36px;
+    padding: 0 12px;
+    color: var(--ink);
+    border: 0;
+    border-radius: var(--r-btn);
+    background-color: #fff;
+    box-shadow: inset 0 0 0 1px var(--rule);
+    font: 14px var(--f-body);
+    outline: none;
+    transition: box-shadow .18s;
+}
+
+.form-control::-webkit-input-placeholder {
+    color: var(--ink-4);
+}
+
+.form-control::placeholder {
+    color: var(--ink-4);
+}
+
+.form-control:focus {
+    outline: none;
+    box-shadow: inset 0 0 0 1px var(--ink-2), inset 3px 0 0 var(--signal);
+}
+
+.form-control:disabled {
+    color: var(--ink-4);
+    background-color: var(--paper-2);
+    cursor: not-allowed;
+}
+
+select.form-control {
+    -webkit-appearance: none;
+    appearance: none;
+    padding-right: 30px;
+    background-image: linear-gradient(45deg, transparent 50%, var(--ink-2) 50%);
+    background-repeat: no-repeat;
+    background-position: calc(100% - 14px) 15px;
+    background-size: 5px 5px;
+}
+
+textarea.form-control {
+    height: auto;
+    padding: 10px 12px;
+    line-height: 1.6;
+    resize: vertical;
+}
+
+.form-control.mono {
+    font-family: var(--f-mono);
+    font-size: 13px;
+}
+
+.form-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    grid-gap: 18px;
+    margin-bottom: 18px;
+}
+
+.form-row .form-group {
+    margin-bottom: 0;
+}
+
+.field-note {
+    display: block;
+    margin-top: 8px;
+    color: var(--ink-3);
+    font: 500 11px/1.5 var(--f-mono);
+    letter-spacing: .02em;
+}
+
+/* 原生复选框：方形 2px 圆角，勾选为深灰底 + 黄色对勾（Chromium 83 无 accent-color，用 appearance:none 自绘）。 */
+input[type="checkbox"] {
+    -webkit-appearance: none;
+    appearance: none;
+    display: inline-block;
+    flex: 0 0 16px;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    vertical-align: -3px;
+    border: 0;
+    border-radius: 2px;
+    background: #fff no-repeat center / 10px 10px;
+    box-shadow: inset 0 0 0 1px var(--rule-2);
+    cursor: pointer;
+    transition: background-color .15s, box-shadow .15s;
+}
+
+input[type="checkbox"]:checked {
+    background-color: var(--btn);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M1.5 5.2 4 7.6 8.6 2.4' fill='none' stroke='%23fffa00' stroke-width='1.8'/%3E%3C/svg%3E");
+    box-shadow: none;
+}
+
+input[type="checkbox"]:focus {
+    outline: none;
+    box-shadow: inset 0 0 0 1px var(--ink-2);
+}
+
+input[type="checkbox"]:checked:focus {
+    box-shadow: 0 0 0 2px rgba(56, 56, 56, .18);
+}
+
+input[type="checkbox"]:disabled {
+    background-color: var(--paper-2);
+    box-shadow: inset 0 0 0 1px var(--paper-3);
+    cursor: not-allowed;
+}
+
+/* 标签内的复选框后紧跟文本节点：给复选框右侧留 8px。 */
+.form-group label > input[type="checkbox"] {
+    margin-right: 8px;
+}
+
+/* 深色面板（日志工具栏、常驻监控）上的复选框：近黑底 + 暗色细框，勾选为浅底深色对勾。 */
+.logs-toolbar input[type="checkbox"],
+.resident-monitor-card input[type="checkbox"] {
+    background-color: #111;
+    box-shadow: inset 0 0 0 1px var(--dark-rule);
+}
+
+.logs-toolbar input[type="checkbox"]:checked,
+.resident-monitor-card input[type="checkbox"]:checked {
+    background-color: #fafafa;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M1.5 5.2 4 7.6 8.6 2.4' fill='none' stroke='%23191919' stroke-width='1.8'/%3E%3C/svg%3E");
+    box-shadow: none;
+}
+
+/* 自定义复选框组件（阶段 2 可选）：<label class="check"><input><i></i><span>文字</span></label> */
+.check {
+    display: inline-flex;
+    align-items: center;
+    color: var(--ink-2);
+    cursor: pointer;
+    font: 500 13px/1.3 var(--f-body);
+}
+
+.check input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.check i {
+    position: relative;
+    flex: 0 0 16px;
+    width: 16px;
+    height: 16px;
+    margin-right: 10px;
+    border-radius: 2px;
+    background: #fff;
+    box-shadow: inset 0 0 0 1px var(--rule-2);
+    transition: background-color .15s, box-shadow .15s;
+}
+
+.check input:checked + i {
+    background: var(--btn);
+    box-shadow: none;
+}
+
+.check input:checked + i::after {
+    position: absolute;
+    top: 2px;
+    left: 5px;
+    width: 4px;
+    height: 8px;
+    content: "";
+    border: solid var(--signal);
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+}
+
+.check input:disabled + i {
+    background: var(--paper-2);
+    box-shadow: inset 0 0 0 1px var(--paper-3);
+}
+
+.check input:disabled ~ * {
+    color: var(--ink-4);
+}
+
+.check-row {
+    display: flex;
+    flex-wrap: wrap;
+    margin: -6px -14px 0;
+}
+
+.check-row .check {
+    margin: 6px 14px;
+}
+
+code {
+    padding: 1px 6px;
+    color: var(--ink);
+    border-radius: 2px;
+    background: var(--paper-2);
+    font: 500 12px/1.4 var(--f-mono);
+}
+
+/* ---------------- 状态牌：细线框 + 圆点，状态色只在文字与圆点，不铺底色 ----------------
+   .auth-status-badge 的状态由阶段 2 的 JS 加 .is-ok / .is-warn / .is-error。 */
+.auth-status-badge {
+    display: inline-flex;
+    align-items: center;
+    height: 24px;
+    padding: 0 10px;
+    color: var(--ink-3);
+    border-radius: 12px;
+    background: transparent;
+    box-shadow: inset 0 0 0 1px currentColor;
+    font: 600 11px/1 var(--f-mono);
+    letter-spacing: .08em;
+    white-space: nowrap;
+}
+
+.auth-status-badge::before {
+    flex: 0 0 6px;
+    width: 6px;
+    height: 6px;
+    margin-right: 8px;
+    content: "";
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.auth-status-badge.is-ok { color: var(--ok); }
+.auth-status-badge.is-warn { color: var(--warn); }
+.auth-status-badge.is-error { color: var(--danger); }
+
+/* 通用标签胶囊 / 深色面板徽标 */
+.tag-pill {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 10px;
+    color: var(--ink-2);
+    border-radius: 11px;
+    box-shadow: inset 0 0 0 1px var(--rule);
+    font: 600 11px/1 var(--f-body);
+    letter-spacing: .06em;
+}
+
+.tag-pill.is-ok { color: var(--ok); box-shadow: inset 0 0 0 1px rgba(31, 157, 106, .45); }
+.tag-pill.is-warn { color: var(--warn); box-shadow: inset 0 0 0 1px rgba(224, 138, 0, .45); }
+.tag-pill.is-error { color: var(--danger); box-shadow: inset 0 0 0 1px rgba(224, 54, 44, .45); }
+
+.chapter-head .tag-pill {
+    margin-bottom: 2px;
+    margin-left: auto !important;
+}
+
+.pd-badge {
+    display: inline-flex;
+    align-items: center;
+    height: 24px;
+    padding: 0 10px;
+    color: #8a8a8a;
+    border-radius: 2px;
+    box-shadow: inset 0 0 0 1px var(--dark-rule);
+    font: 600 11px/1 var(--f-mono);
+    letter-spacing: .08em;
+}
+/* ---------------- 指标行：白卡 + 4px 圆角 + 阴影，卡间留缝 ---------------- */
+.stat-row {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-gap: 18px;
+    margin-top: 48px;
+}
+
+.stat-cell {
+    position: relative;
+    overflow: hidden;
+    padding: 22px 24px 20px;
+    border-radius: var(--r-card);
+    box-shadow: var(--shadow-card);
+}
+
+.stat-cell em {
+    display: block;
+    color: var(--ink-3);
+    font: normal 500 10px/1 var(--f-mono);
+    letter-spacing: .14em;
+}
+
+.stat-cell strong {
+    display: block;
+    margin: 14px 0 6px;
+    color: var(--ink);
+    font: 300 44px/1 var(--f-en);
+    letter-spacing: -.03em;
+}
+
+.stat-cell span {
+    color: var(--ink-2);
+    font-size: 12px;
+}
+
+/* 强调卡：顶部 2px 三色段 + 右下排线（不铺黄） */
+.stat-cell.is-accent::before {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    height: 2px;
+    content: "";
+    background: var(--tri);
+}
+
+.stat-cell.is-accent::after {
+    position: absolute;
+    right: 16px;
+    bottom: 16px;
+    width: 35px;
+    height: 4px;
+    content: "";
+    background: repeating-linear-gradient(90deg, var(--ink-4) 0 8px, transparent 8px 12px);
+}
+
+.stat-cell.is-accent strong {
+    font-weight: 500;
+}
+
+/* ---------------- 通用区块 .section：白卡 + 4px 圆角 + 轻阴影 ----------------
+   isolation / overflow 与鼠标光晕由 style.modal.css 的共享卡片规则提供。 */
+.section {
+    margin-bottom: 24px;
+    padding: 28px 30px 30px;
+    border: 0;
+    border-radius: var(--r-card);
+    box-shadow: var(--shadow-card);
+}
+
+/* 区块标题：左侧 3px 深灰短条 + 中文粗标题（只作用于直接子级，嵌套在各页标题行里的 h2 由各页样式决定） */
+.section > h2 {
+    position: relative;
+    margin: 0 0 20px;
+    padding-left: 14px;
+    color: var(--ink);
+    font: 800 20px/1.25 var(--f-body);
+    letter-spacing: .02em;
+}
+
+.section > h2::before {
+    position: absolute;
+    top: 3px;
+    bottom: 3px;
+    left: 0;
+    width: 3px;
+    content: "";
+    background: var(--btn);
+}
+
+.section > .subtitle {
+    margin: -12px 0 18px;
+}
+
+/* 表单底板（阶段 2 可选）：与 .section 同一构成 */
+.sheet {
+    position: relative;
+    padding: 26px 28px 24px;
+    overflow: hidden;
+    border-radius: var(--r-card);
+    box-shadow: var(--shadow-card);
+}
+
+.sheet-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-top: 22px;
+    padding-top: 20px;
+    box-shadow: 0 -1px 0 var(--paper-3);
+}
+
+.sheet-actions .field-note {
+    margin-left: 16px;
+}
+
+/* ---------------- 卡片：白底 + 4px 圆角 + 轻阴影；底边三色段悬停展开 ---------------- */
+.cards {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-gap: 24px;
+}
+
+.card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-height: 232px;
+    padding: 24px 26px 26px;
+    overflow: hidden;
+    text-align: left;
+    border: 0;
+    border-radius: var(--r-card);
+    box-shadow: var(--shadow-card);
+    transition: box-shadow .3s var(--ease), transform .3s var(--ease);
+}
+
+.card::after {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    content: "";
+    background: var(--tri);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform .45s var(--ease);
+}
+
+.card:hover {
+    box-shadow: var(--shadow-hover);
+    transform: translateY(-3px);
+}
+
+.card:hover::after {
+    transform: scaleX(1);
+}
+
+.card-top {
+    position: relative;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+}
+
+.card-no {
+    color: var(--ink);
+    font: 300 44px/1 var(--f-en);
+    letter-spacing: -.03em;
+}
+
+.card-en {
+    color: var(--ink-4);
+    font: 600 10px/1 var(--f-wide);
+    letter-spacing: .2em;
+}
+
+.card h3 {
+    margin-top: 28px;
+    color: var(--ink);
+    font: 800 18px/1.3 var(--f-body);
+}
+
+.card p {
+    margin-top: 8px;
+    color: var(--ink-3);
+    font-size: 13px;
+}
+
+.card .btn {
+    align-self: flex-start;
+    margin-top: auto;
+}
+
+.card p + .btn {
+    margin-top: 24px;
+}
+
+/* ---------------- 页脚：#252726 + 左侧 3px 黄竖条 ---------------- */
+.app-foot {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    padding: 26px var(--gutter);
+    color: #8a8a8a;
+    background: var(--dark-2);
+    font: 500 11px/1 var(--f-mono);
+    letter-spacing: .06em;
+}
+
+.app-foot::before {
+    width: 3px;
+    height: 26px;
+    margin-right: 18px;
+    content: "";
+    background: var(--signal);
+}
+
+.app-foot > span + span {
+    margin-left: 28px;
+}
+/* =====================================================================
+   卡片底纹（白底卡片统一）
+   所有白卡只用同一套构成：
+     ① 网点色调场 card-field：12px 交错网点，远看是一层均匀的浅灰；
+     ② 大方格 card-block：104px 方格对角线，给色调场一个结构骨架；
+     ③ 两层同时自上而下由淡到实：一层白色线性渐变压在纹理之上（卡片底色就是白色，效果等同遮罩），
+        上部保留约 30% 深度，标题和正文仍然清楚；底边最实，卡片重心落在底部；
+     ④ 一枚条码角标 card-code（#b3b3b3），放在该类卡片没有内容的那个角上。
+   只写 background-image / size / repeat / position，不占用 ::before / ::after：
+   ::before 留给 style.modal.css 的鼠标光晕，::after 留给悬停三色段、强调卡排线。
+   各页样式改底色时请只写 background-color；写 background 简写会连纹理一起覆盖（深色面板正是这样关掉纹理）。
+   ===================================================================== */
+.card,
+.section,
+.sheet,
+.stat-cell,
+.metric-item,
+.hotspot-lifecycle-card,
+.chart-panel,
+.voice-item,
+.logs-area,
+.hero-side,
+.diagnosis-detail-card,
+.ai-research-card,
+.account-tag-cloud-card {
+    --tex-fade: linear-gradient(180deg, rgba(255, 255, 255, .7) 0, rgba(255, 255, 255, .7) 34%, rgba(255, 255, 255, .35) 66%, rgba(255, 255, 255, 0) 92%);
+    background-color: #fff;
+    background-image: var(--tex-fade), url("../tex/card-block.svg"), url("../tex/card-field.svg");
+    background-size: 100% 100%, 104px 104px, 12px 12px;
+    background-repeat: no-repeat, repeat, repeat;
+    background-position: 0 0, left -1px bottom -1px, left bottom;
+}
+
+/* 矮横条（声量条目，80～100px 高）：正文偏上，渐显起点下移 */
+.voice-item {
+    --tex-fade: linear-gradient(180deg, rgba(255, 255, 255, .72) 0, rgba(255, 255, 255, .72) 46%, rgba(255, 255, 255, .4) 74%, rgba(255, 255, 255, 0) 100%);
+}
+
+/* 大区块与日志区通篇是正文：上部只留 20% 深度，底部 30% 铺满色调 */
+.section,
+.logs-area {
+    --tex-fade: linear-gradient(180deg, rgba(255, 255, 255, .8) 0, rgba(255, 255, 255, .8) 70%, rgba(255, 255, 255, 0) 100%);
+}
+
+/* 条码角标：最上层背景，放在每类卡片的空角（热点卡片在左下，其余在右下） */
+.card,
+.section,
+.sheet,
+.stat-cell,
+.metric-item,
+.hotspot-lifecycle-card {
+    background-image: url("../tex/card-code.svg"), var(--tex-fade), url("../tex/card-block.svg"), url("../tex/card-field.svg");
+    background-size: 52px 9px, 100% 100%, 104px 104px, 12px 12px;
+    background-repeat: no-repeat, no-repeat, repeat, repeat;
+    background-position: right 20px bottom 18px, 0 0, left -1px bottom -1px, left bottom;
+}
+
+.hotspot-lifecycle-card {
+    background-position: left 24px bottom 18px, 0 0, left -1px bottom -1px, left bottom;
+}
+
+/* 强调指标卡右下已有排线短条；配置页步骤卡正文贴近右下角。这两类不叠条码 */
+.stat-cell.is-accent,
+.card.guide-step {
+    background-image: var(--tex-fade), url("../tex/card-block.svg"), url("../tex/card-field.svg");
+    background-size: 100% 100%, 104px 104px, 12px 12px;
+    background-repeat: no-repeat, repeat, repeat;
+    background-position: 0 0, left -1px bottom -1px, left bottom;
+}
+
+/* 内容压在底纹之上 */
+.card > *,
+.sheet > *,
+.hotspot-lifecycle-card > *,
+.hero-side > *,
+.stat-cell > *,
+.metric-item > * {
+    position: relative;
+}
+
+/* ---------------- 断点 ---------------- */
+@media (max-width: 1280px) {
+    :root {
+        --gutter: 48px;
+        --block: 80px;
+    }
+}
+
+@media (max-width: 1100px) {
+    .stat-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .cards {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 768px) {
+    :root {
+        --gutter: 24px;
+        --block: 56px;
+    }
+
+    .cards,
+    .split {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .ph-no {
+        font-size: 56px;
+    }
+
+    .ph-title h1,
+    .page > h1 {
+        font-size: 28px;
+    }
+
+    .ph-hollow {
+        font-size: 88px;
+    }
+
+    .section {
+        padding: 22px 20px;
+    }
+}
+
+/* ---------------- 减少动效：系统偏好与 <html class="no-motion"> 两个入口 ---------------- */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+    }
+}
+
+.no-motion *,
+.no-motion *::before,
+.no-motion *::after {
+    animation: none !important;
+    transition: none !important;
+}

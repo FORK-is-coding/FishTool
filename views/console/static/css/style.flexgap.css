@@ -1,0 +1,131 @@
+/* ===== style.flexgap.css —— 桌面端 flex gap 兜底 =====
+   背景：桌面主窗口用 PyQtWebEngine 5.15.6（Qt5WebEngineCore 5.15.2 = Chromium 83）加载同一套前端，
+   flex 容器的 gap / row-gap / column-gap 在 Chromium 84 之前不生效，实测各处间距均为 0。
+   做法：app.core.js 实测检测到不支持时给 <html> 加 .no-flex-gap；本文件所有规则都挂在该类下，
+   在支持 gap 的浏览器里一条也不命中。间距数值与各容器原 gap 声明一一对应（来源见行尾注释）。
+   写法约定：
+   - 单行容器：相邻兄弟 margin（> * + *），首个子项不动；
+   - 可换行容器：子项四周各半个 gap，容器用负外边距抵消外圈，并与容器原有外边距合并；
+   - 子项是文本节点时（如 <label><input> 文本</label>），改给前一个元素加 margin；
+   - 断点下改为纵向排列的容器，在同一断点内把 margin-left 换成 margin-top。
+   新增 flex gap 时请同步在此补一条，tests/test_frontend_flex_gap_fallback.py 会校验覆盖。 */
+
+/* ---------- Semantic fold panel (style.comment.semantic.css) ---------- */
+.no-flex-gap .semantic-panel-head > * + * { margin-left: 16px; }
+.no-flex-gap .semantic-scope > * + * { margin-left: 16px; }
+.no-flex-gap .semantic-autofold > * + * { margin-left: 8px; }
+.no-flex-gap .semantic-actions > * + * { margin-left: 10px; }
+.no-flex-gap .semantic-group-head > * + * { margin-left: 10px; }
+.no-flex-gap .semantic-member > * + *,
+.no-flex-gap .semantic-item > * + * { margin-left: 8px; }
+.no-flex-gap .semantic-group-actions > * + *,
+.no-flex-gap .semantic-member-actions > * + * { margin-left: 8px; }
+.no-flex-gap .semantic-pagination > * + * { margin-left: 12px; }
+
+/* ---------- 单行横向容器：相邻子项左外边距 = 原 gap ---------- */
+.no-flex-gap .logo > * + * { margin-left: 10px; }                                   /* style.base.css .logo */
+.no-flex-gap .dashboard-header > * + *,
+.no-flex-gap .voice-module-header > * + * { margin-left: 16px; }                    /* style.comment.css */
+.no-flex-gap .monitor-progress-head > * + * { margin-left: 8px; }                   /* style.comment.css */
+.no-flex-gap .monitor-progress-head > [hidden] + * { margin-left: 0; }              /* 转圈隐藏时不占 gap */
+.no-flex-gap .guide-heading > * + * { margin-left: 16px; }                          /* style.config.css */
+.no-flex-gap .api-key-warning > * + * { margin-left: 14px; }                        /* style.config.css */
+.no-flex-gap .usage-card-heading > * + * { margin-left: 14px; }                     /* style.help.css */
+.no-flex-gap .hotspot-section-heading > * + * { margin-left: 16px; }                /* style.hotspot.css */
+.no-flex-gap .hotspot-card-actions > * + * { margin-left: 8px; }                    /* style.hotspot.css */
+.no-flex-gap .hotspot-drawer-guard > * + * { margin-left: 8px; }                    /* style.hotspot.css */
+.no-flex-gap .hotspot-drawer-guard > b { margin-left: auto; }                       /* 数值右对齐：保留原 auto */
+.no-flex-gap .hotspot-drawer-actions > * + * { margin-left: 8px; }                  /* style.hotspot.css */
+.no-flex-gap .event-attribution label > input { margin-right: 8px; }                /* style.hotspot.css：input 后是文本节点 */
+.no-flex-gap .loading-copy > * + * { margin-left: 16px; }                           /* style.log.css */
+.no-flex-gap .log-level-filters label > * + * { margin-left: 6px; }                 /* style.logviewer.css */
+.no-flex-gap .logs-status-row > * + * { margin-left: 12px; }                        /* style.logviewer.css */
+.no-flex-gap .lottery-section-heading > * + *,
+.no-flex-gap .lottery-user-heading > * + *,
+.no-flex-gap .lottery-modal-actions > * + * { margin-left: 12px; }                  /* style.lottery.css */
+.no-flex-gap .lottery-toggle > * + * { margin-left: 9px; }                          /* style.lottery.css */
+.no-flex-gap .lottery-preview > * + * { margin-left: 10px; }                        /* style.lottery.css */
+.no-flex-gap .btn > * + * { margin-left: 6px; }                                     /* style.pages.css .btn */
+.no-flex-gap .account-report-header > * + * { margin-left: 16px; }                  /* style.pages.css */
+.no-flex-gap .resident-monitor-heading > * + *,
+.no-flex-gap .resident-monitor-controls > * + * { margin-left: 12px; }              /* style.resident.css */
+.no-flex-gap .resident-monitor-waveform > * + * { margin-left: 5px; }               /* style.resident.css */
+.no-flex-gap .diagnosis-header > * + * { margin-left: 20px; }                       /* style.up.css */
+.no-flex-gap .tag-cloud-heading > * + * { margin-left: 16px; }                      /* style.up.css */
+
+/* ---------- 纵向容器：相邻子项上外边距 = 原 gap ---------- */
+.no-flex-gap .usage-card-stack > * + * { margin-top: 20px; }                        /* style.help.css */
+.no-flex-gap .event-brief-grid label > .form-control { margin-top: 4px; }           /* style.hotspot.css：前面是文本节点 */
+.no-flex-gap .app-toast-stack > * + * { margin-top: 10px; }                         /* style.modal.css */
+.no-flex-gap .app-modal-actions > * + * { margin-left: 12px; }                      /* style.modal.css */
+
+/* ---------- 可换行容器 ----------
+   列距：子项左右各 gap/2，容器左右 -gap/2。水平外边距不折叠，任何换行情况下都精确。
+   行距：整份行距都放在子项“容器原外边距为 0 的那一侧”，容器在同一侧用 -gap 抵消。
+         该侧容器原本无外边距，负值只与子项外边距相加（正负折叠为代数和），不受上下文影响；
+         另一侧保持容器原外边距不动。容器为空时不渲染（各渲染函数空数据走其他分支）。
+   行内块容器（inline-flex）与边框/背景容器不能用负外边距，改为扣减内边距或只做相邻间距。 */
+/* #hotspot-page .form-group：gap 20；原 margin-bottom 24，上侧为 0 → 行距放子项上方，容器上方 -20。 */
+.no-flex-gap #hotspot-page .form-group { margin-top: -20px; margin-left: -10px; margin-right: -10px; }
+.no-flex-gap #hotspot-page .form-group > * { margin: 20px 10px 0; }
+/* 原 flex-basis 为 100% 的整行子项，扣掉兜底左右外边距，避免横向溢出。 */
+.no-flex-gap #hotspot-page .form-group > label,
+.no-flex-gap #hotspot-page .event-workbench .form-group > div,
+.no-flex-gap #hotspot-page .event-workbench .form-group > .form-control { flex-basis: calc(100% - 20px); }
+/* 热门 Tag 列表是表单组内的整行子项：上 20（表单组行距）+ 8（原 margin-top）；左右 10 - 3 抵消内层列距。 */
+.no-flex-gap #hotspot-page .form-group > .event-hot-tags { margin: 28px 7px 0; flex-basis: calc(100% - 14px); }
+/* 未加载 Tag 时列表为空：不抵消内层列距，与原生 gap 下的空列表宽度一致。 */
+.no-flex-gap #hotspot-page .form-group > .event-hot-tags:empty { margin: 28px 10px 0; flex-basis: calc(100% - 20px); }
+/* .hotspot-progress-row：gap 12；原 margin-top 16、下侧 0 → 行距放子项下方，容器下方 -12。 */
+.no-flex-gap .hotspot-progress-row { margin-bottom: -12px; margin-left: -6px; margin-right: -6px; }
+.no-flex-gap .hotspot-progress-row > * { margin: 0 6px 12px; }
+/* .hotspot-card-title-row：gap 10px 6px，原无外边距；标题整行（flex-basis 100%）扣掉左右外边距。 */
+.no-flex-gap .hotspot-card-title-row { margin: -10px -3px 0; }
+.no-flex-gap .hotspot-card-title-row > * { margin: 10px 3px 0; }
+.no-flex-gap .hotspot-card-title-row > h3 { flex-basis: calc(100% - 6px); }
+/* .event-hot-tags（表单组外独立使用时）：gap 6；原 margin-top 8 → 行距放子项下方。 */
+.no-flex-gap .event-hot-tags { margin-bottom: -6px; margin-left: -3px; margin-right: -3px; }
+.no-flex-gap .event-hot-tags > * { margin: 0 3px 6px; }
+.no-flex-gap .logs-toolbar-row { margin: -14px -7px 0; }                            /* gap 14，原无外边距 */
+.no-flex-gap .logs-toolbar-row > * { margin: 14px 7px 0; }
+.no-flex-gap .log-level-filters { margin-bottom: -10px; margin-left: -5px; margin-right: -5px; }  /* gap 10，原 margin-top 20 */
+.no-flex-gap .log-level-filters > * { margin: 0 5px 10px; }
+.no-flex-gap .lottery-quick-actions { margin: -10px -5px 0; }                       /* gap 10，原无外边距 */
+.no-flex-gap .lottery-quick-actions > * { margin: 10px 5px 0; }
+.no-flex-gap .lottery-summary-strip { margin-top: -12px; margin-left: -6px; margin-right: -6px; }  /* gap 12，原 margin-bottom 18 */
+.no-flex-gap .lottery-summary-strip > * { margin: 12px 6px 0; }
+.no-flex-gap .lottery-candidate-name { margin: -8px -4px 0; }                       /* gap 8，原无外边距 */
+.no-flex-gap .lottery-candidate-name > * { margin: 8px 4px 0; }
+.no-flex-gap .availability-list { margin: -8px -4px 0; }                            /* gap 8，原无外边距 */
+.no-flex-gap .availability-list > * { margin: 8px 4px 0; }
+.no-flex-gap .candidate-list { margin-bottom: -8px; margin-left: -4px; margin-right: -4px; }  /* gap 8，原 margin-top 10 */
+.no-flex-gap .candidate-list > * { margin: 0 4px 8px; }
+/* 上下都有原外边距、且在桌面最小宽度 1200px 下不换行的容器：按单行处理，只补列距。 */
+.no-flex-gap .event-action-row > * + * { margin-left: 8px; }                        /* gap 8，原 margin 8px 0 */
+.no-flex-gap .resident-monitor-metrics > * + * { margin-left: 12px; }               /* gap 12，原 margin 22px 0 24px */
+/* inline-flex 徽标组：行内块不参与外边距折叠，四周各半 gap、容器抵消即可。 */
+.no-flex-gap .hotspot-metric-badges { margin: -2px; }                               /* gap 4，原无外边距 */
+.no-flex-gap .hotspot-card-title-row > .hotspot-metric-badges { margin: 8px 1px -2px; }  /* 标题行子项 10px 3px 0 再抵消内层 2px */
+.no-flex-gap .hotspot-metric-badges > * { margin: 2px; }
+.no-flex-gap .lottery-user-icons { margin: -2.5px; }                                /* gap 5 */
+.no-flex-gap .lottery-user-icons > * { margin: 2.5px; }
+/* 词云容器有背景与圆角，不能用负外边距，改为扣减内边距（原 padding 24，gap 10px 16px）。 */
+.no-flex-gap .account-tag-cloud { padding: 19px 16px; }
+.no-flex-gap .account-tag-cloud > * { margin: 5px 8px; }
+
+/* ---------- 断点下改为纵向的容器：同断点内横向间距换成纵向 ---------- */
+@media (max-width: 768px) {
+    .no-flex-gap .dashboard-header > * + *,
+    .no-flex-gap .voice-module-header > * + *,
+    .no-flex-gap .account-report-header > * + * { margin-left: 0; margin-top: 16px; }  /* style.responsive.css */
+    .no-flex-gap .diagnosis-header > * + * { margin-left: 0; margin-top: 20px; }      /* style.modal.css 断点 */
+    .no-flex-gap .tag-cloud-heading > * + * { margin-left: 0; margin-top: 16px; }     /* style.modal.css 断点 */
+}
+@media (max-width: 760px) {
+    .no-flex-gap .hotspot-section-heading > * + * { margin-left: 0; margin-top: 16px; }
+}
+@media (max-width: 600px) {
+    .no-flex-gap .guide-heading > * + * { margin-left: 0; margin-top: 16px; }
+    .no-flex-gap .lottery-preview > * + * { margin-left: 0; margin-top: 10px; }
+    .no-flex-gap .loading-copy > * + * { margin-left: 0; margin-top: 2px; }        /* style.config.css 断点 gap:2px */
+}

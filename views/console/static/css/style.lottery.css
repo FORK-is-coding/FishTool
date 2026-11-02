@@ -1,0 +1,252 @@
+/* ===== style.lottery.css —— 拆分自 style.css（文件头说明 + 抽奖工具），原始行 L1-L215 ===== */
+/* 抽奖工具：C+ 白色档案。三块工作区为白卡，宽屏双列、抽奖卡横跨全宽；徽标为细线框，结果为白卡留缝。 */
+.lottery-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.45fr) minmax(300px, .75fr);
+    gap: 24px;
+}
+
+.lottery-layout .section { margin-bottom: 0; }
+.lottery-quick-actions { display: flex; align-items: stretch; flex-wrap: wrap; gap: 10px; }
+.lottery-quick-actions .btn { flex: 1 1 190px; margin-top: 0; }
+/* 相邻按钮的间距只由 gap 决定，抵消全局 .btn + .btn 的左外边距。本文件先于 style.pages.css 加载，
+   用 html:not(.no-flex-gap) 提高优先级；不支持 gap 时不命中，由 style.flexgap.css 的兜底接管。 */
+html:not(.no-flex-gap) .lottery-quick-actions > .btn,
+html:not(.no-flex-gap) .lottery-modal-actions > .btn { margin-left: 0; }
+#lottery-winner-verification-result:not(:empty) { margin-top: 18px; }
+.lottery-draw-card { grid-column: 1 / -1; }
+.lottery-section-heading,
+.lottery-user-heading,
+.lottery-summary-strip,
+.lottery-modal-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+.lottery-section-heading { margin-bottom: 22px; }
+.lottery-section-heading h2 { margin: 0; }
+/* 区块徽标：细线框等宽小字，状态色只在文字与线。 */
+.lottery-badge {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    min-height: 22px;
+    padding: 3px 10px;
+    color: var(--ink-2);
+    border: 0;
+    border-radius: 11px;
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--rule);
+    font: 600 11px/1.2 var(--f-body);
+    letter-spacing: .06em;
+}
+.lottery-badge.secondary { color: var(--ink-3); }
+.lottery-badge.success { color: var(--ok); box-shadow: inset 0 0 0 1px rgba(31, 157, 106, .45); }
+.lottery-prompt { min-height: 108px; resize: vertical; }
+.lottery-workbench small,
+.lottery-user-card small { display: block; margin-top: 8px; color: var(--ink-3); font: 500 11px/1.5 var(--f-mono); }
+.lottery-draw-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 150px;
+    gap: 18px;
+}
+/* 筛选条件：浅灰底板 + 内描边，与外层白卡区分。 */
+.lottery-filter-grid {
+    display: grid;
+    grid-template-columns: minmax(170px, .7fr) minmax(180px, .8fr) repeat(2, minmax(170px, 1fr));
+    align-items: end;
+    gap: 14px 18px;
+    margin: 2px 0 18px;
+    padding: 16px 18px;
+    border: 0;
+    border-radius: var(--r-card);
+    background: var(--paper);
+    box-shadow: inset 0 0 0 1px var(--paper-3);
+}
+.lottery-filter-grid .form-group { margin: 0; }
+.lottery-vip-toggle { min-height: 36px; margin: 0; }
+.lottery-select { cursor: pointer; }
+.lottery-date-field input { color-scheme: light; }
+.lottery-candidate-section,
+.lottery-winner-section { margin-top: 24px; }
+.lottery-candidate-section h3,
+.lottery-winner-section h3 { margin-bottom: 12px; color: var(--ink); font: 800 15px/1.3 var(--f-body); }
+/* 候选用户：白卡列表，卡间留缝。 */
+.lottery-candidate-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 10px;
+    max-height: 440px;
+    overflow-y: auto;
+    padding: 4px 6px 4px 4px;
+}
+.lottery-candidate-row {
+    min-width: 0;
+    padding: 13px 16px;
+    border: 0;
+    border-radius: var(--r-card);
+    background: #fff;
+    box-shadow: var(--shadow-card);
+}
+.lottery-candidate-row > span,
+.lottery-candidate-row p { color: var(--ink-3); font-size: 12px; }
+.lottery-candidate-row > span { font-family: var(--f-mono); }
+.lottery-candidate-row p { margin-top: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lottery-candidate-name { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.lottery-candidate-name strong { color: var(--ink); }
+.lottery-user-icons { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 5px; color: var(--ink-3); font-size: 11px; }
+/* 等级 / 会员 / 时间标：细线框等宽小字，颜色只在文字与线，不铺实心色块。 */
+.lottery-meta-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 34px;
+    min-height: 20px;
+    padding: 2px 7px;
+    border: 0;
+    border-radius: 2px;
+    color: var(--ink-3);
+    background: transparent;
+    box-shadow: inset 0 0 0 1px currentColor;
+    font: 700 10px/1.2 var(--f-mono);
+    letter-spacing: .04em;
+}
+/* 符号与文字同一行，间距用外边距（新 flex 容器不写 gap）。 */
+.lottery-meta-icon > span { margin-right: 3px; }
+.lottery-meta-icon.level-0,
+.lottery-meta-icon.level-1 { color: var(--ink-4); }
+.lottery-meta-icon.level-2 { color: var(--ok); }
+.lottery-meta-icon.level-3 { color: var(--info); }
+.lottery-meta-icon.level-4 { color: var(--warn); }
+.lottery-meta-icon.level-5,
+.lottery-meta-icon.level-6 { color: var(--danger); }
+.lottery-meta-icon.vip.none { color: var(--ink-4); }
+.lottery-meta-icon.vip.active,
+.lottery-meta-icon.vip.annual { color: var(--magenta); }
+.lottery-meta-icon.time { color: var(--ink-3); white-space: nowrap; font-weight: 500; box-shadow: inset 0 0 0 1px var(--rule); }
+/* 开关项：原生复选框改为深灰强调色。 */
+.lottery-toggle { display: inline-flex; align-items: center; gap: 9px; margin: 0 0 18px; color: var(--ink-2); font-size: 13px; cursor: pointer; }
+.lottery-toggle input { accent-color: var(--btn); width: 16px; height: 16px; }
+.lottery-preview {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 28px;
+    margin-top: 14px;
+    color: var(--ink-3);
+    font: 500 12px/1.5 var(--f-mono);
+}
+.lottery-preview strong { color: var(--ink); }
+.mini-spinner {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
+    border: 2px solid var(--paper-3);
+    border-top-color: var(--ink-2);
+    border-right-color: var(--mint);
+    border-radius: 50%;
+    animation: loading-spin 850ms linear infinite;
+}
+.lottery-summary-strip {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    margin-bottom: 18px;
+}
+/* 汇总条：细线框等宽小标签。 */
+.lottery-summary-strip span {
+    display: inline-flex;
+    align-items: center;
+    height: 24px;
+    padding: 0 10px;
+    color: var(--ink-2);
+    border-radius: 2px;
+    background: #fff;
+    box-shadow: inset 0 0 0 1px var(--rule);
+    font: 500 11px/1 var(--f-mono);
+}
+.lottery-result-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.lottery-result-columns > section > h3 { margin-bottom: 10px; color: var(--ink); font: 800 15px/1.3 var(--f-body); }
+/* 用户卡 / 中奖卡：白卡 + 4px 圆角 + 轻阴影，卡间留缝。 */
+.lottery-user-card,
+.lottery-winner-card {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    margin-bottom: 10px;
+    padding: 16px 18px;
+    border: 0;
+    border-radius: var(--r-card);
+    background: #fff;
+    box-shadow: var(--shadow-card);
+    transition: transform .25s var(--ease), box-shadow .25s;
+}
+.lottery-user-card:hover,
+.lottery-winner-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-hover); }
+/* 判定结果：左上 36x3 短色条，不铺整条色边。 */
+.lottery-user-card::before {
+    position: absolute;
+    top: 0;
+    left: 18px;
+    width: 36px;
+    height: 3px;
+    pointer-events: none;
+    content: "";
+    background: var(--ink-4);
+}
+.lottery-user-card.is-real::before { background: var(--ok); }
+.lottery-user-card.is-suspicious::before { background: var(--danger); }
+.lottery-user-card.is-indeterminate::before { background: var(--warn); }
+.lottery-user-heading strong { color: var(--ink); }
+.lottery-user-heading span { color: var(--ink-3); font: 600 11px/1.2 var(--f-mono); letter-spacing: .06em; }
+.lottery-user-card.is-real .lottery-user-heading span { color: var(--ok); }
+.lottery-user-card.is-suspicious .lottery-user-heading span { color: var(--danger); }
+.lottery-user-card p { margin: 4px 0 0; color: var(--ink-3); font-size: 12px; overflow-wrap: anywhere; }
+.lottery-user-card .lottery-reasons { margin-top: 8px; color: var(--ink); font-size: 13px; line-height: 1.6; }
+.lottery-user-metadata { margin: 8px 0 4px; }
+/* 判定原因标签：浅灰方角小标签。 */
+.lottery-reason-tag {
+    display: inline-block;
+    margin: 2px 6px 2px 0;
+    padding: 3px 8px;
+    border-radius: 2px;
+    background: var(--paper-2);
+    color: var(--ink-2);
+    font-size: 12px;
+}
+.lottery-winner-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.lottery-winner-card { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 14px; margin: 0; }
+/* 中奖卡左侧竖向三色段。 */
+.lottery-winner-card::after {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 4px;
+    pointer-events: none;
+    content: "";
+    background: linear-gradient(var(--magenta) 0 25%, var(--mint) 25% 50%, var(--signal) 50%, rgba(255, 250, 0, 0));
+}
+/* 中奖序号：细体大号数字，不用实心圆。 */
+.winner-rank {
+    display: block;
+    color: var(--ink);
+    font: 300 34px/1 var(--f-en);
+    letter-spacing: -.03em;
+}
+.lottery-winner-card p { color: var(--ink-3); font: 500 11px/1.6 var(--f-mono); }
+.lottery-winner-card blockquote { margin-top: 8px; padding-left: 10px; color: var(--ink); font-size: 13px; border-left: 2px solid var(--paper-3); overflow-wrap: anywhere; }
+.lottery-modal-actions { justify-content: flex-end; margin-top: 20px; }
+.app-modal .lottery-modal-actions .btn { margin-top: 0; }
+
+@media (max-width: 900px) {
+    .lottery-layout,
+    .lottery-result-columns { grid-template-columns: 1fr; }
+    .lottery-draw-card { grid-column: auto; }
+}
+@media (max-width: 600px) {
+    .lottery-draw-controls { grid-template-columns: 1fr; }
+    .lottery-section-heading { align-items: flex-start; }
+    .lottery-section-heading .lottery-badge { max-width: 120px; white-space: normal; text-align: center; }
+    .lottery-preview { align-items: flex-start; flex-direction: column; }
+}

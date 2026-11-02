@@ -1,0 +1,753 @@
+/* ===== style.pages.css —— 欢迎页（主视觉 / 登录卡 / 快速开始 / 更多）+ 群二维码 + 普采结果 + 结果区域 =====
+   C+ v2：白色档案 / 工业平面。新结构（.hero 等，阶段 2 换入）与现有结构（.welcome-header 等）同时可用。
+   本文件保留的 flex gap：.account-report-header（16），兜底见 style.flexgap.css；新写的 flex 容器只用 margin。 */
+
+/* ---------------- 欢迎页主视觉：测绘环 + 斜纹空心大字 + 网点波形带 ---------------- */
+.hero {
+    position: relative;
+    height: 520px;
+    margin: 0 calc(var(--gutter) * -1);
+    padding: 0 var(--gutter);
+    overflow: hidden;
+    background: #fff;
+}
+
+.hero-rings {
+    position: absolute;
+    top: -260px;
+    right: -180px;
+    width: 820px;
+    height: 820px;
+    pointer-events: none;
+    background: url("../tex/rings.svg") center / contain no-repeat;
+}
+
+/* 空心大字：斜纹填充（background-clip:text + 斜纹） */
+.hero-hollow {
+    position: absolute;
+    right: -10px;
+    bottom: 34px;
+    white-space: nowrap;
+    color: transparent;
+    font: 800 220px/1 var(--f-wide);
+    letter-spacing: -.06em;
+    -webkit-text-stroke: 1px rgba(25, 25, 25, .10);
+    background: repeating-linear-gradient(-45deg, rgba(25, 25, 25, .14) 0 1px, transparent 1px 5px);
+    -webkit-background-clip: text;
+    background-clip: text;
+    pointer-events: none;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+/* 网点波形带：横向渐隐遮罩 */
+.hero-tape {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    height: 96px;
+    pointer-events: none;
+    background: url("../tex/wave-dots.svg") 0 0 / 480px 96px repeat-x;
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 35%, #000 80%, transparent);
+}
+
+.hero-meta {
+    position: absolute;
+    top: 32px;
+    right: var(--gutter);
+    left: var(--gutter);
+    display: flex;
+    align-items: center;
+    color: var(--ink-3);
+    font: 500 10px/1 var(--f-mono);
+    letter-spacing: .12em;
+}
+
+.meta-lattice {
+    display: block;
+    flex: 0 0 35px;
+    width: 35px;
+    height: 4px;
+    margin-right: 14px;
+    background: repeating-linear-gradient(90deg, var(--ink-4) 0 8px, transparent 8px 12px);
+}
+
+.meta-r {
+    margin-left: auto;
+}
+
+.hero-title {
+    position: absolute;
+    bottom: 96px;
+    left: var(--gutter);
+    z-index: 2;
+}
+
+.hero-kicker {
+    display: flex;
+    align-items: center;
+    color: var(--ink-2);
+    font: 600 13px/1 var(--f-body);
+    letter-spacing: .12em;
+}
+
+/* 竖向三色块：品红 → 青绿 → 黄渐隐 */
+.tri-block {
+    display: block;
+    flex: 0 0 4px;
+    width: 4px;
+    height: 28px;
+    margin-right: 14px;
+    background: linear-gradient(var(--magenta) 0 7px, var(--mint) 7px 14px, var(--signal) 14px, rgba(255, 250, 0, 0));
+}
+
+.hero h1 {
+    margin: 20px 0 0;
+    padding: 0;
+    color: var(--ink);
+    font: 800 62px/1.04 var(--f-wide);
+    letter-spacing: -.035em;
+}
+
+/* 铭牌：深灰底 + 斜向排线 + 左侧黄 / 青绿短竖条，不用大块纯黄 */
+.hero-plate {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    height: 34px;
+    margin-top: 22px;
+    padding: 0 20px 0 22px;
+    color: #eee;
+    border-radius: var(--r-btn);
+    background: var(--btn) url("../tex/btn-hatch.svg") right center / auto 100% no-repeat;
+    font: 600 13px/1 var(--f-body);
+    letter-spacing: .26em;
+}
+
+.plate-tri {
+    position: absolute;
+    top: 8px;
+    bottom: 8px;
+    left: 8px;
+    width: 4px;
+    background: linear-gradient(var(--signal) 0 60%, var(--mint) 60%);
+}
+
+.hero .subtitle {
+    max-width: 460px;
+    margin-top: 18px;
+    color: var(--ink-3);
+    font-size: 13px;
+}
+
+/* 右侧登录卡：白卡 + 4px 圆角 + 轻阴影；底纹由 style.base.css 的白卡底纹提供。
+   用 .hero 前缀，避免与 .section 及共享卡片规则（position:relative）冲突。 */
+.hero .hero-side {
+    position: absolute;
+    right: var(--gutter);
+    bottom: 96px;
+    z-index: 2;
+    width: 320px;
+    margin: 0;
+    padding: 22px 24px;
+    border-radius: var(--r-card);
+    box-shadow: var(--shadow-card);
+}
+
+.side-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.side-no {
+    color: var(--ink-4);
+    font: 500 10px/1 var(--f-mono);
+    letter-spacing: .1em;
+}
+
+.side-title {
+    margin-top: 18px;
+    color: var(--ink);
+    font: 800 18px/1.2 var(--f-body);
+}
+/* ---------------- 登录态：新结构 .hero-side 与现有 .section.auth-section 共用 ---------------- */
+.hero-side .auth-status-box {
+    margin-top: 12px;
+}
+
+.auth-user-info {
+    color: var(--ink);
+    font: 600 14px/1.4 var(--f-body);
+    overflow-wrap: anywhere;
+}
+
+.hero-side .auth-user-info {
+    display: block;
+    margin-top: 12px;
+    font-size: 15px;
+}
+
+/* 登录态异常提示（Cookie 失效 / 检测失败），由 app.auth.js 渲染。 */
+.auth-user-error {
+    color: var(--danger);
+}
+
+.auth-user-info small {
+    display: block;
+    margin-top: 6px;
+    color: var(--ink-3);
+    font: 500 11px/1.4 var(--f-mono);
+}
+
+.auth-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.hero-side .auth-actions {
+    margin-top: 18px;
+}
+
+/* 扫码面板：浅灰颗粒底 + 细框，二维码放在白色衬底上。 */
+.auth-qr-panel {
+    margin-top: 18px;
+    padding: 20px;
+    text-align: center;
+    border-radius: var(--r-card);
+    background: var(--paper) url("../tex/grain.svg");
+    box-shadow: inset 0 0 0 1px var(--paper-3);
+}
+
+.auth-qr-panel img {
+    display: block;
+    width: 220px;
+    height: 220px;
+    margin: 0 auto;
+    padding: 8px;
+    border-radius: 2px;
+    background: #fff;
+    box-shadow: inset 0 0 0 1px var(--rule);
+}
+
+.auth-qr-panel p {
+    min-height: 20px;
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+#auth-qr-countdown {
+    color: var(--ink-3);
+    font: 500 11px/1.5 var(--f-mono);
+}
+
+.auth-qr-panel .form-group:last-child {
+    margin-bottom: 0;
+}
+
+/* 登录卡在主视觉里高度固定：扫码面板改为卡片左侧的浮出面板，避免把卡片顶出主视觉。 */
+.hero-side .auth-qr-panel {
+    position: absolute;
+    right: calc(100% + 16px);
+    bottom: 0;
+    z-index: 3;
+    width: 280px;
+    margin-top: 0;
+    background-color: #fff;
+    box-shadow: var(--shadow-card);
+}
+
+/* ---------------- 欢迎页现有结构（阶段 2 换成 .hero 之前）：白色头图带 + 测绘环 + 三色段底线 ---------------- */
+.welcome-header {
+    position: relative;
+    z-index: 0;
+    margin: 0 calc(var(--gutter) * -1) 48px;
+    padding: 88px var(--gutter) 72px;
+    overflow: hidden;
+    text-align: left;
+    background: #fff url("../tex/rings.svg") right -180px top -300px / 720px 720px no-repeat;
+}
+
+/* 网点波形带 */
+.welcome-header::before {
+    position: absolute;
+    right: 0;
+    bottom: 2px;
+    left: 0;
+    z-index: -1;
+    height: 72px;
+    content: "";
+    pointer-events: none;
+    background: url("../tex/wave-dots.svg") 0 0 / 360px 72px repeat-x;
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 35%, #000 80%, transparent);
+    opacity: .7;
+}
+
+.welcome-header::after {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    height: 2px;
+    content: "";
+    background: var(--tri);
+    -webkit-mask-image: linear-gradient(90deg, #000 40%, transparent 85%);
+}
+
+.welcome-header h1 {
+    max-width: 760px;
+    margin: 0;
+    color: var(--ink);
+    font: 800 44px/1.12 var(--f-wide);
+    letter-spacing: -.03em;
+}
+
+.welcome-header .subtitle {
+    position: relative;
+    max-width: 620px;
+    margin-top: 22px;
+    padding-left: 18px;
+    color: var(--ink-3);
+    font-size: 13px;
+}
+
+/* 副标题左侧竖向三色块 */
+.welcome-header .subtitle::before {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    left: 0;
+    width: 4px;
+    content: "";
+    background: linear-gradient(var(--magenta) 0 25%, var(--mint) 25% 50%, var(--signal) 50%, rgba(255, 250, 0, 0));
+}
+
+/* 快速开始（现有结构）：h2 套章节头样式——52x16 灰色色块 + 中文粗标题 */
+.quick-start:not(.chapter) {
+    margin-top: 72px;
+}
+
+.quick-start > h2 {
+    margin: 0 0 32px;
+    color: var(--ink);
+    font: 800 24px/1.1 var(--f-body);
+    letter-spacing: .02em;
+}
+
+.quick-start > h2::before {
+    display: block;
+    width: 52px;
+    height: 16px;
+    margin-bottom: 12px;
+    content: "";
+    border-radius: 1px;
+    background:
+        linear-gradient(to top right, var(--ink) 50%, transparent 50%) 6px 4px / 6px 4px no-repeat,
+        linear-gradient(to bottom right, var(--ink) 50%, transparent 50%) 6px 8px / 6px 4px no-repeat,
+        var(--rule);
+}
+
+/* 现有结构里两组卡片相邻：第二组（支持卡片）留出卡间距 */
+.cards + .cards {
+    margin-top: 24px;
+}
+
+/* 卡片图标（现有 emoji，阶段 2 换成 .card-top 编号）：灰度化，放进 40px 浅灰方块 */
+.card-icon {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    margin: 0;
+    border-radius: 2px;
+    background: var(--paper-2) url("../tex/grain.svg");
+    box-shadow: inset 0 0 0 1px var(--paper-3);
+    font-size: 20px;
+    line-height: 1;
+    -webkit-filter: grayscale(1);
+    filter: grayscale(1);
+}
+
+.card .card-icon + h3 {
+    margin-top: 22px;
+}
+
+/* 支持卡片（现有结构）：两列，高度收紧 */
+.support-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.support-cards .card {
+    min-height: 0;
+}
+
+/* 「更多」：两张横向卡，左侧深色纹理图标区（阶段 2 结构） */
+.support-cards .card-support {
+    flex-direction: row;
+    min-height: 0;
+    padding: 0;
+}
+
+.sup-art {
+    position: relative;
+    display: flex;
+    flex: 0 0 132px;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    color: #fff;
+    background: #191919 url("../tex/hatch-dark.svg");
+}
+
+.sup-art::before {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 4px;
+    content: "";
+    background: linear-gradient(var(--magenta) 0 25%, var(--mint) 25% 50%, var(--signal) 50%, rgba(255, 250, 0, 0));
+}
+
+.sup-art::after {
+    position: absolute;
+    right: 14px;
+    bottom: 14px;
+    width: 35px;
+    height: 4px;
+    content: "";
+    background: repeating-linear-gradient(90deg, #555 0 8px, transparent 8px 12px);
+}
+
+.sup-art svg {
+    width: 44px;
+    height: 44px;
+    stroke-width: 1.3;
+}
+
+.sup-body {
+    position: relative;
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    padding: 24px 28px 26px;
+}
+
+.sup-body h3 {
+    margin-top: 14px;
+}
+
+.card-support .btn {
+    margin-top: 22px;
+}
+
+/* 群聊二维码弹窗中的邀请图片：限制尺寸并保持原始比例。 */
+.group-qr-image {
+    display: block;
+    width: min(100%, 360px);
+    max-height: 62vh;
+    margin: 6px auto 0;
+    object-fit: contain;
+    border-radius: 2px;
+    box-shadow: inset 0 0 0 1px var(--rule);
+}
+
+/* 焦点外框：浅灰 2px（Chromium 83 无 :focus-visible，改用 :focus；鼠标悬停或按下时隐藏，减少点击后的残留框）。 */
+.btn:focus {
+    outline: 2px solid var(--rule-2);
+    outline-offset: 2px;
+}
+
+.btn:active,
+.btn:hover:focus {
+    outline-color: transparent;
+}
+/* ---------------- 普采评论监控：目标三列 + 账号报告 ---------------- */
+/* 桌面端让 BV、UID 和视频数量输入框并排，窄屏由 style.responsive.css 改为单列。 */
+.monitor-target-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    max-width: 1016px;
+}
+
+/* 网格中的输入框使用完整列宽，覆盖全局 500px 上限。 */
+.monitor-target-grid .form-control {
+    max-width: none;
+}
+
+/* 请求期间按钮保持可辨识，同时通过禁用光标阻止重复提交。 */
+#monitor-submit-button:disabled {
+    cursor: wait;
+    opacity: .72;
+}
+
+/* 账号报告标题：UID 与监控时间分列展示。 */
+.account-report-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.account-report-header h3 {
+    font: 800 17px/1.3 var(--f-body);
+}
+
+.account-report-header p,
+.account-report-header time {
+    color: var(--ink-3);
+    font: 500 12px/1.5 var(--f-mono);
+}
+
+/* 汇总指标：稳定三列，数字变化不会导致布局跳动。 */
+.account-report-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 18px;
+}
+
+/* 单个指标：浅灰颗粒底 + 内描边，不做卡片嵌套卡片。 */
+.account-report-metrics > div {
+    padding: 14px 16px;
+    border-radius: 2px;
+    background: var(--paper) url("../tex/grain.svg");
+    box-shadow: inset 0 0 0 1px var(--paper-3);
+}
+
+.account-report-metrics span,
+.account-report-metrics strong {
+    display: block;
+}
+
+.account-report-metrics span {
+    color: var(--ink-3);
+    font: 500 10px/1.4 var(--f-mono);
+    letter-spacing: .12em;
+}
+
+.account-report-metrics strong {
+    margin-top: 8px;
+    color: var(--ink);
+    font: 300 26px/1 var(--f-en);
+}
+
+/* 视频列表：细线分行，不额外套卡片。 */
+.account-video-list {
+    box-shadow: 0 -1px 0 var(--paper-3);
+}
+
+/* 每个视频结果为三列：标题信息、采集状态和详细统计。 */
+.account-video-row {
+    display: grid;
+    grid-template-columns: minmax(180px, 1fr) auto minmax(220px, 1fr);
+    align-items: center;
+    gap: 14px;
+    padding: 14px 4px;
+    box-shadow: 0 1px 0 var(--paper-3);
+}
+
+.account-video-main strong,
+.account-video-main span {
+    display: block;
+    overflow-wrap: anywhere;
+}
+
+.account-video-main strong {
+    color: var(--ink);
+    font-weight: 700;
+}
+
+.account-video-main span {
+    font-family: var(--f-mono);
+}
+
+.account-video-main span,
+.account-video-row p {
+    color: var(--ink-3);
+    font-size: 12px;
+}
+
+/* 状态文字固定最小宽度，避免成功与失败切换时其他列位移。 */
+.account-video-status {
+    min-width: 64px;
+    color: var(--ok);
+    font: 600 12px/1.4 var(--f-mono);
+    letter-spacing: .06em;
+}
+
+.account-video-row.is-failed .account-video-status,
+.monitor-danger {
+    color: var(--danger);
+}
+
+/* 通用监控反馈色，单 BV 与账号报告共用。 */
+.monitor-warning {
+    color: var(--warn);
+}
+
+.monitor-success {
+    color: var(--ok);
+}
+
+/* 采集策略 / 开关行：复选框与文字对齐。 */
+.monitor-option-row label {
+    display: inline-block;
+    margin-bottom: 0;
+    color: var(--ink-2);
+    font-weight: 500;
+    letter-spacing: .02em;
+}
+
+/* 同一行的第二个开关与前一个隔开（原内联 margin-left: 20px）。 */
+.monitor-option-row label + label {
+    margin-left: 20px;
+}
+
+/* 采集策略下拉：按内容收缩，最宽 220px，与说明文字同行（原内联样式）。 */
+.monitor-strategy-select {
+    display: inline-block;
+    width: auto;
+    max-width: 220px;
+    vertical-align: middle;
+}
+
+.monitor-option-note {
+    margin-left: 8px;
+    color: var(--ink-3);
+    font: 500 11px/1.5 var(--f-mono);
+}
+
+/* ---------------- 结果区域：浅灰颗粒底 + 内描边，承载各模块输出 ---------------- */
+/* 与共享卡片规则同优先级且后加载（style.pages.css 在 style.modal.css 之前），用 .section 前缀压过白底。 */
+.result-area {
+    min-height: 100px;
+    margin-top: 20px;
+    padding: 20px;
+    color: var(--ink-2);
+    border-radius: var(--r-card);
+}
+
+.result-area,
+.section .result-area,
+.section .result-area:hover {
+    border: 0;
+    background: var(--paper) url("../tex/grain.svg");
+    box-shadow: inset 0 0 0 1px var(--paper-3);
+}
+
+/* 空结果占位：容器无内容时用伪元素提示暂无数据（与光晕 ::before 互斥：空容器不需要光晕）。 */
+.result-area:empty::before {
+    position: static;
+    z-index: auto;
+    color: var(--ink-4);
+    content: "暂无数据";
+    opacity: 1;
+    background: none;
+    font: 500 12px/1.6 var(--f-mono);
+    letter-spacing: .06em;
+}
+
+.features li {
+    padding: 10px 0;
+    box-shadow: 0 1px 0 var(--paper-3);
+}
+
+/* 注意事项卡片（保留旧选择器，当前页面未使用）：正文左对齐 */
+.notice-card {
+    text-align: left;
+}
+
+.notice-copy p {
+    margin-bottom: 10px;
+    line-height: 1.7;
+}
+
+.notice-copy p:last-child {
+    margin-bottom: 20px;
+}
+
+.notice-copy strong {
+    color: var(--ink);
+    font-weight: 800;
+}
+
+/* ---------------- 欢迎页断点 ---------------- */
+@media (max-width: 1280px) {
+    .hero h1 {
+        font-size: 52px;
+    }
+
+    .hero .hero-side {
+        width: 292px;
+    }
+
+    .welcome-header h1 {
+        font-size: 38px;
+    }
+}
+
+/* 主视觉放不下并排的标题和登录卡：取消固定高度，登录卡回到正文流 */
+@media (max-width: 1100px) {
+    .hero {
+        height: auto;
+        padding-top: 72px;
+        padding-bottom: 120px;
+    }
+
+    .hero-title,
+    .hero .hero-side {
+        position: relative;
+        right: auto;
+        bottom: auto;
+        left: auto;
+    }
+
+    .hero .hero-side {
+        width: auto;
+        max-width: 420px;
+        margin-top: 32px;
+    }
+
+    .hero-side .auth-qr-panel {
+        position: static;
+        width: auto;
+        margin-top: 18px;
+    }
+}
+
+@media (max-width: 768px) {
+    .hero h1 {
+        font-size: 40px;
+    }
+
+    .hero-hollow {
+        font-size: 120px;
+    }
+
+    .welcome-header {
+        padding: 56px var(--gutter) 48px;
+    }
+
+    .welcome-header h1 {
+        font-size: 30px;
+    }
+
+    .support-cards {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .support-cards .card-support {
+        flex-direction: column;
+    }
+
+    .sup-art {
+        flex-basis: 96px;
+    }
+}

@@ -1,0 +1,407 @@
+/* ===== style.comment.css —— 拆分自 style.css（评论监控可视化大屏），原始行 L1077-L1322 ===== */
+/* 评论监控大屏：C+ 白色档案。浅灰底板承载白色指标卡、图表卡与声量榜，卡间留缝不画分隔线。 */
+/* 整体容器：嵌在白色 .section 内，改为浅灰底板 + 内描边，让内部白卡有层次。
+   style.modal.css 的共享卡片规则后加载，底板外观用 .section 前缀提高优先级。 */
+.comment-dashboard {
+    margin-top: 28px;
+    padding: 24px;
+    color: var(--ink);
+    border-radius: var(--r-card);
+}
+
+.section .comment-dashboard,
+.section .comment-dashboard:hover {
+    border: 0;
+    background-color: var(--paper);
+    background-image: none;
+    box-shadow: inset 0 0 0 1px var(--paper-3);
+}
+
+/* 大屏头部：标题左对齐、状态/规则右对齐。 */
+.dashboard-header,
+.voice-module-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 20px;
+}
+
+.dashboard-header h3,
+.voice-module-header h3 {
+    margin: 0;
+    color: var(--ink);
+    font: 800 20px/1.2 var(--f-body);
+    letter-spacing: .02em;
+}
+
+/* 眉题小字：英文宽体小字，用于大屏与卡片顶部。 */
+.dashboard-eyebrow {
+    margin: 0 0 8px;
+    color: var(--ink-4);
+    font: 600 10px/1 var(--f-wide);
+    letter-spacing: .22em;
+}
+
+.voice-rule {
+    color: var(--ink-3);
+    font: 500 11px/1.4 var(--f-mono);
+    letter-spacing: .04em;
+}
+
+/* 状态牌：细线框 + 圆点，不铺底色。 */
+.dashboard-status {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 4px 10px;
+    color: var(--ink-2);
+    border-radius: 12px;
+    box-shadow: inset 0 0 0 1px var(--rule);
+    font: 600 11px/1.2 var(--f-mono);
+    letter-spacing: .06em;
+}
+
+.dashboard-status::before {
+    flex: 0 0 6px;
+    width: 6px;
+    height: 6px;
+    margin-right: 8px;
+    border-radius: 50%;
+    content: "";
+    background: var(--ok);
+}
+
+/* 核心指标卡：四列等宽网格，卡间留 18px 缝。 */
+.dashboard-metrics {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 18px;
+}
+
+/* 指标卡：白卡 + 4px 圆角 + 轻阴影；底纹由 style.base.css 统一提供，这里只写底色。 */
+.metric-item {
+    position: relative;
+    overflow: hidden;
+    min-width: 0;
+    padding: 20px 22px 18px;
+    border: 0;
+    border-radius: var(--r-card);
+    background-color: #fff;
+    box-shadow: var(--shadow-card);
+}
+
+/* 指标标签：小字号灰色置于数值上方。 */
+.metric-item span {
+    display: block;
+    color: var(--ink-2);
+    font-size: 12px;
+}
+
+/* 指标数值：细体大号数字，作为卡片视觉焦点。 */
+.metric-item strong {
+    display: block;
+    margin-top: 12px;
+    color: var(--ink);
+    font: 300 36px/1 var(--f-en);
+    letter-spacing: -.02em;
+    overflow-wrap: anywhere;
+}
+
+/* 强调卡：评论大屏最后一格（高声量）顶部 2px 三色段。 */
+.dashboard-metrics > .metric-item:last-child::after {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    height: 2px;
+    content: "";
+    background: var(--tri);
+}
+
+/* 图表区：双列网格，宽面板可跨整行。 */
+.dashboard-chart-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+    margin-top: 20px;
+}
+
+/* 图表面板：白卡，相对定位承载空态提示，min-width:0 防止网格溢出。 */
+.chart-panel {
+    position: relative;
+    min-width: 0;
+    padding: 18px 20px 12px;
+    border: 0;
+    border-radius: var(--r-card);
+    background-color: #fff;
+    box-shadow: var(--shadow-card);
+}
+
+/* style.modal.css 的共享卡片规则后加载且带 1px 边框：大屏内的白卡用父级前缀改为无边框 + 轻阴影。 */
+.comment-dashboard .metric-item,
+.comment-dashboard .chart-panel,
+.diagnosis-dashboard .metric-item,
+.diagnosis-dashboard .chart-panel,
+.voice-list .voice-item {
+    border: 0;
+    box-shadow: var(--shadow-card);
+}
+
+.comment-dashboard .metric-item:hover,
+.comment-dashboard .chart-panel:hover,
+.diagnosis-dashboard .metric-item:hover,
+.diagnosis-dashboard .chart-panel:hover,
+.voice-list .voice-item:hover {
+    border: 0;
+    box-shadow: var(--shadow-hover);
+}
+
+/* 跨列面板：占满整行，用于基准对比等宽图表。 */
+.chart-panel-wide {
+    grid-column: 1 / -1;
+}
+
+/* 面板标题：左侧深灰小方块作锚点。 */
+.panel-title {
+    display: flex;
+    align-items: center;
+    margin: 0 0 10px;
+    color: var(--ink);
+    font: 700 13px/1.2 var(--f-body);
+}
+
+.panel-title::before {
+    flex: 0 0 8px;
+    width: 8px;
+    height: 8px;
+    margin-right: 10px;
+    border-radius: 1px;
+    content: "";
+    background: var(--btn);
+}
+
+/* 图表画布：固定高度，宽度自适应父容器。 */
+.dashboard-chart {
+    width: 100%;
+    height: 260px;
+}
+
+.dashboard-chart-short {
+    height: 220px;
+}
+
+/* 图表空态遮罩：默认隐藏，is-empty 时覆盖图表显示提示。 */
+.chart-empty {
+    display: none;
+    position: absolute;
+    top: 48px;
+    right: 20px;
+    bottom: 16px;
+    left: 20px;
+    align-items: center;
+    justify-content: center;
+    color: var(--ink-3);
+    font: 500 12px/1.5 var(--f-mono);
+    border-radius: 2px;
+    background: var(--paper) url("../tex/card-field.svg") left bottom / 12px 12px;
+}
+
+/* 空态联动：面板标记 is-empty 时隐藏图表本体。 */
+.chart-panel.is-empty .dashboard-chart {
+    visibility: hidden;
+}
+
+/* 空态联动：面板标记 is-empty 时展示占位提示。 */
+.chart-panel.is-empty .chart-empty {
+    display: flex;
+}
+
+/* 高声量评论模块：直接坐在大屏底板上，不再套一层卡片（前缀同样用于压过共享卡片规则）。 */
+.voice-module {
+    margin-top: 28px;
+    padding: 0;
+}
+
+.comment-dashboard .voice-module,
+.comment-dashboard .voice-module:hover {
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background-color: transparent;
+    background-image: none;
+    box-shadow: none;
+}
+
+.comment-dashboard .voice-module::before {
+    content: none;
+}
+
+/* 高声量评论列表：单列白卡行，卡间留 10px 缝。 */
+.voice-list {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+}
+
+/* 单条声量行：排名 | 内容 | 声量分三列。 */
+.voice-item {
+    position: relative;
+    overflow: hidden;
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0 16px;
+    min-width: 0;
+    padding: 16px 22px;
+    border: 0;
+    border-radius: var(--r-card);
+    background-color: #fff;
+    box-shadow: var(--shadow-card);
+    transition: transform .25s var(--ease), box-shadow .25s;
+}
+
+.voice-item:hover {
+    transform: translateX(4px);
+}
+
+/* 榜首：左侧竖向三色段。 */
+.voice-item:first-child::after {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 4px;
+    content: "";
+    background: linear-gradient(var(--magenta) 0 25%, var(--mint) 25% 50%, var(--signal) 50%, rgba(255, 250, 0, 0));
+}
+
+/* 排名序号：细体大号数字，前三名加深。 */
+.voice-rank {
+    color: var(--ink-4);
+    font: 300 30px/1 var(--f-en);
+}
+
+.voice-item:nth-child(-n+3) .voice-rank {
+    color: var(--ink);
+    font-weight: 500;
+}
+
+.voice-content {
+    min-width: 0;
+}
+
+/* 评论元信息：等宽小字，情感标签跟在后面。 */
+.voice-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    color: var(--ink-3);
+    font: 500 11px/1.6 var(--f-mono);
+}
+
+/* 评论正文：允许任意位置换行，避免长文本撑破布局。 */
+.voice-comment {
+    margin: 6px 0 4px;
+    overflow-wrap: anywhere;
+    color: var(--ink);
+    font-size: 15px;
+    line-height: 1.55;
+}
+
+.voice-reason {
+    color: var(--ink-4);
+    font-size: 11px;
+}
+
+/* 声量分：右侧等宽字。 */
+.voice-score {
+    min-width: 72px;
+    color: var(--ink-2);
+    text-align: right;
+    font: 600 13px/1.2 var(--f-mono);
+    white-space: nowrap;
+}
+
+/* 情感标签：细线框小胶囊，情感色只在文字与线。 */
+.sentiment-tag {
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    margin-left: 8px;
+    padding: 0 8px;
+    color: var(--ink-2);
+    font: 700 10px/1 var(--f-body);
+    letter-spacing: .06em;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--rule);
+}
+
+.sentiment-tag.positive { color: var(--ok); box-shadow: inset 0 0 0 1px rgba(31, 157, 106, .45); }
+.sentiment-tag.negative,
+.sentiment-tag.risk { color: var(--danger); box-shadow: inset 0 0 0 1px rgba(224, 54, 44, .45); }
+.sentiment-tag.neutral { color: var(--ink-3); box-shadow: inset 0 0 0 1px var(--rule); }
+
+/* 声量列表空态：白卡居中提示。 */
+.voice-empty {
+    grid-column: 1 / -1;
+    padding: 36px 16px;
+    color: var(--ink-3);
+    text-align: center;
+    font-size: 13px;
+    border-radius: var(--r-card);
+    background: #fff;
+    box-shadow: var(--shadow-card);
+}
+
+/* ===== 评论采集进度条 ===== */
+.monitor-progress-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+.monitor-progress-spinner {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--paper-3);
+    border-top-color: var(--ink-2);
+    border-right-color: var(--mint);
+    border-radius: 50%;
+    animation: loading-spin 850ms linear infinite;
+}
+.monitor-progress-spinner[hidden] {
+    display: none;
+}
+/* 进度：4px 细条，青绿到黄由实到虚。 */
+.monitor-progress-bar {
+    width: 100%;
+    height: 4px;
+    margin: 8px 0 6px;
+    overflow: hidden;
+    border-radius: 2px;
+    background: var(--paper-3);
+}
+.monitor-progress-bar[hidden] {
+    display: none;
+}
+.monitor-progress-fill {
+    width: 0%;
+    height: 100%;
+    border-radius: 2px;
+    background: linear-gradient(90deg, var(--mint), var(--signal) 70%, rgba(255, 250, 0, .35));
+    transition: width 0.4s ease;
+}
+.monitor-progress-text {
+    color: var(--ink-3);
+    font: 500 11px/1.5 var(--f-mono);
+}
+#monitor-progress-wrap {
+    margin-bottom: 12px;
+    padding: 12px 14px;
+    border-radius: 2px;
+    background: var(--paper-2);
+}

@@ -1,0 +1,1362 @@
+<!DOCTYPE html>
+<!--
+    全局单页应用：左侧导航 + 右侧内容区，页面间通过 JS 切换 active 类。
+    主要模块：欢迎 / 热点发现 / 评论监控 / 头部UP拆解 / 账号自诊 / 配置 / 日志。
+-->
+<html lang="zh-CN">
+<head>
+    <script src="/api/plugin/page/bridge-sdk.js"></script>
+    <script src="./bridge-shim.js"></script>
+    <link rel="stylesheet" href="./shim.css">
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FishTool运营助手</title>
+    <!-- 内嵌空图标，避免浏览器默认请求 /favicon.ico 产生无关 404 console 错误。 -->
+    <link rel="icon" href="data:,">
+    <!-- 版本参数用于让 8000 端口在修复后主动获取最新前端资源，避免浏览器继续使用旧缓存。 -->
+    <link rel="stylesheet" href="./static/css/style.lottery.css?v=split-20260824-ui20261101">
+<link rel="stylesheet" href="./static/css/style.resident.css?v=split-20260824-ui20261101">
+<link rel="stylesheet" href="./static/css/style.base.css?v=split-20260824-ui20261101-v029ui20261101">
+<link rel="stylesheet" href="./static/css/style.pages.css?v=ui-20261026-ui20261101">
+<link rel="stylesheet" href="./static/css/style.log.css?v=progress-20261026-ui20261101">
+<link rel="stylesheet" href="./static/css/style.config.css?v=split-20260824-ui20261101">
+<link rel="stylesheet" href="./static/css/style.comment.css?v=progress-20261026-ui20261101">
+<link rel="stylesheet" href="./static/css/style.comment.semantic.css?v=semantic-20261102">
+<link rel="stylesheet" href="./static/css/style.up.css?v=split-20260824-ui20261101">
+<link rel="stylesheet" href="./static/css/style.modal.css?v=split-20261026-toast-fix20261030-ui20261101-v029ui20261101">
+<link rel="stylesheet" href="./static/css/style.responsive.css?v=split-20260824-ui20261101">
+<link rel="stylesheet" href="./static/css/style.logviewer.css?v=split-20260824-ui20261101">
+<link rel="stylesheet" href="./static/css/style.help.css?v=split-20260824-ui20261101">
+<link rel="stylesheet" href="./static/css/style.hotspot.css?v=spacing3-20261026-fix20261030-ui20261101">
+<!-- 欢迎页启动公告弹窗的样式；不写 flex gap，放在 flex gap 兜底之前。 -->
+<link rel="stylesheet" href="./static/css/style.notice.css?v=notice20261101">
+<!-- 首次启动开场动画与欢迎页重播按钮的样式；不写 flex gap，放在 flex gap 兜底之前。 -->
+<link rel="stylesheet" href="./static/css/style.intro.css?v=ui20261101">
+<!-- 桌面端 Chromium 83 的 flex gap 兜底：只在 <html class="no-flex-gap"> 下生效，必须最后加载。 -->
+<link rel="stylesheet" href="./static/css/style.flexgap.css?v=flexgap-20261030-ui20261101-v029ui20261101">
+<!-- 开场首屏判断：必须在 head 同步执行，决定是否先遮住主界面；不依赖 app.core.js。 -->
+<script src="./static/js/intro-gate.js?v=ui20261101"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- 线性图标：<symbol> 定义，侧栏导航、侧栏主操作与「更多」卡片用 <use href="#i-xxx"> 引用。
+             放在 .container 的首个 flex 子项、宽高为 0：不占位，也不需要内联样式。 -->
+        <svg width="0" height="0" aria-hidden="true" focusable="false">
+            <defs>
+                <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/></symbol>
+                <symbol id="i-hot" viewBox="0 0 24 24"><path d="M12 3c1 4 5 5.5 5 10a5 5 0 0 1-10 0c0-2.5 1.5-4 2.5-5 .3 2 1.3 3 2.5 3-1-3 0-6 0-8Z"/></symbol>
+                <symbol id="i-comment" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></symbol>
+                <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></symbol>
+                <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 1v5M12 18v5M1 12h5M18 12h5"/></symbol>
+                <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M2 12h5l2-5 4 10 2-5h7"/></symbol>
+                <symbol id="i-gift" viewBox="0 0 24 24"><path d="M3 9h18v4H3zM5 13v8h14v-8M12 9v12"/></symbol>
+                <symbol id="i-log" viewBox="0 0 24 24"><path d="M5 3h10l4 4v14H5z"/><path d="M8 11h8M8 15h8M8 7h4"/></symbol>
+                <symbol id="i-info" viewBox="0 0 24 24"><path d="M12 2 22 20H2Z"/><path d="M12 9v5M12 17v.5"/></symbol>
+                <symbol id="i-mark" viewBox="0 0 24 24"><path d="M3 5h18l-9 15z" fill="currentColor" stroke="none"/><path d="M8.5 8h7L12 14z" fill="#191919" stroke="none"/></symbol>
+                <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h13M13 6l6 6-6 6"/></symbol>
+                <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></symbol>
+                <symbol id="i-chat" viewBox="0 0 24 24"><path d="M3 6h12v8H8l-5 4z"/><path d="M15 9h6v8l-3-2h-5v-1"/></symbol>
+            </defs>
+        </svg>
+
+        <!-- 侧边栏导航：nav-item 的 data-page 与下方 page 容器 id 对应，点击即切换页面。
+             60px 图标栏：激活块 .nav-indicator 与导航项同处 .nav-menu 坐标系，由 app.core.js 的 moveNavIndicator 平移；
+             文字放在 .nav-label 里作为悬停标签，<b> 为页码。 -->
+        <aside class="sidebar">
+            <div class="logo">
+                <!-- 品牌文字标：与设计稿 c-plus 一致的两行宽体「FISH / TOOL」，双端共用；产品名与版本号视觉隐藏，保留给读屏。 -->
+                <span class="logo-mark" aria-hidden="true">FISH<br>TOOL</span>
+                <div class="logo-copy">
+                    <h2>FishTool运营助手</h2>
+                    <span class="logo-version">v0.2.9测试版</span>
+                </div>
+            </div>
+            <nav class="nav-menu">
+                <i class="nav-indicator" aria-hidden="true"></i>
+                <a href="#welcome" class="nav-item active" data-page="welcome">
+                    <span class="icon"><svg><use href="#i-home"/></svg></span>
+                    <span class="nav-label">欢迎<b>00</b></span>
+                </a>
+                <a href="#hotspot" class="nav-item" data-page="hotspot">
+                    <span class="icon"><svg><use href="#i-hot"/></svg></span>
+                    <span class="nav-label">热点发现<b>01</b></span>
+                </a>
+                <a href="#comment" class="nav-item" data-page="comment">
+                    <span class="icon"><svg><use href="#i-comment"/></svg></span>
+                    <span class="nav-label">评论监控<b>02</b></span>
+                </a>
+                <a href="#config" class="nav-item" data-page="config">
+                    <span class="icon"><svg><use href="#i-gear"/></svg></span>
+                    <span class="nav-label">配置<b>03</b></span>
+                </a>
+                <a href="#analysis" class="nav-item" data-page="analysis">
+                    <span class="icon"><svg><use href="#i-target"/></svg></span>
+                    <span class="nav-label">头部UP拆解<b>04</b></span>
+                </a>
+                <a href="#self-diagnosis" class="nav-item" data-page="self-diagnosis">
+                    <span class="icon"><svg><use href="#i-pulse"/></svg></span>
+                    <span class="nav-label">账号自诊<b>05</b></span>
+                </a>
+                <a href="#lottery" class="nav-item" data-page="lottery">
+                    <span class="icon"><svg><use href="#i-gift"/></svg></span>
+                    <span class="nav-label">抽奖工具<b>06</b></span>
+                </a>
+                <a href="#logs" class="nav-item" data-page="logs">
+                    <span class="icon"><svg><use href="#i-log"/></svg></span>
+                    <span class="nav-label">日志<b>07</b></span>
+                </a>
+                <a href="#usage" class="nav-item" data-page="usage">
+                    <span class="icon"><svg><use href="#i-info"/></svg></span>
+                    <span class="nav-label">使用说明<b>08</b></span>
+                </a>
+            </nav>
+            <!-- 系统状态胶囊：本 PR 只放三个静态灰点，暂不接入实时数据。 -->
+            <div class="side-capsule" aria-hidden="true">
+                <span class="cap-item"><i class="dot"></i></span>
+                <span class="cap-item"><i class="dot"></i></span>
+                <span class="cap-item"><i class="dot"></i></span>
+            </div>
+            <!-- 侧栏主操作：直达评论监控页。 -->
+            <a class="side-cta" href="#comment" onclick="navigateTo('comment'); return false;">
+                <svg><use href="#i-mark"/></svg>
+                <i class="cta-rule"></i>
+                <span>开始<br>监控</span>
+            </a>
+            <span class="side-ver">v0.2.9</span>
+        </aside>
+
+        <!-- 主内容区：首个子元素是吸顶细条，面包屑 / 页码 / 时钟由 app.core.js 更新。 -->
+        <main class="main-content">
+            <header class="app-topbar">
+                <span class="tb-rec">[ <b>REC</b> ]</span>
+                <span class="tb-path">FISHTOOL // <b id="crumb-current">OVERVIEW</b></span>
+                <span class="tb-fill" aria-hidden="true"></span>
+                <span class="tb-page"><b id="tb-index">00</b> / 08</span>
+                <span class="tb-clock" id="topbar-clock">--:--:--</span>
+            </header>
+            <!-- 欢迎页：默认激活。主视觉（测绘环 + 空心大字 + 网点波形带）右侧承载 B站登录态，下接指标行、快速开始与「更多」。 -->
+            <div id="welcome-page" class="page active">
+                <section class="hero">
+                    <div class="hero-rings" aria-hidden="true"></div>
+                    <div class="hero-hollow" aria-hidden="true">OPERATOR</div>
+                    <div class="hero-tape" aria-hidden="true"></div>
+                    <div class="hero-meta">
+                        <span class="meta-lattice" aria-hidden="true"></span>
+                        <span>INFO.// FISHTOOL OPERATIONS CONSOLE</span>
+                        <span class="meta-r">BUILD 0.2.9</span>
+                        <!-- 重播开场动画：24px 浅灰颗粒小方块 + 回旋箭头；悬停时变深灰斜纹、左侧黄色短竖条，并向左展开 REPLAY INTRO -->
+                        <button type="button" class="intro-replay" id="intro-replay-btn" onclick="FishIntro.replay(event)" aria-label="重播开场动画" title="重播开场动画">
+                            <span class="intro-replay-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v4.5h-4.5"/></svg></span>
+                            <span class="intro-replay-label">REPLAY INTRO</span>
+                        </button>
+                    </div>
+                    <div class="hero-title">
+                        <p class="hero-kicker"><i class="tri-block" aria-hidden="true"></i>个人自媒体的智能运营助理</p>
+                        <h1>FishTool<br>运营工具箱</h1>
+                        <div class="hero-plate"><i class="plate-tri" aria-hidden="true"></i><span>热点 · 舆情 · 竞品 · 自诊 · 抽奖</span></div>
+                        <p class="subtitle">让运营不再成为企业特权。</p>
+                    </div>
+
+                    <!-- B站登录态配置模块：扫码二维码由后端生成，登录态用于解锁身份功能。
+                         徽标状态类（is-ok / is-warn / is-error）由 app.auth.js 设置；
+                         退出按钮与扫码面板的显隐由 JS 通过 style.display 控制，初始 display:none 必须保留。 -->
+                    <aside class="hero-side auth-section">
+                        <div class="side-head"><span class="ch-tag">auth</span><span class="side-no">01 / 01</span></div>
+                        <p class="side-title">B站登录态</p>
+                        <div class="auth-status-box">
+                            <span id="auth-status-badge" class="auth-status-badge">检测中...</span>
+                        </div>
+                        <p id="auth-user-info" class="auth-user-info"></p>
+                        <div class="auth-actions">
+                            <button class="btn btn-primary" id="auth-login-btn" onclick="toggleQrPanel()">扫码登录</button>
+                            <button class="btn btn-line" id="auth-logout-btn" onclick="logoutBili()" style="display:none">清除登录态</button>
+                        </div>
+                        <div id="auth-qr-panel" class="auth-qr-panel" style="display:none">
+                            <div class="form-group">
+                                <img id="auth-qr-img" alt="登录二维码"/>
+                            </div>
+                            <p id="auth-qr-status">正在获取二维码...</p>
+                            <p id="auth-qr-countdown"></p>
+                            <div class="form-group">
+                                <button class="btn btn-secondary" onclick="startQrLogin()">重新生成</button>
+                                <button class="btn btn-secondary" onclick="closeQrPanel()">关闭</button>
+                            </div>
+                        </div>
+                    </aside>
+                </section>
+
+                <i class="tri-line" aria-hidden="true"></i>
+
+                <!-- 指标行：本 PR 只放占位「—」，不接入真实数据。 -->
+                <section class="stat-row" aria-label="运营指标">
+                    <div class="stat-cell"><em>01 / SIGNALS</em><strong>—</strong><span>热点信号</span></div>
+                    <div class="stat-cell"><em>02 / WATCHING</em><strong>—</strong><span>跟踪视频</span></div>
+                    <div class="stat-cell"><em>03 / COMMENTS</em><strong>—</strong><span>今日新增评论</span></div>
+                    <div class="stat-cell is-accent"><em>04 / TOKENS</em><strong>—</strong><span>K Token 用量</span></div>
+                </section>
+
+                <!-- 快速开始：三个入口卡片引导新用户按顺序配置并体验核心能力。 -->
+                <section class="chapter quick-start">
+                    <div class="chapter-head">
+                        <span class="ch-tag">quick start</span>
+                        <h2>快速开始</h2>
+                        <span class="ch-hollow" aria-hidden="true">START</span>
+                    </div>
+                    <div class="cards">
+                        <div class="card">
+                            <div class="card-top"><span class="card-no">01</span><span class="card-en">CONFIG</span></div>
+                            <h3>1. 配置AI大模型</h3>
+                            <p>配置OpenAI兼容的API以启用AI功能</p>
+                            <button class="btn btn-primary" onclick="navigateTo('config')">前往配置</button>
+                        </div>
+                        <div class="card">
+                            <div class="card-top"><span class="card-no">02</span><span class="card-en">DISCOVER</span></div>
+                            <h3>2. 探索热点</h3>
+                            <p>查看分区热门tag和活动情报</p>
+                            <button class="btn btn-primary" onclick="navigateTo('hotspot')">开始探索</button>
+                        </div>
+                        <div class="card">
+                            <div class="card-top"><span class="card-no">03</span><span class="card-en">MONITOR</span></div>
+                            <h3>3. 监控评论</h3>
+                            <p>实时监控视频评论和舆情预警</p>
+                            <button class="btn btn-primary" onclick="navigateTo('comment')">开始监控</button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 「更多」：社区支持卡片与功能入口分组展示，方便用户识别外部支持入口。 -->
+                <section class="chapter more">
+                    <div class="chapter-head">
+                        <span class="ch-tag">more</span>
+                        <h2>更多</h2>
+                        <span class="ch-hollow" aria-hidden="true">MORE</span>
+                    </div>
+                    <div class="cards support-cards">
+                        <div class="card card-support">
+                            <div class="sup-art" aria-hidden="true"><svg><use href="#i-star"/></svg></div>
+                            <div class="sup-body">
+                                <span class="card-en">GITHUB · OPEN SOURCE</span>
+                                <h3>支持作者</h3>
+                                <p>为作者在github上点个⭐吧拜托了！</p>
+                                <!-- 已配置作者仓库地址，供用户直接访问项目源码。 -->
+                                <a class="btn btn-primary" href="https://github.com/FORK-is-coding/FishTool" aria-label="前往github">前往github</a>
+                            </div>
+                        </div>
+                        <div class="card card-support">
+                            <div class="sup-art" aria-hidden="true"><svg><use href="#i-chat"/></svg></div>
+                            <div class="sup-body">
+                                <span class="card-en">FEEDBACK · QQ GROUP</span>
+                                <h3>意见反馈</h3>
+                                <p>点击加入QQ群</p>
+                                <button class="btn btn-primary" type="button" onclick="showGroupQrModal()">加入群聊</button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <!-- 热点发现页：Tag词云 + 活动情报 + AI选题助手三个独立功能区块。 -->
+            <div id="hotspot-page" class="page">
+                <div class="page-head">
+                    <span class="ph-no">01</span>
+                    <div class="ph-title"><span class="ch-tag">signals</span><h1>热点发现</h1></div>
+                    <span class="ph-hollow" aria-hidden="true">SIGNALS</span>
+                    <p class="subtitle">追踪热点生命周期、单视频跟踪与聚合入口发现，为选题和事件研判提供依据。</p>
+                </div>
+                
+                <section class="section hotspot-lifecycle-section">
+                    <div class="hotspot-section-heading">
+                        <div>
+                            <p class="dashboard-eyebrow">LIFECYCLE SIGNALS</p>
+                            <h2>热点生命周期</h2>
+                        </div>
+                        <span id="hotspot-algorithm-version" class="hotspot-algorithm-badge">算法加载中</span>
+                    </div>
+                    <p class="hotspot-notice">采集采用活跃时段分段采样、评论热评 Top+增量；为保护账号不被风控，宁慢勿封。</p>
+                    <p class="hotspot-notice hotspot-notice-sub">首次使用仅有单日切片，阶段会显示“数据不足”属正常；连续使用几天后算法开始计算，建议持续数天以积累充足数据。</p>
+                    <div id="hotspot-lifecycle-grid" class="hotspot-lifecycle-grid"><p class="text-muted">数据积累中，连续采集几天后解锁阶段判断。</p></div>
+                    <!-- 算法口径开关：复用 .hotspot-progress-row；下拉框继承 .form-control 的主题样式，
+                         会话级记忆（sessionStorage，见 app.hotspot.js），不引入后端配置项。 -->
+                    <div class="hotspot-progress-row">
+                        <span>算法口径</span>
+                        <select id="hotspot-algorithm-select" class="form-control hotspot-collect-select" title="生命周期算法">
+                            <option value="lifecycle_v2" selected>lifecycle_v2（默认）</option>
+                            <option value="heuristic_v1">heuristic_v1（对照回放）</option>
+                        </select>
+                    </div>
+                    <div class="hotspot-progress-row">
+                        <span id="hotspot-collect-message">采集进度查询中</span>
+                        <progress id="hotspot-collect-progress" max="100" value="0"></progress>
+                        <select id="hotspot-tid-select" class="form-control hotspot-collect-select" title="采集分区">
+                            <option value="">加载全站分区...</option>
+                        </select>
+                        <select id="hotspot-limit-select" class="form-control hotspot-collect-select" title="采集数量">
+                            <option value="20" selected>20条</option>
+                            <option value="50">50条</option>
+                            <option value="100">100条</option>
+                            <option value="200">200条</option>
+                        </select>
+                        <select id="hotspot-min-view-select" class="form-control hotspot-collect-select" title="绘画区播放量下限">
+                            <option value="10000">下限1万</option>
+                            <option value="50000" selected>下限5万</option>
+                            <option value="100000">下限10万</option>
+                        </select>
+                        <button class="btn btn-primary" id="hotspot-collect-btn" onclick="triggerHotspotCollect()">立即采集</button>
+                    </div>
+                </section>
+
+                <!-- 单视频跟踪（watch）区块：列出跟踪池、三态过滤、手动加 watch / 停追。
+                     数据来自 /api/hotspot/watch；三态 state 由后端 classify_state 现算下发。 -->
+                <section class="section hotspot-watch-section">
+                    <div class="hotspot-section-heading">
+                        <div>
+                            <p class="dashboard-eyebrow">WATCH TARGETS</p>
+                            <h2>单视频跟踪</h2>
+                        </div>
+                        <button class="btn" type="button" onclick="loadHotspotWatch()">刷新</button>
+                    </div>
+                    <div class="form-group">
+                        <label for="hotspot-watch-state">状态筛选：</label>
+                        <select id="hotspot-watch-state" class="form-control" onchange="loadHotspotWatch()">
+                            <option value="" selected>全部</option>
+                            <option value="tracking">跟踪中</option>
+                            <option value="expired">已到期</option>
+                            <option value="released">已释放</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="hotspot-watch-bvid">新增跟踪：</label>
+                        <input id="hotspot-watch-bvid" class="form-control" type="text" placeholder="输入 BV 号，如 BV1xx411c7mD">
+                        <input id="hotspot-watch-interval" class="form-control" type="number" min="60" placeholder="采样间隔(秒，可选)">
+                        <button class="btn btn-primary" type="button" onclick="submitHotspotWatch()">加入跟踪</button>
+                    </div>
+                    <div id="hotspot-watch-collector-hint" class="hotspot-lifecycle-meta" role="status" hidden></div>
+                    <div id="hotspot-watch-list"><p class="text-muted">加载中...</p></div>
+                </section>
+
+                <!-- 聚合入口发现（discovery）区块：三入口条目 + 热搜词上屏。
+                     数据来自 /api/hotspot/discovery/latest（只读、零 HTTP）。
+                     sources 逐源透出（state=error 与 item_count=0 分开显示，不合并成单一 state），
+                     served_from_cache 上屏（新抓 / 上轮缓存），conflict=True 的多来源冲突显式标出。
+                     无快照显示占位「尚未跑过发现轮」，未知值显示空值不显示 0。
+                     低成本研究草案复用降级模板路径（不新增采集）。 -->
+                <section class="section hotspot-discovery-section">
+                    <div class="hotspot-section-heading">
+                        <div>
+                            <p class="dashboard-eyebrow">DISCOVERY SOURCES</p>
+                            <h2>聚合入口发现（首屏）</h2>
+                        </div>
+                        <button class="btn" type="button" onclick="loadHotspotDiscovery()">刷新</button>
+                    </div>
+                    <div id="hotspot-discovery-meta" class="hotspot-lifecycle-meta"></div>
+                    <div id="hotspot-discovery-sources"></div>
+                    <div id="hotspot-discovery-videos"></div>
+                    <div id="hotspot-discovery-keywords"></div>
+                    <div class="form-group">
+                        <label for="hotspot-draft-direction">低成本研究草案（复用降级模板，不新增采集）：</label>
+                        <input id="hotspot-draft-direction" class="form-control" type="text" placeholder="创作方向（可空）">
+                        <input id="hotspot-draft-zone" class="form-control" type="text" placeholder="分区名（可空，仅作标签）">
+                        <input id="hotspot-draft-count" class="form-control" type="number" min="1" max="20" value="5" placeholder="条数">
+                        <button class="btn btn-primary" type="button" onclick="generateHotspotResearchDraft()">生成研究草案</button>
+                    </div>
+                    <div id="hotspot-draft-result" class="result-area"></div>
+                </section>
+
+                <!-- 账号关联抽屉：遮罩 + 抽屉本体，内容由 app.hotspot.js 动态渲染 -->
+                <div id="hotspot-drawer-mask" class="hotspot-drawer-mask" onclick="closeHotspotDrawer()"></div>
+                <aside id="hotspot-drawer" class="hotspot-drawer" aria-label="账号关联抽屉"></aside>
+
+                <!-- 分区热门Tag词云：按分区拉取热门视频并统计高频Tag，生成词云结果。
+                    与活动情报/AI选题助手同级的完整卡片，间距沿用 .section 的 margin-bottom(30px)。 -->
+                <section class="section">
+                    <h2>分区热门Tag词云</h2>
+                    <div class="form-group">
+                        <label>选择分区：</label>
+                        <select id="zone-select" class="form-control">
+                            <option value="">加载中...</option>
+                        </select>
+                        <button class="btn btn-primary" onclick="generateTagCloud()">生成词云</button>
+                    </div>
+                    <div id="tag-cloud-result" class="result-area"></div>
+                </section>
+
+                <!-- 活动情报：拉取各分区官方活动与激励计划，实时追踪运营机会。 -->
+                <section class="section">
+                    <h2>活动情报</h2>
+                    <div class="form-group">
+                        <label for="activity-zone">分区选择：</label>
+                        <select id="activity-zone" class="form-control">
+                            <option value="all">全部</option>
+                            <option value="game">游戏区（游戏官号激励计划）</option>
+                            <option value="anime">动画区（番剧/动画官号）</option>
+                            <option value="paint">绘画区（画师同人站等蓝标UGC）</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-primary" onclick="fetchActivities()">拉取最新活动</button>
+                    <div id="activity-result" class="result-area"></div>
+                </section>
+
+                <!-- 选题助手：基于真实热点数据调用 AI 生成创作方向建议。 -->
+                <section class="section">
+                    <h2>AI选题助手</h2>
+                    <div class="form-group">
+                        <label>创作方向：</label>
+                        <input type="text" id="topic-direction" class="form-control" placeholder="例如：游戏解说、美食测评">
+                    </div>
+                    <div class="form-group">
+                        <label>目标分区：</label>
+                        <select id="topic-zone" class="form-control"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>生成数量：</label>
+                        <input type="number" id="topic-count" class="form-control" value="5" min="1" max="20">
+                    </div>
+                    <button class="btn btn-primary" onclick="generateTopics()">生成选题</button>
+                    <div id="topic-result" class="result-area"></div>
+                </section>
+
+                <!-- 第三批 h：事件工作台完整版（§15.1 六条）。
+                     实体+锚点或热门 Tag 建草稿；示例命中/冲突/排除 + 手动或 strict-auto；
+                     一次点击“发现并观察”显示预算/候选/待确认/采样名额；双通道卡片；
+                     覆盖不足显示缺的窗口与预计下次数据到达；数值可展开到来源 BVID 与窗口；
+                     不依赖颜色唯一表达；不自动发布。 -->
+                <section class="section event-workbench" aria-labelledby="event-workbench-title">
+                    <h2 id="event-workbench-title">事件工作台</h2>
+                    <div class="form-group">
+                        <label>实体 + 具体事件锚点：</label>
+                        <input type="text" id="event-name" class="form-control" placeholder="例如：原神 5.2 版本前瞻">
+                    </div>
+                    <div class="form-group">
+                        <label>热门 Tag 建议（先加载，再点 Tag 建草稿）：</label>
+                        <div>
+                            <button class="btn btn-sm" onclick="loadEventHotTags()">加载热门 Tag</button>
+                        </div>
+                        <div id="event-hot-tags" class="event-hot-tags"></div>
+                    </div>
+                    <fieldset class="event-attribution">
+                        <legend>归属方式（§15.1-2）</legend>
+                        <label><input type="radio" name="event-auto-membership" value="review" checked
+                                      onchange="setEventAutoMembership('review')"> 手动确认（review）</label>
+                        <label><input type="radio" name="event-auto-membership" value="strict_auto"
+                                      onchange="setEventAutoMembership('strict_auto')"> strict-auto（高精度自动接受）</label>
+                        <div id="event-attribution-preview" class="event-attribution-preview"></div>
+                    </fieldset>
+                    <div class="form-group">
+                        <label>创作方向（事件选题）：</label>
+                        <input type="text" id="event-topic-direction" class="form-control" placeholder="例如：差异化实测与避坑">
+                    </div>
+                    <details class="event-brief">
+                        <summary>CreatorBrief · 可用素材 · 制作时间（§15.2-1）</summary>
+                        <div class="event-brief-grid">
+                            <label>制作(h)<input type="number" id="event-brief-production" class="form-control" value="2" min="0" step="0.5"></label>
+                            <label>复核(h)<input type="number" id="event-brief-review" class="form-control" value="1" min="0" step="0.5"></label>
+                            <label>发布缓冲(h)<input type="number" id="event-brief-buffer" class="form-control" value="0" min="0" step="0.5"></label>
+                            <label>最大试验(h)<input type="number" id="event-brief-experiment" class="form-control" value="4" min="0" step="0.5"></label>
+                            <label>可用素材(逗号)<input type="text" id="event-brief-assets" class="form-control" placeholder="screen_record,voiceover"></label>
+                            <label>支持形式(逗号)<input type="text" id="event-brief-formats" class="form-control" placeholder="video"></label>
+                            <label>允许实体(逗号)<input type="text" id="event-brief-entities" class="form-control" placeholder="原神"></label>
+                        </div>
+                    </details>
+                    <div class="event-action-row">
+                        <button class="btn" onclick="createEventDraft()">新建事件</button>
+                        <button class="btn" onclick="previewEventMembers()">预览归属示例</button>
+                        <button class="btn" onclick="discoverAndObserveEvent()">发现并观察</button>
+                        <button class="btn" onclick="assessEventDaily()">评估（当日窗口）</button>
+                        <button class="btn" onclick="createOpportunityForEvent()">生成机会列表</button>
+                    </div>
+                    <div id="event-workbench-result" class="result-area"></div>
+                    <div id="event-opportunity-result" class="result-area"></div>
+                </section>
+            </div>
+
+            <!-- 评论监控页：常驻监控卡片 + 单次监控表单 + 可视化大屏 + 预警记录。 -->
+            <div id="comment-page" class="page">
+                <div class="page-head">
+                    <span class="ph-no">02</span>
+                    <div class="ph-title"><span class="ch-tag">monitor</span><h1>评论监控</h1></div>
+                    <span class="ph-hollow" aria-hidden="true">MONITOR</span>
+                    <p class="subtitle">常驻监控与单次采集，评论去重、情感分析与负面舆情预警。</p>
+                </div>
+                
+                <!-- 常驻监控卡片：状态、统计、控制和运行态右侧波形保持在同一操作区域。
+                    开启/恢复/暂停/停止 对应后端 /comment/resident/* 四个接口。 -->
+                <section class="resident-monitor-card" aria-live="polite">
+                    <!-- 运行态专用右侧音频均衡器波形；暂停和停止由 CSS 状态选择器处理。 -->
+                    <div class="resident-monitor-waveform" aria-hidden="true">
+                        <span></span><span></span><span></span><span></span><span></span><span></span>
+                        <span></span><span></span><span></span><span></span><span></span><span></span>
+                    </div>
+                    <div class="resident-monitor-heading">
+                        <div>
+                            <p class="dashboard-eyebrow">RESIDENT COMMENT MONITOR</p>
+                            <h2>常驻监控状态</h2>
+                        </div>
+                        <span id="resident-monitor-status" class="monitor-state-chip">已停止</span>
+                    </div>
+                    <div class="resident-monitor-metrics">
+                        <span>上次采集 <strong id="resident-last-collect">暂无</strong></span>
+                        <span>累计新增 <strong id="resident-total-collected">0</strong> 条</span>
+                        <span>失败退避 <strong id="resident-failures">0</strong> 次</span>
+                    </div>
+                    <div class="resident-monitor-controls">
+                        <input id="resident-bvids" class="form-control" placeholder="BV号，多个用逗号分隔">
+                        <button class="btn btn-primary" onclick="enableResidentMonitor()">开启/恢复</button>
+                        <button class="btn btn-secondary" onclick="pauseResidentMonitor()">暂停</button>
+                        <button class="btn btn-secondary" onclick="stopResidentMonitor()">停止</button>
+                    </div>
+                </section>
+
+                <!-- 普采评论监控：支持按单个 BV 或按 UP 主 UID 串行采集账号投稿。 -->
+                <section class="section">
+                    <!-- 三列分别填写 BV、UID 和账号采集视频数量；BV 路径不会读取数量输入。 -->
+                    <div class="monitor-target-grid">
+                        <div class="form-group">
+                            <label for="monitor-bvid">视频BV号：</label>
+                            <input type="text" id="monitor-bvid" class="form-control" placeholder="BV1xx411c7XZ" autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label for="monitor-uid">UP主UID：</label>
+                            <input type="text" id="monitor-uid" class="form-control" placeholder="例如：12345678" inputmode="numeric" autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label for="monitor-video-limit">视频数量：</label>
+                            <input type="number" id="monitor-video-limit" class="form-control" value="10" min="1" max="50" step="1" inputmode="numeric" aria-describedby="monitor-video-limit-help">
+                            <small id="monitor-video-limit-help">UID采集范围：1-50，默认10</small>
+                        </div>
+                    </div>
+                    <!-- 采集策略下拉栏：快速(默认100条) / 全面(全量采集) -->
+                    <div class="form-group monitor-option-row">
+                        <label for="monitor-strategy">采集策略：</label>
+                        <select id="monitor-strategy" class="form-control monitor-strategy-select">
+                            <option value="normal" selected>快速（默认，100条采集）</option>
+                            <option value="full">全面（全量采集）</option>
+                        </select>
+                        <span class="monitor-option-note">全面模式评论较多时耗时较长，可查看采集进度</span>
+                    </div>
+                    <!-- 去重和情感开关继续服务原有 BV 采集路径，保持既有功能不变。 -->
+                    <div class="form-group monitor-option-row">
+                        <label>
+                            <input type="checkbox" id="enable-dedup" checked>
+                            启用去重
+                        </label>
+                        <label>
+                            <input type="checkbox" id="enable-sentiment" checked>
+                            启用情感分析
+                        </label>
+                    </div>
+                    <!-- 提交按钮在请求期间由 JS 禁用并显示当前采集目标，避免重复提交。 -->
+                    <button id="monitor-submit-button" class="btn btn-primary" type="button" onclick="monitorVideo()">开始监控</button>
+                    <div id="monitor-result" class="result-area"></div>
+                    <!-- 评论可视化大屏：固定尺寸容器保证 ECharts 在离线环境稳定初始化。 -->
+                    <section id="monitor-visualization" class="comment-dashboard" aria-live="polite">
+                        <header class="dashboard-header">
+                            <div>
+                                <p class="dashboard-eyebrow">COMMENT INTELLIGENCE</p>
+                                <h3>评论舆情可视化</h3>
+                            </div>
+                            <span id="dashboard-data-status" class="dashboard-status">等待数据</span>
+                        </header>
+
+                        <div class="dashboard-metrics" aria-label="评论核心指标">
+                            <div class="metric-item"><span>原始评论</span><strong id="metric-before">0</strong></div>
+                            <div class="metric-item"><span>清洗后</span><strong id="metric-after">0</strong></div>
+                            <div class="metric-item"><span>去重数量</span><strong id="metric-removed">0</strong></div>
+                            <div class="metric-item"><span>高声量条目</span><strong id="metric-voice">0</strong></div>
+                        </div>
+
+                        <div class="dashboard-chart-grid">
+                            <section class="chart-panel" aria-label="情感分布图表">
+                                <div class="panel-title">情感分布</div>
+                                <div id="sentiment-chart" class="dashboard-chart"></div>
+                                <div id="sentiment-empty" class="chart-empty">暂无情感数据</div>
+                            </section>
+                            <section class="chart-panel" aria-label="评论趋势图表">
+                                <div class="panel-title">评论日期趋势</div>
+                                <div id="trend-chart" class="dashboard-chart"></div>
+                                <div id="trend-empty" class="chart-empty">暂无趋势数据</div>
+                            </section>
+                            <section class="chart-panel chart-panel-wide" aria-label="清洗原因图表">
+                                <div class="panel-title">去重与清洗构成</div>
+                                <div id="dedup-chart" class="dashboard-chart dashboard-chart-short"></div>
+                                <div id="dedup-empty" class="chart-empty">暂无去重数据，当前评论均为唯一内容</div>
+                            </section>
+                        </div>
+
+                        <!-- 独立 Top10 模块，不再把高声量细则堆成普通文本。 -->
+                        <section class="voice-module">
+                            <div class="voice-module-header">
+                                <div>
+                                    <p class="dashboard-eyebrow">VOICE RANKING</p>
+                                    <h3>前十高声量具体评论</h3>
+                                </div>
+                                <span class="voice-rule">声量分 = 点赞 + 聚合权重</span>
+                            </div>
+                            <div id="monitor-top10" class="voice-list"></div>
+                        </section>
+                    </section>
+                </section>
+
+                <!-- 语义折叠（可逆）实验面板：评论页常驻，由 app.comment.semantic.js 驱动。
+                     可独立输入 BV，也会在单视频采集成功后自动带入当前 BV；
+                     不随页面加载自动计费（仅点「开始分析」才发起模型请求），首次使用弹同意模态。 -->
+                <section id="semantic-panel" class="section semantic-panel" aria-live="polite">
+                    <div class="semantic-panel-head">
+                        <div>
+                            <p class="dashboard-eyebrow">SEMANTIC FOLD · EXPERIMENTAL</p>
+                            <h2>语义折叠（实验）</h2>
+                        </div>
+                    </div>
+                    <!-- 独立 BV 选择：历史数据 / 刷新后也有入口，不依赖本次采集。 -->
+                    <div class="semantic-selector">
+                        <input type="text" id="semantic-bvid" class="form-control" placeholder="BV号（留空则用当前采集视频）" autocomplete="off">
+                        <button type="button" id="semantic-load-btn" class="btn btn-secondary">加载</button>
+                    </div>
+                    <div id="semantic-body"><p class="semantic-hint">输入视频 BV 号并点「加载」，或先采集单个视频后在此按语义折叠等价评论。</p></div>
+                </section>
+
+                <section class="section">
+                    <h2>预警记录</h2>
+                    <button class="btn btn-secondary" onclick="loadAlerts()">刷新预警</button>
+                    <div id="alerts-list" class="result-area"></div>
+                </section>
+            </div>
+
+            <!-- 头部UP主拆解页：先拉分区头部UP列表，再对单个UP做运营策略分析。 -->
+            <div id="analysis-page" class="page">
+                <div class="page-head">
+                    <span class="ph-no">04</span>
+                    <div class="ph-title"><span class="ch-tag">analysis</span><h1>头部UP主拆解</h1></div>
+                    <span class="ph-hollow" aria-hidden="true">ANALYSIS</span>
+                    <p class="subtitle">分析分区头部UP主的运营策略与数据表现</p>
+                </div>
+
+                <section class="section">
+                    <h2>选择分析目标</h2>
+                    <div class="form-group">
+                        <label>目标分区：</label>
+                        <select id="analysis-zone-select" class="form-control">
+                            <option value="">加载中...</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>获取数量：</label>
+                        <input type="number" id="analysis-limit" class="form-control" value="10" min="1" max="50">
+                    </div>
+                    <button class="btn btn-primary" onclick="fetchTopUps()">获取头部UP主</button>
+                    <div id="top-ups-result" class="result-area"></div>
+                </section>
+
+                <section class="section">
+                    <h2>运营策略分析</h2>
+                    <div class="form-group">
+                        <label>UP主UID或主页链接：</label>
+                        <input type="text" id="analyze-uid" class="form-control" placeholder="输入UID或主页链接">
+                    </div>
+                    <button class="btn btn-primary" onclick="analyzeUp()">开始分析</button>
+                    <div id="analysis-result" class="result-area"></div>
+                </section>
+            </div>
+
+            <!-- 账号自诊页：对比分区基准，输出账号健康度、互动效率与 AI 运营建议。 -->
+            <div id="self-diagnosis-page" class="page">
+                <div class="page-head">
+                    <span class="ph-no">05</span>
+                    <div class="ph-title"><span class="ch-tag">diagnosis</span><h1>账号自诊</h1></div>
+                    <span class="ph-hollow" aria-hidden="true">DIAGNOSIS</span>
+                    <p class="subtitle">对比分区数据，发现账号增长瓶颈</p>
+                </div>
+
+                <section class="section">
+                    <h2>诊断我的账号</h2>
+                    <div class="form-group">
+                        <label>我的B站UID：</label>
+                        <input type="text" id="diagnosis-uid" class="form-control" placeholder="输入你的B站UID">
+                    </div>
+                    <div class="form-group">
+                        <label>对比分区（可选）：</label>
+                        <select id="diagnosis-zone-select" class="form-control">
+                            <option value="">不对比分区</option>
+                            <option value="">加载中...</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-primary" onclick="runSelfDiagnosis()">开始自诊</button>
+                    <button id="diagnosis-export-button" class="btn btn-secondary" onclick="exportDiagnosisReport()">导出报告</button>
+                    <div id="diagnosis-result" class="result-area"></div>
+                </section>
+
+                <!-- 01 同行排名：有限参评集合内的真实名次（不代表全站排名） -->
+                <section class="section">
+                    <h2>同行排名（有限参评集合）</h2>
+                    <p class="subtitle">在这些明确参评账号中按同一指标排名，不代表全站排名</p>
+                    <div class="form-group">
+                        <label>同行 UID（每行一个，或用逗号/空格分隔，最多 50 个）：</label>
+                        <textarea id="ranking-peer-uids" class="form-control" rows="3" placeholder="例如：12345, 67890"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>指标说明：</label>
+                        <p class="analysis-hint">过去 30 天内、稿龄 7—30 天的最近最多 10 条公开稿件，取<b>中位累计播放</b>；一个账号一票，多 P 不加权，选中稿缺播放时标记缺失而不从后面替补。</p>
+                    </div>
+                    <div class="form-group">
+                        <label>内容范围（content_scope）：</label>
+                        <select id="ranking-content-scope" class="form-control">
+                            <option value="all_public_uploads">全部公开投稿</option>
+                            <option value="exact_raw_tid">指定原始投稿分区（exact_raw_tid）</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>原始 tid（仅 exact_raw_tid 需要）：</label>
+                        <input type="text" id="ranking-raw-tid" class="form-control" placeholder="例如 4">
+                    </div>
+                    <div class="form-group">
+                        <label><input type="checkbox" id="ranking-size-match"> 仅同粉丝规模（same_follower_band）</label>
+                    </div>
+                    <div class="form-group">
+                        <label>从分区发现候选作者（可选，仅发现不排名）：</label>
+                        <input type="text" id="ranking-rid" class="form-control" placeholder="分区 rid，例如 4">
+                        <button class="btn btn-secondary" onclick="discoverRankingCandidates()">发现候选</button>
+                        <div id="ranking-candidates" class="result-area"></div>
+                    </div>
+                    <button class="btn btn-primary" onclick="startCreatorRanking()">发起排名</button>
+                    <button class="btn btn-secondary" onclick="cancelCreatorRanking()">取消排名</button>
+                    <button class="btn btn-secondary" onclick="retryCreatorRanking()">重试排名</button>
+                    <div id="ranking-result" class="result-area"></div>
+                </section>
+            </div>
+
+            <!-- 配置页：AI大模型教程引导 + 密钥/地址/模型配置 + 用量统计。 -->
+            <div id="config-page" class="page">
+                <div class="page-head">
+                    <span class="ph-no">03</span>
+                    <div class="ph-title"><span class="ch-tag">config</span><h1>配置管理</h1></div>
+                    <span class="ph-hollow" aria-hidden="true">CONFIG</span>
+                    <p class="subtitle config-intro">模型可由用户自由灵活配置，不同水平的AI会影响工具箱内涉及AI功能模块的产出效果</p>
+                </div>
+
+                <section class="section ai-guide-card">
+                    <div class="guide-heading">
+                        <span class="guide-badge">新手指引</span>
+                        <div>
+                            <h2>AI配置教程</h2>
+                            <p>以 DeepSeek 为例，三步完成配置，无需编程基础。</p>
+                        </div>
+                    </div>
+                    <div class="guide-explainer">
+                        <p><strong>API是什么</strong></p>
+                        <p>API 可以理解为工具箱和 DeepSeek 之间的专用通道。工具箱通过它把分析需求交给模型，再把结果展示给你。</p>
+                    </div>
+                    <div class="guide-steps" aria-label="DeepSeek API配置步骤">
+                        <article class="guide-step">
+                            <span>01</span>
+                            <h3>申请 API Key</h3>
+                            <p>访问 DeepSeek 开放平台，注册并登录账号，在“API Keys”中创建一枚新密钥。</p>
+                        </article>
+                        <article class="guide-step">
+                            <span>02</span>
+                            <h3>填入配置页</h3>
+                            <p>把密钥填入下方 API Key；Base URL 填写 <code>https://api.deepseek.com</code>。</p>
+                        </article>
+                        <article class="guide-step">
+                            <span>03</span>
+                            <h3>选择模型</h3>
+                            <p>从模型列表选择 <code>deepseek-chat</code>，再点击“保存配置”。</p>
+                        </article>
+                    </div>
+                    <div class="guide-explainer guide-config">
+                        <p><strong>API如何配置</strong></p>
+                        <p>按上方顺序填好三个字段即可。保存后，热点选题、UP主拆解等 AI 功能会使用你选择的模型。</p>
+                    </div>
+                    <div class="api-key-warning" role="note">
+                        <span aria-hidden="true">!</span>
+                        <p><strong>API Key 相当于账号密码</strong><br>请只填写在自己的工具箱中，不要截图、转发或提供给他人。</p>
+                    </div>
+                </section>
+                
+                <section class="section ai-config-card">
+                    <!-- 模型下拉：JS 探测成功时替换手填框，失败时保持手填能力。 -->
+                    <h2>AI大模型配置</h2>
+                    <div class="form-group">
+                        <label>API Key：</label>
+                        <input type="password" id="llm-api-key" class="form-control" placeholder="sk-xxx">
+                    </div>
+                    <div class="form-group">
+                        <label>Base URL：</label>
+                        <input type="text" id="llm-base-url" class="form-control" value="https://api.openai.com/v1">
+                    </div>
+                    <div class="form-group">
+                        <label>Model：</label>
+                        <!-- 成功获取模型后由 JS 替换为下拉框，失败时保留手填能力。 -->
+                        <input type="text" id="llm-model" class="form-control" value="gpt-3.5-turbo" autocomplete="off">
+                        <select id="llm-model-select" class="form-control" style="display: none;"></select>
+                        <small id="llm-model-status"></small>
+                    </div>
+                    <button class="btn btn-primary" onclick="saveLLMConfig()">保存配置</button>
+                </section>
+
+                <section class="section">
+                    <h2>AI大模型用量统计</h2>
+                    <button class="btn btn-secondary" onclick="loadLLMUsage()">查看用量</button>
+                    <div id="llm-usage" class="result-area"></div>
+                </section>
+            </div>
+
+            <!-- 抽奖工具页：真人筛选、受约束 AI 快筛与评论区随机抽奖。 -->
+            <div id="lottery-page" class="page">
+                <div class="page-head">
+                    <span class="ph-no">06</span>
+                    <div class="ph-title"><span class="ch-tag">lottery</span><h1>抽奖工具</h1></div>
+                    <span class="ph-hollow" aria-hidden="true">LOTTERY</span>
+                    <p class="subtitle">先核对内容，再复用本地评论数据完成真人筛选或随机抽取</p>
+                </div>
+
+                <div class="lottery-layout">
+                    <section class="section lottery-workbench">
+                        <div class="lottery-section-heading">
+                            <div>
+                                <p class="dashboard-eyebrow">REAL PERSON REVIEW</p>
+                                <h2>真人筛选</h2>
+                            </div>
+                            <span class="lottery-badge">AI 受限数据判定</span>
+                        </div>
+                        <div class="form-group">
+                            <label for="lottery-filter-target">视频 BV 号或动态完整链接</label>
+                            <input id="lottery-filter-target" class="form-control" type="text" placeholder="BV1xx... 或 https://t.bilibili.com/...">
+                        </div>
+                        <div class="form-group">
+                            <label for="lottery-focus-template">AI 判定侧重点模板</label>
+                            <textarea id="lottery-focus-template" class="form-control lottery-prompt" rows="4">重点核验账号等级、可观察账号年龄、近期活跃度，以及近期动态是否几乎全部为转发抽奖。不要因低等级单一指标直接判定。</textarea>
+                            <small>模板只调整判断侧重点；系统会强制 AI 仅使用本次传入的结构化数据。</small>
+                        </div>
+                        <button id="lottery-filter-button" class="btn btn-primary" type="button" onclick="startRealUserFilter()">分析评论区全部用户</button>
+                        <div id="lottery-filter-result" class="result-area" aria-live="polite"></div>
+                    </section>
+
+                    <section class="section lottery-quick-card">
+                        <div class="lottery-section-heading">
+                            <div>
+                                <p class="dashboard-eyebrow">FOCUSED UID CHECK</p>
+                                <h2>快速筛选</h2>
+                            </div>
+                            <span class="lottery-badge secondary">单 UID</span>
+                        </div>
+                        <div class="form-group">
+                            <label for="lottery-quick-uid">用户 UID</label>
+                            <input id="lottery-quick-uid" class="form-control" type="number" min="1" placeholder="输入需要核验的 UID">
+                        </div>
+                        <div class="lottery-quick-actions">
+                            <button id="lottery-quick-button" class="btn btn-secondary" type="button" onclick="quickFilterUser()">采集画像并交给 AI 核验</button>
+                            <button id="lottery-verify-winners-button" class="btn btn-primary" type="button" onclick="verifyLotteryWinners()">一键校验中奖名单</button>
+                        </div>
+                        <div id="lottery-quick-result" class="result-area" aria-live="polite"></div>
+                    </section>
+
+                    <section class="section lottery-draw-card">
+                        <div class="lottery-section-heading">
+                            <div>
+                                <p class="dashboard-eyebrow">RANDOM DRAW</p>
+                                <h2>评论区随机抽奖</h2>
+                            </div>
+                            <span class="lottery-badge success">本地优先</span>
+                        </div>
+                        <div class="lottery-draw-controls">
+                            <div class="form-group lottery-target-field">
+                                <label for="lottery-draw-target">视频 BV 号或动态完整链接</label>
+                                <input id="lottery-draw-target" class="form-control" type="text" placeholder="输入后先预览标题与发布者">
+                            </div>
+                            <div class="form-group">
+                                <label for="lottery-winner-count">中奖人数</label>
+                                <input id="lottery-winner-count" class="form-control" type="number" value="1" min="1" max="100">
+                            </div>
+                        </div>
+                        <div class="lottery-filter-grid" aria-label="候选用户筛选条件">
+                            <label class="lottery-toggle lottery-vip-toggle"><input id="lottery-vip-only" type="checkbox"><span>仅限大会员</span></label>
+                            <label class="lottery-toggle"><input id="lottery-real-only" type="checkbox" onchange="document.getElementById('lottery-include-indeterminate').disabled = !this.checked"><span>开奖前仅保留真人判定候选</span></label>
+                            <label class="lottery-toggle"><input id="lottery-include-indeterminate" type="checkbox" disabled><span>真人筛选时保留未知用户</span></label>
+                            <div class="form-group">
+                                <label for="lottery-min-level">最低用户等级</label>
+                                <select id="lottery-min-level" class="form-control lottery-select">
+                                    <option value="">不限等级</option>
+                                    <option value="0">Lv0 及以上</option>
+                                    <option value="1">Lv1 及以上</option>
+                                    <option value="2">Lv2 及以上</option>
+                                    <option value="3">Lv3 及以上</option>
+                                    <option value="4">Lv4 及以上</option>
+                                    <option value="5">Lv5 及以上</option>
+                                    <option value="6">仅 Lv6</option>
+                                </select>
+                            </div>
+                            <div class="form-group lottery-date-field">
+                                <label for="lottery-date-start">评论开始日期</label>
+                                <input id="lottery-date-start" class="form-control" type="date">
+                            </div>
+                            <div class="form-group lottery-date-field">
+                                <label for="lottery-date-end">评论结束日期</label>
+                                <input id="lottery-date-end" class="form-control" type="date">
+                            </div>
+                        </div>
+                        <label class="lottery-toggle"><input id="lottery-unique-users" type="checkbox" checked><span>同一 UID 只保留一次抽奖机会</span></label>
+                        <button id="lottery-preview-button" class="btn btn-primary" type="button" onclick="previewLotteryDraw()">核对内容并开始</button>
+                        <div id="lottery-preview-result" class="lottery-preview" aria-live="polite"></div>
+                        <div id="lottery-draw-result" class="result-area" aria-live="polite"></div>
+                        <div id="lottery-winner-verification-result" class="result-area" aria-live="polite"></div>
+                    </section>
+                </div>
+            </div>
+
+            <!-- 日志页：来源/级别/关键词筛选 + 2 秒增量轮询 + 问题日志导出。 -->
+            <div id="logs-page" class="page">
+                <div class="page-head">
+                    <span class="ph-no">07</span>
+                    <div class="ph-title"><span class="ch-tag">logs</span><h1>平台日志</h1></div>
+                    <span class="ph-hollow" aria-hidden="true">LOGS</span>
+                    <p class="subtitle">实时滚动全项目日志，按来源、关键词与级别筛选，可导出问题日志。</p>
+                </div>
+
+                <section class="section logs-toolbar">
+                    <div class="logs-toolbar-row">
+                        <div class="form-group">
+                            <label for="log-type">日志来源</label>
+                            <select id="log-type" class="form-control">
+                                <option value="all">全项目日志</option>
+                                <option value="app">应用日志</option>
+                                <option value="error">错误日志</option>
+                                <option value="crawler">爬虫日志</option>
+                                <option value="risk">风控日志</option>
+                            </select>
+                        </div>
+                        <div class="form-group logs-keyword-field">
+                            <label for="log-keyword">关键词</label>
+                            <input id="log-keyword" class="form-control" type="search" placeholder="筛选模块或消息">
+                        </div>
+                        <button class="btn btn-primary" type="button" onclick="loadLogs(true)">重新加载</button>
+                        <button class="btn btn-secondary" type="button" onclick="exportProblemLogs()">导出问题日志</button>
+                    </div>
+                    <div class="log-level-filters" role="group" aria-label="日志级别筛选">
+                        <label><input type="checkbox" value="DEBUG" checked> <span class="log-level-chip level-debug">DEBUG</span></label>
+                        <label><input type="checkbox" value="INFO" checked> <span class="log-level-chip level-info">INFO</span></label>
+                        <label><input type="checkbox" value="WARNING" checked> <span class="log-level-chip level-warning">WARNING</span></label>
+                        <label><input type="checkbox" value="ERROR" checked> <span class="log-level-chip level-error">ERROR</span></label>
+                    </div>
+                    <div class="logs-status-row"><span id="logs-status">实时连接准备中</span><span id="logs-count">0 条</span></div>
+                </section>
+                <div id="logs-content" class="logs-area" aria-live="polite"></div>
+            </div>
+
+            <!-- 使用说明页：展示项目说明与后续补充说明。 -->
+            <div id="usage-page" class="page usage-page">
+                <div class="page-head">
+                    <span class="ph-no">08</span>
+                    <div class="ph-title"><span class="ch-tag">notice</span><h1>使用说明</h1></div>
+                    <span class="ph-hollow" aria-hidden="true">NOTICE</span>
+                    <p class="subtitle">项目背景、使用声明与免责协议。</p>
+                </div>
+                <div class="usage-card-stack">
+                    <section class="card usage-card">
+                        <div class="usage-card-heading">
+                            <span class="card-no">01</span>
+                            <div>
+                                <span class="card-en">ABOUT</span>
+                                <h2>项目说明</h2><!-- 第一张卡片的模块标题。 -->
+                                <p class="usage-card-subtitle">项目背景、定位与使用声明</p><!-- 概括正文涵盖的信息。 -->
+                            </div>
+                        </div>
+                        <div class="usage-card-content" tabindex="0"><!-- 保留可聚焦、可滚轮滚动的正文接口。 -->
+                            <div class="usage-item"><!-- 按使用说明条目结构承载分段文案。 -->
+                                <p><strong>技术说明</strong>：本项目完全基于 AstrBot 全流程 vibe coding 制作，当前处于测试阶段。若您发现代码可优化之处、漏洞或架构建议，欢迎提出！</p><!-- 说明项目技术实现与反馈渠道。 -->
+                                <p><strong>产品定位</strong>：本项目是基于个人运营经验打造的验证型产品。若您有功能设想或需求方案，欢迎反馈～</p><!-- 说明产品定位与需求反馈范围。 -->
+                                <p><strong>使用声明</strong>：本项目为在校学生个人制作的技术验证产物，仅供交流学习，严禁贩卖、盈利或破坏性改造，严禁企业或机构使用。如有相关业务需求，请前往 B 站 API 开放平台申请官方接口。</p><!-- 说明允许用途、禁止用途与官方接口指引。 -->
+                            </div><!-- 结束项目说明条目。 -->
+                        </div><!-- 结束第一张卡片的独立滚动正文区。 -->
+                    </section>
+                    <section class="card usage-card">
+                        <div class="usage-card-heading">
+                            <span class="card-no">02</span>
+                            <div>
+                                <span class="card-en">DISCLAIMER</span>
+                                <h2>免责声明</h2><!-- 第二张卡片展示完整的免责声明与边界限定协议。 -->
+                                <p class="usage-card-subtitle">使用本工具前请完整阅读以下协议</p><!-- 提醒用户先阅读协议内容。 -->
+                            </div>
+                        </div>
+                        <div class="usage-card-content" tabindex="0"><!-- 免责声明内容支持在卡片内使用鼠标滚轮独立滚动。 -->
+                            <div class="usage-disclaimer"><!-- 按协议章节保留原始文案，便于阅读和维护。 -->
+                                <p>免责声明与边界限定协议</p>
+                                <p>1. 项目性质与开源协议<br>本项目（以下简称"本工具"）系面向B站个人创作者的辅助性开源代码，旨在提供技术学习与经验交流的工具。本工具完全免费且开源，仅供个人学习、研究及非商业性质的技术交流使用。严禁任何个人或组织将本工具用于商业盈利、数据倒卖或破坏平台生态的行为。</p>
+                                <p>2. 免责条款<br>本工具按"原样（AS IS）"提供，开发者不提供任何明示或暗示的保证（包括但不限于对适销性、特定用途适用性和非侵权性的保证）。<br>技术风险：因使用、修改或分发本工具源码而导致的任何直接、间接、偶然、特殊或后果性的损害（包括但不限于账号封禁、数据丢失、设备故障等），开发者及贡献者概不负责。<br>合规风险：用户在使用本工具获取B站公开数据及调用AI大模型时，必须严格遵守《中华人民共和国网络安全法》、《数据安全法》及B站平台用户协议。因用户自行修改代码、绕过限制、高频抓取或滥用AI生成内容而引发的任何法律纠纷、平台处罚或经济损失，均由用户自行承担。</p>
+                                <p>3. 数据与隐私边界限定<br>公开数据原则：本工具默认仅获取B站平台向公众公开的数据。<br>本地化与隐私：本工具未设置任何后门或云端数据收集机制。用户的API Key、Cookie等敏感凭证均由用户自行配置，并以加密形式仅存储于本地设备。因用户本地环境不安全或操作不当导致的凭证泄露，开发者不承担任何责任。</p>
+                                <p>4. 知识产权与禁止滥用<br>本项目的源代码、UI设计及文档遵循开源协议发布。未经原作者书面授权，任何个人或组织不得将本工具或其衍生版本用于非法用途、恶意攻击或大规模商业化运营。</p>
+                                <p>5. 最终解释权<br>本免责声明适用于所有下载、克隆、Fork或使用本项目源码的用户。用户一旦开始使用本工具，即视为已充分阅读、理解并同意接受本协议的全部约束。</p>
+                                <p>6. 数据字段说明<br>本工具对公开数据的质量状态做了显式区分：<strong>真实 0</strong>（接口明确返回 0）显示为 0；<strong>未知/缺失</strong>（接口未返回、越权或采集失败）显示为“未知”或“暂无数据”，不会用 0 冒充；<strong>部分采集</strong>（分页未采全）会在指标旁标注实际有效/缺失条数。抽奖画像缓存中的旧数据未经来源与时效校验，标记为“未验证”，需重新采集后才参与自动资格判断。</p><!-- 说明未知/缺失/部分采集与旧缓存的展示语义，避免把缺失误读为 0。 -->
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- ECharts 固定为本地静态资源，断网环境不依赖 CDN。 -->
+    <script src="./static/vendor/echarts.min.js"></script>
+    <!-- 版本参数用于让 8000 端口加载本次弹窗修复后的脚本，避免旧 JS 缓存导致 onclick 无响应。 -->
+    <script src="./static/js/app.core.js?v=progress-20261026-fix20261027-fix20261030-ui20261101"></script>
+<!-- 开场动画控制器：three.js 与 LOGO 数据只在播放完整版时按需加载。 -->
+<script src="./static/js/app.intro.js?v=ui20261101-v029ui20261101" data-three="./static/vendor/three.min.js?v=r160" data-logo="./static/intro/logo-mark.js?v=ui20261101"></script>
+<script src="./static/js/app.hotspot.js?v=progress-20261026-fix20261027-fix20261030-ui20261101"></script>
+<!-- 第三批 g：事件工作台 / 机会列表 / 证据回看 / 最小反馈（新增脚本，不改既有结构）。 -->
+<script src="./static/js/app.events.js?v=batch3h-20261003-fix20261027"></script>
+<script src="./static/js/app.comment.js?v=progress-20261026-ui20261101-semantic20261102"></script>
+<script src="./static/js/app.config.js?v=split-20260824-fix20261030"></script>
+<script src="./static/js/app.up.js?v=report5-20261026-fix20261027-ui20261101"></script>
+<script src="./static/js/app.auth.js?v=split-20260824-fix20261027-fix20261030-ui20261101-v029ui20261101"></script>
+<script src="./static/js/app.lottery.js?v=welcomefix-20261026-fix20261027-fix20261030-v029ui20261101"></script>
+<script src="./static/js/app.ui.js?v=split-20261026-toast-fix20261030-v029ui20261101"></script>
+<!-- 语义折叠实验面板：依赖 app.core.js 工具与 app.ui.js 的 mountAppModal/showAppConfirm，须在二者之后加载。 -->
+<script src="./static/js/app.comment.semantic.js?v=semantic-20261102"></script>
+<!-- 欢迎页启动公告：依赖 app.ui.js 的 mountAppModal，必须在它之后加载。 -->
+<script src="./static/js/app.notice.js?v=notice20261101"></script>
+
+    <!-- 单视频跟踪（watch）区块的配套 JS：本批唯一新增脚本，内联在 index.html 内，
+         不改动 static/ 下任何既有脚本，也不改动上方任何既有结构。
+         三态（tracking/expired/released）与 state 字段由后端 classify_state 现算，
+         前端只做展示与筛选，不自行判断三态。 -->
+    <script>
+    // ===== 热点发现 · 单视频跟踪（watch）区块 =====
+    const HOTSPOT_WATCH_STATE_LABELS = {
+        tracking: '跟踪中',
+        expired: '已到期',
+        released: '已释放',
+        // 展示态（后端 display_state 下发）：记录在跟踪中，但后台 watch 采样任务未运行。
+        pending_enable: '待启用',
+    };
+
+    // 秒级 epoch 转本地时间文本；缺失/非法时返回「暂无」，不用 0 或本地 now 顶替。
+    function hotspotWatchEpochText(epoch) {
+        if (typeof epoch !== 'number' || !Number.isFinite(epoch) || epoch <= 0) return '暂无';
+        return new Date(epoch * 1000).toLocaleString('zh-CN');
+    }
+
+    // 采集运行态提示：采样任务未运行时说明开启方式（monitor.watch_enable）与预计请求量。
+    function renderHotspotWatchCollectorHint(items, collector) {
+        const hint = document.getElementById('hotspot-watch-collector-hint');
+        if (!hint) return;
+        const status = collector || {};
+        const pending = items.filter(item => item.display_state === 'pending_enable');
+        if (status.running || !pending.length) {
+            hint.hidden = true;
+            hint.innerHTML = '';
+            return;
+        }
+        // 每个目标每次采样发 1 次详情请求，按各自采样间隔折算每日请求量。
+        const dailyRequests = pending.reduce((sum, item) => {
+            const interval = Number(item.sample_interval_s);
+            return sum + (Number.isFinite(interval) && interval > 0 ? Math.ceil(86400 / interval) : 0);
+        }, 0);
+        const configKey = escapeHtml(status.enable_config_key || 'monitor.watch_enable');
+        const reason = status.status_known
+            ? '后台持续采集未运行，以下目标只保存了记录，还不会定期采样。'
+            : '无法确认后台持续采集是否在运行，以下目标可能还不会定期采样。';
+        hint.innerHTML = `<p><strong>待启用：</strong>${reason}</p>
+            <p>开启方式：在配置目录的 config.yaml（或 user_config.yaml）中设置 <code>${configKey}: true</code>（即 monitor 段下 watch_enable: true），然后重启 FishTool。</p>
+            <p>预计请求量：当前列表 ${pending.length} 个待启用目标按各自采样间隔约 ${dailyRequests} 次/天，实际发送受 config/budget.yaml 中 watch 类别配额限制。</p>`;
+        hint.hidden = false;
+    }
+
+    // 读取当前筛选状态；空字符串表示不筛选（后端默认返回全部）。
+    function hotspotWatchSelectedState() {
+        const select = document.getElementById('hotspot-watch-state');
+        return select ? select.value : '';
+    }
+
+    // 加载跟踪列表：按可选 state 过滤，交给 renderHotspotWatchList 渲染。
+    async function loadHotspotWatch() {
+        const container = document.getElementById('hotspot-watch-list');
+        if (!container) return;
+        const state = hotspotWatchSelectedState();
+        const query = state ? `?state=${encodeURIComponent(state)}` : '';
+        try {
+            const result = await apiRequest(`/hotspot/watch${query}`);
+            const payload = (result && result.data) || {};
+            renderHotspotWatchList(payload.items || [], payload);
+            renderHotspotWatchCollectorHint(payload.items || [], payload.collector);
+        } catch (error) {
+            container.innerHTML = `<p style="color:red;">加载跟踪列表失败: ${escapeHtml(error.message)}</p>`;
+        }
+    }
+
+    // 渲染跟踪列表：每行显示三态标签、bvid、失败计数、下次应采 epoch 与停追按钮。
+    function renderHotspotWatchList(items, meta) {
+        const container = document.getElementById('hotspot-watch-list');
+        if (!container) return;
+        if (!items.length) {
+            container.innerHTML = '<p class="text-muted">暂无跟踪目标。</p>';
+            return;
+        }
+        const rows = items.map(item => {
+            // 标签优先用后端 display_state（tracking 但采样未运行 → 待启用），缺省回退三态 state。
+            const shownState = item.display_state || item.state;
+            const label = HOTSPOT_WATCH_STATE_LABELS[shownState] || shownState;
+            // 已确认阶段 / 覆盖度由后端现算下发（routes_watch.py: last_confirmed_stage /
+            // coverage_ratio / coverage_state），前端只展示不推断；缺字段留空，
+            // 不把「未知」渲染成 0。
+            const stage = item.last_confirmed_stage
+                ? ` · 已确认阶段 ${escapeHtml(item.last_confirmed_stage)}` : '';
+            const ratio = Number(item.coverage_ratio);
+            const hasRatio = item.coverage_ratio !== null && item.coverage_ratio !== undefined && isFinite(ratio);
+            const coverage = hasRatio
+                ? ` · 覆盖 ${(ratio * 100).toFixed(0)}%${item.coverage_state ? '（' + escapeHtml(item.coverage_state) + '）' : ''}`
+                : '';
+            const action = item.state === 'released'
+                ? '<span class="text-muted">已释放</span>'
+                : `<button class="btn" type="button" onclick="releaseHotspotWatch(${jsArg(item.bvid)})">停止跟踪</button>`;
+            return `<div class="hotspot-watch-item">
+                <span class="hotspot-stage-pill">${escapeHtml(label)}</span>
+                <strong>${escapeHtml(item.bvid)}</strong>
+                <span class="hotspot-lifecycle-meta">失败 ${Number(item.failure_count) || 0} 次 · 下次应采 ${Number(item.next_due_epoch_s) || 0} · 最近成功采样 ${escapeHtml(hotspotWatchEpochText(item.last_success_epoch_s))}${stage}${coverage}</span>
+                ${action}
+            </div>`;
+        }).join('');
+        const total = (meta.total === undefined || meta.total === null) ? items.length : Number(meta.total);
+        // 来源徽标（顺带）：/watch 响应带 algorithm_version（watch 链路恒 LifecycleV2）。
+        const algorithm = meta.algorithm_version ? ` · 算法 ${escapeHtml(meta.algorithm_version)}` : '';
+        container.innerHTML = `<p class="hotspot-lifecycle-meta">共 ${total} 条${algorithm}</p>${rows}`;
+    }
+
+    // 手动加入跟踪：bvid 必填、采样间隔可选（留空则走后端默认 3600）。
+    async function submitHotspotWatch() {
+        const bvidInput = document.getElementById('hotspot-watch-bvid');
+        const intervalInput = document.getElementById('hotspot-watch-interval');
+        const bvid = bvidInput ? bvidInput.value.trim() : '';
+        if (!bvid) {
+            showAppAlert('请输入 BV 号');
+            return;
+        }
+        const body = { bvid };
+        const interval = intervalInput ? Number(intervalInput.value) : NaN;
+        if (Number.isFinite(interval) && interval > 0) body.sample_interval_s = interval;
+        try {
+            const result = await apiRequest('/hotspot/watch', { method: 'POST', body: JSON.stringify(body) });
+            if (bvidInput) bvidInput.value = '';
+            if (intervalInput) intervalInput.value = '';
+            await loadHotspotWatch();
+            // 创建响应带 display_state：采样任务未运行时明确告知「待启用」，避免误以为已在采集。
+            if (result && result.data && result.data.display_state === 'pending_enable') {
+                showAppAlert('已加入跟踪，状态为「待启用」：后台持续采集未运行，开启方式见列表上方说明。');
+            }
+        } catch (error) {
+            showAppAlert(`加入跟踪失败: ${error.message}`);
+        }
+    }
+
+    // 手动停追：后端写 stop_reason='manual_stop' 并置为已释放。
+    async function releaseHotspotWatch(bvid) {
+        try {
+            await apiRequest(`/hotspot/watch/${encodeURIComponent(bvid)}/release`, { method: 'POST', body: '{}' });
+            await loadHotspotWatch();
+        } catch (error) {
+            showAppAlert(`停止跟踪失败: ${error.message}`);
+        }
+    }
+
+    // 首次加载时拉一次列表（与热点页其他区块同一时机，DOMContentLoaded）。
+    window.addEventListener('DOMContentLoaded', () => {
+        loadHotspotWatch();
+    });
+    </script>
+
+    <!-- 聚合入口发现（discovery）区块的配套 JS：本批新增脚本，内联在 index.html 内，
+         不改动 static/ 下任何既有脚本，也不改动上方任何既有结构。
+         知识口径：未知值一律显示为空值（绝不显示 0 冒充真实数据）；sources 逐源展示
+         （state=error 与 item_count=0 分开）；served_from_cache 上屏；conflict 显式标出。 -->
+    <script>
+    // ===== 热点发现 · 聚合入口发现（discovery）区块 =====
+    const HOTSPOT_DISCOVERY_SOURCE_LABELS = {
+        search_square: '热搜(search_square)',
+        popular: '综合热门(popular)',
+        ranking_all: '全站榜(ranking_all)',
+        ranking_all_others: '全站榜·同UP其他(ranking_all_others)',
+    };
+
+    // 未知值统一显示为空值（null/undefined 不显示为 0）。
+    function hotspotDiscoveryValue(value) {
+        if (value === null || value === undefined) return '';
+        return String(value);
+    }
+
+    // 质量三态标注：ok / missing / invalid；未知状态原样透出。
+    function hotspotDiscoveryQualityLabel(status) {
+        if (status === 'ok') return 'ok';
+        if (status === 'missing') return 'missing(缺失)';
+        if (status === 'invalid') return 'invalid(非法)';
+        return hotspotDiscoveryValue(status);
+    }
+
+    // 加载最近一轮发现：无快照显示占位「尚未跑过发现轮」，不显示 0。
+    async function loadHotspotDiscovery() {
+        const meta = document.getElementById('hotspot-discovery-meta');
+        const sourcesBox = document.getElementById('hotspot-discovery-sources');
+        const videosBox = document.getElementById('hotspot-discovery-videos');
+        const keywordsBox = document.getElementById('hotspot-discovery-keywords');
+        if (!meta) return;
+        try {
+            const result = await apiRequest('/hotspot/discovery/latest');
+            const snapshot = (result && result.data) ? result.data.snapshot : null;
+            if (!snapshot) {
+                meta.innerHTML = '<p class="text-muted">尚未跑过发现轮</p>';
+                if (sourcesBox) sourcesBox.innerHTML = '';
+                if (videosBox) videosBox.innerHTML = '';
+                if (keywordsBox) keywordsBox.innerHTML = '';
+                return;
+            }
+            renderHotspotDiscovery(snapshot);
+        } catch (error) {
+            meta.innerHTML = `<p style="color:red;">加载发现结果失败: ${escapeHtml(error.message)}</p>`;
+        }
+    }
+
+    // 总览：served_from_cache 必须上屏（新抓 / 上轮缓存）。
+    function renderHotspotDiscovery(snapshot) {
+        const meta = document.getElementById('hotspot-discovery-meta');
+        if (!meta) return;
+        let cacheText;
+        if (snapshot.served_from_cache === true) {
+            cacheText = '上轮缓存';
+        } else if (snapshot.served_from_cache === false) {
+            cacheText = '本轮新抓';
+        } else {
+            cacheText = hotspotDiscoveryValue(snapshot.served_from_cache);
+        }
+        meta.innerHTML = `<p class="hotspot-lifecycle-meta">
+            <span class="hotspot-stage-pill">${escapeHtml(cacheText)}</span>
+            采样时间 ${escapeHtml(hotspotDiscoveryValue(snapshot.captured_epoch_s))} ·
+            视频 ${escapeHtml(hotspotDiscoveryValue(snapshot.video_count))} ·
+            热搜词 ${escapeHtml(hotspotDiscoveryValue(snapshot.keyword_count))} ·
+            others ${escapeHtml(hotspotDiscoveryValue(snapshot.others_count))}</p>`;
+        renderHotspotDiscoverySources(snapshot.sources || {});
+        renderHotspotDiscoveryVideos(snapshot.videos || []);
+        renderHotspotDiscoveryKeywords(snapshot.keywords || []);
+    }
+
+    // 逐源展示：绝不在前端把多来源合并成单一 state；
+    // state=error（异常，红）与 item_count=0（真实的空）分开显示。
+    function renderHotspotDiscoverySources(sources) {
+        const box = document.getElementById('hotspot-discovery-sources');
+        if (!box) return;
+        const names = Object.keys(sources);
+        if (!names.length) {
+            box.innerHTML = '<h3>来源运行态（逐源，不合并）</h3><p class="text-muted">无来源运行态</p>';
+            return;
+        }
+        const rows = names.map(name => {
+            const info = sources[name] || {};
+            const label = HOTSPOT_DISCOVERY_SOURCE_LABELS[name] || name;
+            const stateTag = info.state === 'error'
+                ? '<span class="hotspot-stage-pill" style="background:#ffebee;color:#c62828;">异常 error</span>'
+                : `<span class="hotspot-stage-pill">${escapeHtml(hotspotDiscoveryValue(info.state))}</span>`;
+            const cacheText = info.from_cache === true ? '上轮缓存' : (info.from_cache === false ? '新抓' : '');
+            const parts = [
+                `条目 ${escapeHtml(hotspotDiscoveryValue(info.item_count))}`,
+                `接口返回 ${escapeHtml(hotspotDiscoveryValue(info.returned_count))}`,
+            ];
+            if (cacheText) parts.push(escapeHtml(cacheText));
+            if (info.error_code !== null && info.error_code !== undefined) {
+                parts.push(`error_code ${escapeHtml(hotspotDiscoveryValue(info.error_code))}`);
+            }
+            if (info.reason !== null && info.reason !== undefined && info.reason !== '') {
+                parts.push(escapeHtml(String(info.reason)));
+            }
+            return `<div class="hotspot-watch-item">
+                ${stateTag}
+                <strong>${escapeHtml(label)}</strong>
+                <span class="hotspot-lifecycle-meta">${parts.join(' · ')}</span>
+            </div>`;
+        }).join('');
+        box.innerHTML = `<h3>来源运行态（逐源，不合并）</h3>${rows}`;
+    }
+
+    // 视频候选：来源全留；conflict=True 的多来源冲突显式标出；
+    // 「加入关注」调现成的 POST /api/hotspot/watch（本批不改该端点）。
+    function renderHotspotDiscoveryVideos(videos) {
+        const box = document.getElementById('hotspot-discovery-videos');
+        if (!box) return;
+        if (!videos.length) {
+            box.innerHTML = '<h3>视频候选</h3><p class="text-muted">本轮无视频候选（真实空榜）；与来源 error 是两回事。</p>';
+            return;
+        }
+        const rows = videos.map(video => {
+            const conflictTag = video.conflict === true
+                ? '<span class="hotspot-stage-pill" style="background:#fff8e1;color:#ef6c00;">多来源不一致</span>'
+                : '';
+            const sourceList = Array.isArray(video.sources) ? video.sources.join(' + ') : hotspotDiscoveryValue(video.sources);
+            return `<div class="hotspot-watch-item">
+                <strong>${escapeHtml(hotspotDiscoveryValue(video.bvid))}</strong>
+                <span class="hotspot-lifecycle-meta">来源 ${escapeHtml(sourceList)} · 展示取 ${escapeHtml(hotspotDiscoveryValue(video.display_source))} · 播放 ${escapeHtml(hotspotDiscoveryValue(video.view))}(${escapeHtml(hotspotDiscoveryQualityLabel(video.view_status))}) · legacy_tid ${escapeHtml(hotspotDiscoveryValue(video.legacy_tid))} · tidv2 ${escapeHtml(hotspotDiscoveryValue(video.tidv2))} · pid_v2 ${escapeHtml(hotspotDiscoveryValue(video.pid_v2))} · 采样 ${escapeHtml(hotspotDiscoveryValue(video.captured_epoch_s))}</span>
+                ${conflictTag}
+                <button class="btn" type="button" onclick="watchHotspotDiscovery(${jsArg(video.bvid)})">加入关注</button>
+            </div>`;
+        }).join('');
+        box.innerHTML = `<h3>视频候选（展示值来源优先级 ranking_all &gt; popular &gt; ranking_all_others）</h3>${rows}`;
+    }
+
+    // 热搜词：heat_score 只叫「平台接口返回热搜分数」，缺失显示空值不显示 0。
+    function renderHotspotDiscoveryKeywords(keywords) {
+        const box = document.getElementById('hotspot-discovery-keywords');
+        if (!box) return;
+        if (!keywords.length) {
+            box.innerHTML = '<h3>热搜词</h3><p class="text-muted">本轮无热搜词候选。</p>';
+            return;
+        }
+        const rows = keywords.map(item => `<div class="hotspot-watch-item">
+            <strong>${escapeHtml(hotspotDiscoveryValue(item.keyword))}</strong>
+            <span class="hotspot-lifecycle-meta">名次 ${escapeHtml(hotspotDiscoveryValue(item.rank))} · 平台接口返回热搜分数 ${escapeHtml(hotspotDiscoveryValue(item.heat_score))}(${escapeHtml(hotspotDiscoveryQualityLabel(item.heat_status))}) · 展示名 ${escapeHtml(hotspotDiscoveryValue(item.show_name))} · 采样 ${escapeHtml(hotspotDiscoveryValue(item.captured_epoch_s))}</span>
+        </div>`).join('');
+        box.innerHTML = `<h3>热搜词（heat_score = 平台接口返回热搜分数）</h3>${rows}`;
+    }
+
+    // 加入关注：复用现成的 POST /api/hotspot/watch（02 批 4 已交付，一行不用改）。
+    async function watchHotspotDiscovery(bvid) {
+        try {
+            await apiRequest('/hotspot/watch', { method: 'POST', body: JSON.stringify({ bvid }) });
+            showAppAlert(`已加入关注: ${bvid}`);
+        } catch (error) {
+            showAppAlert(`加入关注失败: ${error.message}`);
+        }
+    }
+
+    // 低成本研究草案：复用 topic_generator 降级模板路径，零新增采集。
+    async function generateHotspotResearchDraft() {
+        const box = document.getElementById('hotspot-draft-result');
+        if (!box) return;
+        const directionInput = document.getElementById('hotspot-draft-direction');
+        const zoneInput = document.getElementById('hotspot-draft-zone');
+        const countInput = document.getElementById('hotspot-draft-count');
+        const direction = directionInput ? directionInput.value : '';
+        const zoneName = zoneInput ? zoneInput.value : '';
+        const count = (countInput && Number(countInput.value)) ? Number(countInput.value) : 5;
+        box.innerHTML = '<p class="text-muted">生成中...</p>';
+        try {
+            const result = await apiRequest('/hotspot/discovery/research_draft', {
+                method: 'POST',
+                body: JSON.stringify({ direction, zone_name: zoneName, count }),
+            });
+            const data = (result && result.data) || {};
+            if (!data.topics || !data.topics.length) {
+                box.innerHTML = '<p class="text-muted">暂无可用热搜词，未生成草案（不伪造内容）。</p>';
+                return;
+            }
+            const rows = data.topics.map(topic => `<div class="hotspot-watch-item">
+                <strong>${escapeHtml(String(topic.title || ''))}</strong>
+                <span class="hotspot-lifecycle-meta">${escapeHtml(String(topic.description || ''))} · 依据：${escapeHtml(String(topic.reason || ''))}</span>
+            </div>`).join('');
+            box.innerHTML = `<p class="hotspot-lifecycle-meta">模式 ${escapeHtml(String(data.mode || ''))} · 未使用 LLM · 共 ${escapeHtml(hotspotDiscoveryValue(data.count))} 条</p>${rows}`;
+        } catch (error) {
+            box.innerHTML = `<p style="color:red;">生成研究草案失败: ${escapeHtml(error.message)}</p>`;
+        }
+    }
+
+    // 首次加载时拉一次发现结果（与热点页其他区块同一时机，DOMContentLoaded）。
+    window.addEventListener('DOMContentLoaded', () => {
+        loadHotspotDiscovery();
+    });
+    </script>
+    <script src="./astrbot-overrides.js"></script>
+</body>
+</html>

@@ -1,0 +1,164 @@
+/* ===== style.help.css —— 使用说明页 =====
+   C+ v2：白卡 + 编号 / 英文小标 + 粗标题；正文区域独立滚动，聚焦时左侧黄色短条。
+   项目说明按内容收缩，免责声明填满剩余高度。
+   本文件保留的 flex gap：.usage-card-stack（纵向 20，真实内核用例抽样）、.usage-card-heading（14），兜底见 style.flexgap.css。 */
+.usage-page {
+    display: none;
+    min-height: calc(100vh - 36px);
+    flex-direction: column;
+}
+
+.usage-page.active {
+    display: flex;
+}
+
+.usage-page > h1,
+.usage-page > .page-head {
+    flex: 0 0 auto;
+}
+
+.usage-card-stack {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 20px;
+}
+
+/* 说明卡：去掉通用 .card 的最小高度与悬停上浮，内边距交给标题区和正文区。 */
+.usage-card {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    padding: 0;
+    text-align: left;
+}
+
+.usage-card:hover {
+    transform: none;
+}
+
+/* 首张卡片按自身内容收缩，避免被剩余空间拉高。 */
+.usage-card:first-child {
+    flex: 0 0 auto;
+}
+
+/* 第二张卡片填满首张卡片之外的剩余空间。 */
+.usage-card:nth-child(2) {
+    flex: 1 1 auto;
+}
+
+/* 标题区：图标 / 编号 + 英文小标 + 粗标题，底部浅灰细线。 */
+.usage-card-heading {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 14px;
+    padding: 22px 28px 18px;
+    box-shadow: 0 1px 0 var(--paper-3);
+}
+
+.usage-card-heading .card-icon {
+    flex: 0 0 auto;
+    margin: 0;
+}
+
+.usage-card-heading .card-no {
+    flex: 0 0 auto;
+    margin: 0;
+}
+
+.usage-card-heading .card-en {
+    display: block;
+    margin-bottom: 8px;
+}
+
+.usage-card-heading h2 {
+    margin: 0;
+    padding: 0;
+    color: var(--ink);
+    font: 800 20px/1.1 var(--f-body);
+    letter-spacing: .02em;
+}
+
+.usage-card-subtitle {
+    margin-top: 6px;
+    color: var(--ink-3);
+    font-size: 12px;
+}
+
+/* 正文区：填满卡片剩余高度，独立滚动；滚动时不改变卡片布局。 */
+.usage-card-content {
+    min-height: 0;
+    flex: 1 1 auto;
+    padding: 18px 28px 24px;
+    overflow-y: auto;
+    color: var(--ink-2);
+    line-height: 1.8;
+    outline: none;
+}
+
+.usage-card-content::-webkit-scrollbar {
+    width: 4px;
+}
+
+.usage-card-content::-webkit-scrollbar-thumb {
+    background: var(--rule);
+    border-radius: 2px;
+}
+
+/* 首卡正文无需占满剩余空间，内容结束后立即收束卡片高度。 */
+.usage-card:first-child .usage-card-content {
+    flex: 0 0 auto;
+    overflow-y: visible;
+}
+
+/* 键盘聚焦正文：左侧 3px 黄色短条（Chromium 83 无 :focus-visible，改用 :focus）。 */
+.usage-card-content:focus {
+    outline: none;
+    box-shadow: inset 3px 0 0 var(--signal);
+}
+
+/* 项目说明条目：网格间距保证三段正文清晰分隔（grid gap，非 flex）。 */
+.usage-item {
+    display: grid;
+    gap: 14px;
+}
+
+/* 免责声明按章节留出稳定间距。 */
+.usage-disclaimer {
+    display: grid;
+    gap: 14px;
+}
+
+.usage-item p,
+.usage-disclaimer p {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 13px;
+    line-height: 1.8;
+}
+
+/* 协议标题行 */
+.usage-disclaimer p:first-child {
+    color: var(--ink);
+    font-weight: 700;
+}
+
+/* 小标题：主文本色 + 加粗；保持行内，后面紧跟“：”与正文。 */
+.usage-item strong,
+.usage-disclaimer strong,
+.usage-disclaimer b {
+    color: var(--ink);
+    font-weight: 700;
+}
+
+@media (max-width: 768px) {
+    .usage-card-heading {
+        padding: 18px 20px 14px;
+    }
+
+    .usage-card-content {
+        padding: 16px 20px 20px;
+    }
+}

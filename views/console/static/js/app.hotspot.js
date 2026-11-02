@@ -1,0 +1,638 @@
+// ===== app.hotspot.js —— 拆分自 app.js（热点发现：分区 / Tag云 / 活动情报 / AI选题），原始行 L148-L305 =====
+// ============ 热点发现模块 ============
+
+async function loadZones() {
+    try {
+        const data = await apiRequest('/hotspot/zones');
+        const zoneSelect = document.getElementById('zone-select');
+        const topicZone = document.getElementById('topic-zone');
+        
+        const options = data.zones.map(zone =>
+            `<option value="${escapeHtml(zone)}">${escapeHtml(zone)}</option>`
+        ).join('');
+        const collectOptions = (data.zone_options || []).map(zone =>
+            `<option value="${Number(zone.tid)}">${escapeHtml(zone.name)}</option>`
+        ).join('');
+
+        zoneSelect.innerHTML = options;
+        topicZone.innerHTML = options;
+        const collectSelect = document.getElementById('hotspot-tid-select');
+        if (collectSelect && collectOptions) {
+            collectSelect.innerHTML = collectOptions;
+            collectSelect.addEventListener('change', () => loadHotspotLifecycle());
+        }
+    } catch (error) {
+        console.error('加载分区失败:', error);
+    }
+}
+
+// 生成分区热门Tag词云：提交后台采集任务后轮询进度，最终渲染词云卡片。
+// 与活动情报/AI选题助手同级，前端仅负责交互与展示，采集逻辑在 /hotspot/tag-cloud/tasks。
+async function generateTagCloud() {
+    const zoneName = document.getElementById('zone-select').value;
+    if (!zoneName) {
+        showAppAlert('请选择分区');
+        return;
+    }
+
+    showLoading('tag-cloud-result', {
+        message: '正在创建分区热门Tag采集任务',
+    });
+
+    try {
+        const started = await apiRequest('/hotspot/tag-cloud/tasks', {
+            method: 'POST',
+            body: JSON.stringify({
+                zone_name: zoneName,
+                limit: 100,
+                top_n: 50
+            })
+        });
+        const result = await pollTask(
+            `/hotspot/tag-cloud/tasks/${started.task_id}`,
+            'tag-cloud-result'
+        );
+        renderTagCloudResult(result, zoneName);
+    } catch (error) {
+        document.getElementById('tag-cloud-result').innerHTML = `<p style="color: red;">生成失败: ${escapeHtml(error.message)}</p>`;
+    }
+}
+
+// 渲染 Tag 云采集结果：词频按热度映射字号，数据缺失时使用默认值。
+function renderTagCloudResult(result, zoneName) {
+    const tags = Object.entries(result.word_frequency || {})
+        .slice(0, 20)
+        .map(([tag, freq], i) =>
+            `<div style="display: inline-block; margin: 10px; padding: 8px 16px;
+                  background: var(--btn, #383838);
+                  color: #fff; border-radius: 20px; font-size: ${14 + freq * 0.5}px;">
+                ${i + 1}. ${escapeHtml(tag)} (${escapeHtml(freq)})
+            </div>`
+        ).join('');
+
+    document.getElementById('tag-cloud-result').innerHTML = `
+        <h3>分区：${escapeHtml(result.zone_name || zoneName)}</h3>
+        <p>采集完成 · 分析视频数：${result.video_count ?? 0} | 提取Tag数：${result.tag_count ?? 0}</p>
+        <div style="margin-top: 20px;">${tags}</div>
+    `;
+}
+
+async function fetchActivities() {
+    // 读取分区下拉框（活动情报模块支持按分区筛选官号）
+    const zone = document.getElementById('activity-zone')?.value || 'all';
+    const zoneLabels = { all: '全部', game: '游戏区', anime: '动画区', paint: '绘画区' };
+
+    showLoading('activity-result');
+
+    try {
+        const data = await apiRequest('/hotspot/activities', {
+            method: 'POST',
+            body: JSON.stringify({ include_ugc: true, zone: zone })
+        });
+        renderActivitiesResult(data.data, zone, zoneLabels);
+    } catch (error) {
+        document.getElementById('activity-result').innerHTML = `<p style="color: red;">拉取失败: ${escapeHtml(error.message)}</p>`;
+    }
+}
+
+// 渲染活动情报结果：分区账号与活动数量汇总，无数据时给出明确提示。
+function renderActivitiesResult(result, zone, zoneLabels) {
+    const activities = (result.activities || []).slice(0, 20).map(act => `
+        <div style="padding: 15px; margin: 10px 0; background: white; border-radius: 8px; border-left: 3px solid var(--primary-color);">
+            <h4>${escapeHtml(act.title)}</h4>
+            <p>${escapeHtml(act.desc || '暂无描述')}</p>
+            <p style="color: var(--text-secondary); font-size: 12px;">
+                状态: ${escapeHtml(act.status)} | 来源: ${escapeHtml(act.source)}${act.source_username ? ' | 账号: ' + escapeHtml(act.source_username) : ''} |
+                ${safeUrl(act.link) ? `<a href="${safeUrl(act.link)}" target="_blank" rel="noopener noreferrer">查看详情</a>` : '无链接'}
+            </p>
+        </div>
+    `).join('');
+
+    // 展示分区与账号信息，无结果时给出明确提示
+    const accountInfo = (result.zone_accounts || []).map(a => escapeHtml(a.name)).join('、') || '无';
+    document.getElementById('activity-result').innerHTML = `
+        <p>分区：${escapeHtml(zoneLabels[result.zone] || result.zone)} | 官方活动: ${Number(result.official_count) || 0} 个 | UGC动态: ${Number(result.ugc_count) || 0} 条 | 跟踪账号: ${accountInfo}</p>
+        ${activities || '<p style="color: orange;">暂无活动数据（UGC动态可能受B站风控限制，可稍后重试或检查登录态）</p>'}
+    `;
+}
+
+async function generateTopics() {
+    const direction = document.getElementById('topic-direction').value;
+    const zoneName = document.getElementById('topic-zone').value;
+    const count = parseInt(document.getElementById('topic-count').value);
+
+    if (!direction) {
+        showAppAlert('请输入创作方向');
+        return;
+    }
+
+    showLoading('topic-result');
+
+    try {
+        const data = await apiRequest('/hotspot/topics/generate', {
+            method: 'POST',
+            body: JSON.stringify({
+                direction,
+                zone_name: zoneName,
+                count,
+                use_llm: true
+            })
+        });
+        renderTopicsResult(data.data);
+    } catch (error) {
+        document.getElementById('topic-result').innerHTML = `<p style="color: red;">生成失败: ${escapeHtml(error.message)}</p>`;
+    }
+}
+
+// 渲染 AI 选题结果：列出选题卡片与生成方式、热门 Tag 摘要。
+function renderTopicsResult(result) {
+    // 第三批 g：202（生成中）形状**绝不能**被当成“已生成”渲染；专用轮询负责读账本。
+    if (result && (result.accepted || result.status === 'running')) {
+        document.getElementById('topic-result').innerHTML =
+            '<p class="event-status event-status-running">[生成中] 生成账本已受理，结果稍后从账本读取。</p>';
+        return;
+    }
+    const topics = (result.topics || []).map((topic, i) => `
+        <div style="padding: 15px; margin: 10px 0; background: white; border-radius: 8px;">
+            <h4>${i + 1}. ${escapeHtml(topic.title)}</h4>
+            <p>${escapeHtml(topic.description)}</p>
+            <p style="color: var(--text-secondary); font-size: 12px;">
+                难度: ${escapeHtml(topic.difficulty)} | 关键词: ${escapeHtml((topic.keywords || []).join(', '))}
+            </p>
+        </div>
+    `).join('');
+
+    // 显示**实际 generation_mode**（无 LLM 时同样出规则模板选题）；缺字段时按 used_llm 回退。
+    const generationMode = result.generation_mode || (result.used_llm ? 'llm_assisted' : 'rule_template');
+    document.getElementById('topic-result').innerHTML = `
+        <p>生成方式（实际 generation_mode）: ${escapeHtml(generationMode)}</p>
+        <p>热门Tag: ${escapeHtml((result.hot_tags || []).slice(0, 5).join(', ')) || '暂无'}</p>
+        ${topics}
+    `;
+}
+
+// ============ 评论监控模块 ============
+
+// escapeHtml / jsArg 的统一实现位于 app.core.js，所有模块共用同一个函数。
+
+// 统一将未知接口字段收敛为数组，避免 map(undefined) 中断整页渲染。
+
+
+// 将增速格式化为可读百分比，空值展示为数据不足。
+function formatPercent(value) {
+    return value === null || value === undefined ? '数据不足' : `${(Number(value) * 100).toFixed(1)}%`;
+}
+
+// 每千粉转化率：guard/charge 数 ÷ 粉丝数 × 1000（‰）。粉丝为 0 或指标缺失显示 --。
+function formatPermille(value, follower) {
+    if (value === null || value === undefined) return '--';
+    const v = Number(value);
+    const f = Number(follower);
+    if (!isFinite(v) || !isFinite(f) || f <= 0) return '--';
+    return `${(v / f * 1000).toFixed(1)}‰`;
+}
+
+// 卡片伪徽标：圆角背景小标签，展示 UP 的每千粉舰长率 / 每千粉充电率。
+function hotspotMetricBadges(owner) {
+    if (!owner || owner.follower === null || owner.follower === undefined || Number(owner.follower) <= 0) return '';
+    const guard = owner.guard_count === null || owner.guard_count === undefined ? null : Number(owner.guard_count);
+    const charge = owner.charge_count === null || owner.charge_count === undefined ? null : Number(owner.charge_count);
+    const parts = [];
+    if (guard !== null) parts.push(`<span class="hotspot-metric-badge">舰长率 ${formatPermille(guard, owner.follower)}</span>`);
+    if (charge !== null) parts.push(`<span class="hotspot-metric-badge">充电率 ${formatPermille(charge, owner.follower)}</span>`);
+    return parts.length ? `<span class="hotspot-metric-badges">${parts.join('')}</span>` : '';
+}
+
+// 有效观测单位：v2 用 observed_windows（观测窗数），v1 用 observed_days/days（采集日数）。
+// 两套键集互不重叠，统一收敛成「有多少个有效观测单位」，< 2 时任何趋势结论都不可靠。
+function hotspotObservationUnits(item) {
+    const metrics = item.metrics || {};
+    const units = metrics.observed_windows ?? metrics.observed_days ?? metrics.days ?? 0;
+    const value = Number(units);
+    return isFinite(value) ? value : 0;
+}
+
+// 置信度展示：本批 confidence 不真算 —— v2 恒为 0.0 / confidence_kind='not_estimated'，
+// 直接显示「未估算」而非误导性的 0%。confidence_kind 经 DTO.metadata 透传（adapter 已补齐）；
+// 旧数据缺该通道时按 algorithm_version 等价兜底（v2 的 kind 恒为 not_estimated）。
+function hotspotConfidenceText(item) {
+    const kind = (item.metadata || {}).confidence_kind;
+    const isV2 = item.algorithm_version === 'lifecycle_v2';
+    if (kind === 'not_estimated' || (kind === undefined && isV2)) return '未估算';
+    const value = item.confidence;
+    if (typeof value !== 'number' || !Number.isFinite(value)) return '暂无数据';
+    return `${Math.round(value * 100)}%`;
+}
+
+// coverage 覆盖级别文案：取值来源唯一是 Detection.metadata.coverage_state（lifecycle_v2 枚举），
+// 与算法层 CoverageState._COVERAGE_LABELS 对齐。v1 无该通道或遇未知值时返回空串，
+// 由调用方决定不加标签，避免把「缺失」误显示成某一档。
+const HOTSPOT_COVERAGE_LABELS = {
+    full_support: '完整支撑',
+    provisional: '暂定观察',
+    insufficient: '覆盖不足',
+};
+
+function hotspotCoverageStateText(item) {
+    return HOTSPOT_COVERAGE_LABELS[(item.metadata || {}).coverage_state] || '';
+}
+
+// 稿龄状态文案：取值唯一来源是 Detection.metadata.age_status（08 案 §H3 枚举）。
+// 只有 age_status === 'ok' 才显示天数；其余一律给可读理由，
+// 绝不用 0 天冒充「刚发布」，也不把冲突/未来时间悄悄选一条当真值。
+const HOTSPOT_AGE_STATUS_LABELS = {
+    missing: '发布时间缺失',
+    invalid: '发布时间异常',
+    unknown: '稿龄未知',
+    future_publication: '发布时间在未来',
+    conflicting_publication_time: '发布时间冲突',
+    as_of_unavailable: '评估时刻缺失',
+};
+
+function hotspotAgeText(item) {
+    const metadata = item.metadata || {};
+    const status = metadata.age_status;
+    if (status === 'ok') {
+        const days = (item.metrics || {}).age_days;
+        if (typeof days !== 'number' || !Number.isFinite(days)) return '稿龄未知';
+        return `稿龄 ${days.toFixed(2)} 天`;
+    }
+    // 旧 DTO 无 age_status 通道时留空，不凭空补一个状态。
+    if (status === undefined) return '';
+    return HOTSPOT_AGE_STATUS_LABELS[status] || '稿龄未知';
+}
+
+// 评估截止文案：显式 as_of 用日期时间；离线回退口径（max_observed_fallback）如实标注，
+// 不冒充墙钟时间。epoch 非法/缺失时整行不渲染，不用本地 now 顶替。
+function hotspotAsOfText(item) {
+    const metadata = item.metadata || {};
+    const epoch = metadata.as_of_epoch_s;
+    if (typeof epoch !== 'number' || !Number.isFinite(epoch)) return '';
+    const when = new Date(epoch * 1000);
+    if (Number.isNaN(when.getTime())) return '';
+    const pad = (value) => String(value).padStart(2, '0');
+    const stamp = `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())} `
+        + `${pad(when.getHours())}:${pad(when.getMinutes())}`;
+    return metadata.as_of_source === 'max_observed_fallback'
+        ? `评估截至 ${stamp}（离线回放）`
+        : `评估截至 ${stamp}`;
+}
+
+// 卡片指标视图模型：v1 与 v2 的 metrics 键集完全不同，按 algorithm_version 分流取键，
+// 避免 v2 卡片在 v1 的键上大面积退化成 0 /「数据不足」。
+function hotspotCardViewModel(item) {
+    const metrics = item.metrics || {};
+    if (item.algorithm_version === 'lifecycle_v2') {
+        return {
+            rateLabel: '相对变化',
+            rateText: formatPercent(metrics.relative_change),
+            coverageText: formatPercent(metrics.coverage_ratio),
+            observedText: `${Number(metrics.observed_windows) || 0} 个观测窗`,
+            samplesText: `${Number(metrics.sample_count) || 0} 次快照`,
+        };
+    }
+    return {
+        rateLabel: '增速',
+        rateText: formatPercent(metrics.growth),
+        upText: `${Number(metrics.up_count) || 0}`,
+        observedText: `${Number(metrics.observed_days ?? metrics.days) || 0} 个采集日`,
+        spanText: `${Number(metrics.window_span_days || 0).toFixed(2)} 天`,
+    };
+}
+
+// 卡片趋势徽标：与抽屉增长判定联动。上升期/出现期嵌▲，衰退期嵌▼；数据不足不误导。
+function hotspotTrendBadges(item) {
+    const stage = item.stage || '';
+    if (hotspotObservationUnits(item) < 2) return '';
+    if (stage === '衰退期') {
+        return '<span class="hotspot-trend-badge hotspot-trend-down" title="下滑">▼</span>';
+    }
+    if (stage === '上升期' || stage === '出现期') {
+        return '<span class="hotspot-trend-badge hotspot-trend-up" title="增长">▲</span>';
+    }
+    return '';
+}
+
+// ============ 生命周期算法开关（会话级记忆，不引入后端配置项） ============
+
+// 可选算法口径：lifecycle_v2 为本批新默认，heuristic_v1 保留作对照回放。
+const HOTSPOT_ALGORITHM_DEFAULT = 'lifecycle_v2';
+const HOTSPOT_ALGORITHM_OPTIONS = ['lifecycle_v2', 'heuristic_v1'];
+const HOTSPOT_ALGORITHM_KEY = 'fishtool.hotspot.algorithm';
+// sessionStorage 在隐私模式 / 被禁用时会抛错，故保留内存兜底，保证开关始终可用。
+let hotspotAlgorithmMemory = null;
+
+// 读取当前算法口径：内存兜底 -> 会话存储 -> 默认，非法值一律回落默认。
+function hotspotReadAlgorithm() {
+    if (HOTSPOT_ALGORITHM_OPTIONS.includes(hotspotAlgorithmMemory)) return hotspotAlgorithmMemory;
+    let stored = null;
+    try {
+        stored = window.sessionStorage ? window.sessionStorage.getItem(HOTSPOT_ALGORITHM_KEY) : null;
+    } catch (error) {
+        stored = null;  // 存储不可用：静默降级，仅内存生效
+    }
+    return HOTSPOT_ALGORITHM_OPTIONS.includes(stored) ? stored : HOTSPOT_ALGORITHM_DEFAULT;
+}
+
+// 写入算法口径：会话级持久化；存储不可用时仍写内存兜底。
+function hotspotWriteAlgorithm(value) {
+    if (!HOTSPOT_ALGORITHM_OPTIONS.includes(value)) return;
+    hotspotAlgorithmMemory = value;
+    try {
+        if (window.sessionStorage) window.sessionStorage.setItem(HOTSPOT_ALGORITHM_KEY, value);
+    } catch (error) {
+        // 忽略：持久化失败不影响本次切换
+    }
+}
+
+// 初始化算法下拉并绑定「切换即重新拉取」。
+function initHotspotAlgorithmSelect() {
+    const select = document.getElementById('hotspot-algorithm-select');
+    if (!select) return;
+    select.value = hotspotReadAlgorithm();
+    select.addEventListener('change', () => {
+        hotspotWriteAlgorithm(select.value);
+        loadHotspotLifecycle();
+    });
+}
+
+// 页面就绪后绑定（与 app.ui.js 的 DOMContentLoaded 各自独立，顺序无关：
+// 请求口径读的是 hotspotReadAlgorithm()，不依赖 DOM 当前值）。
+window.addEventListener('DOMContentLoaded', initHotspotAlgorithmSelect);
+
+// 生命周期卡片只消费统一 Detection DTO，并轮询采集进度。
+// 卡片支持：点击标题区展开时间轴、UP 数/增速展示、账号抽屉入口。
+async function loadHotspotLifecycle() {
+    const grid = document.getElementById('hotspot-lifecycle-grid');
+    if (!grid) return;
+    try {
+        const tid = Number(document.getElementById('hotspot-tid-select')?.value || 1008);
+        const algorithm = hotspotReadAlgorithm();
+        const result = await apiRequest(`/hotspot/lifecycle?tid=${tid}&algorithm=${encodeURIComponent(algorithm)}`);
+        const items = (result.data || {}).items || [];
+        document.getElementById('hotspot-algorithm-version').textContent = `算法 ${result.data.algorithm_version}`;
+        grid.innerHTML = items.length ? items.slice(0, 20).map(item => {
+            const vm = hotspotCardViewModel(item);
+            // 覆盖级别文案来自 metadata.coverage_state；缺失时留空，不显示空括号。
+            const coverageLabel = hotspotCoverageStateText(item);
+            // 稿龄 / 评估截止行：age_status 非 ok 一律给状态理由，未知值不降级成 0 天；
+            // 两项都拿不到时整行不出，不留空壳段落。
+            const ageText = hotspotAgeText(item);
+            const asOfText = hotspotAsOfText(item);
+            const ageLine = (ageText || asOfText)
+                ? `<p class="hotspot-lifecycle-meta">${escapeHtml(ageText)}${ageText && asOfText ? ' · ' : ''}${escapeHtml(asOfText)}</p>`
+                : '';
+            // 指标行按算法分流：v1 的 growth/up_count/采集日 与 v2 的 relative_change/
+            // coverage_ratio/观测窗 键集不同，混用会大面积退化成 0 与「数据不足」。
+            const metricsLine = item.algorithm_version === 'lifecycle_v2'
+                ? `<p class="hotspot-lifecycle-meta">窗口覆盖 ${vm.coverageText}${coverageLabel ? '（' + coverageLabel + '）' : ''} · ${vm.observedText} · ${vm.samplesText}</p>`
+                : `<p class="hotspot-lifecycle-meta">参与UP数 <span class="hotspot-up-count">${vm.upText}</span> · ${vm.observedText} · 实际跨度 ${vm.spanText}</p>`;
+            return `
+            <article class="hotspot-lifecycle-card">
+                <div class="hotspot-card-title-row" onclick="loadHotspotTimeline(${jsArg(item.bvid)}, this)">
+                    <h3>${escapeHtml(item.title || item.bvid)}</h3>
+                    <span class="hotspot-stage-pill">${escapeHtml(item.stage)}</span>${hotspotTrendBadges(item)}
+                    ${hotspotMetricBadges(item.owner_metrics)}
+                </div>
+                <p class="hotspot-lifecycle-meta">${escapeHtml(item.explain)}</p>
+                <p class="hotspot-lifecycle-meta">置信度 <span class="hotspot-confidence">${hotspotConfidenceText(item)}</span> · ${vm.rateLabel} ${vm.rateText}</p>
+                ${metricsLine}
+                ${ageLine}
+                <div class="hotspot-timeline-box" data-bvid="${escapeHtml(item.bvid)}"></div>
+                <div class="hotspot-card-actions">
+                    ${item.owner_mid ? `<button class="btn btn-secondary btn-sm" type="button" onclick="openHotspotAccount(${Number(item.owner_mid) || 0}, ${jsArg(item.bvid)})">查看上涨账号</button>` : ''}
+                </div>
+            </article>`;
+        }).join('') : '<p class="text-muted">数据积累中，连续采集几天后解锁阶段判断。</p>';
+    } catch (error) {
+        grid.innerHTML = `<p class="text-muted">生命周期数据暂不可用：${escapeHtml(error.message)}</p>`;
+    }
+}
+
+// 点击卡片标题区加载该视频的统计历史时间轴（仅加载一次，重复点击折叠）。
+// 使用 echarts 绘制多指标折线图（播放/弹幕/评论/点赞），替代早期简易趋势条。
+async function loadHotspotTimeline(bvid, titleRow) {
+    if (!bvid || !titleRow) return;
+    const card = titleRow.closest('.hotspot-lifecycle-card');
+    const box = card.querySelector('.hotspot-timeline-box');
+    if (!box) return;
+    // 已加载过：切换展开/折叠，展开时重绘图表避免隐藏容器宽度为 0 变形。
+    if (box.dataset.loaded === '1') {
+        box.classList.toggle('hotspot-timeline-open');
+        if (box.classList.contains('hotspot-timeline-open')) {
+            const chart = echarts.getInstanceByDom(box.querySelector('.hotspot-timeline-chart'));
+            if (chart) chart.resize();
+        }
+        return;
+    }
+    try {
+        const result = await apiRequest(`/hotspot/lifecycle/timeline?bvid=${encodeURIComponent(bvid)}`);
+        const points = (result.data || {}).points || [];
+        if (!points.length) {
+            box.innerHTML = '<p class="hotspot-timeline-empty">暂无历史快照，先跑一轮采集。</p>';
+            box.dataset.loaded = '1';
+            box.classList.add('hotspot-timeline-open');
+            return;
+        }
+        // 只取最近 12 个点，时间按快照顺序升序排列。
+        const recent = points.slice(-12);
+        const times = recent.map(p => (p.time || '').slice(5, 16));
+        // 四个互动指标的颜色读 style.base.css 的设计令牌：播放用墨色做主轴，其余用状态色区分。
+        const rootStyle = getComputedStyle(document.documentElement);
+        const token = (name, fallback) => rootStyle.getPropertyValue(name).trim() || fallback;
+        const metricSeries = [
+            { key: 'view', name: '播放', color: token('--ink', '#191919') },
+            { key: 'danmaku', name: '弹幕', color: token('--ok', '#1f9d6a') },
+            { key: 'reply', name: '评论', color: token('--info', '#2d5bd8') },
+            { key: 'like', name: '点赞', color: token('--warn', '#e08a00') },
+        ];
+        box.innerHTML = `<div class="hotspot-timeline-title">互动趋势（最近 ${recent.length} 次快照）</div><div class="hotspot-timeline-chart"></div>`;
+        const chartDom = box.querySelector('.hotspot-timeline-chart');
+        const chart = echarts.init(chartDom);
+        chart.setOption({
+            tooltip: { trigger: 'axis' },
+            legend: { top: 0, textStyle: { fontSize: 11 } },
+            grid: { left: 46, right: 12, top: 30, bottom: 24 },
+            xAxis: { type: 'category', data: times, axisLabel: { fontSize: 10 } },
+            yAxis: { type: 'value', axisLabel: { fontSize: 10 } },
+            series: metricSeries.map(m => ({
+                name: m.name,
+                type: 'line',
+                smooth: true,
+                symbolSize: 5,
+                data: recent.map(p => (p[m.key] === undefined ? null : p[m.key])),
+                itemStyle: { color: m.color },
+                lineStyle: { width: 2 },
+            })),
+        });
+        box.dataset.loaded = '1';
+        box.classList.add('hotspot-timeline-open');
+    } catch (error) {
+        box.innerHTML = `<p class="hotspot-timeline-empty">时间轴加载失败：${escapeHtml(error.message)}</p>`;
+    }
+}
+
+// §15.1-④：字符化入口——定位某个视频的 02 原卡片并展开时间轴（复用既有逻辑，不新建详情页）。
+// 跳转失败返回 false，由调用方给明确提示（不静默无反应）。
+async function openHotspotVideoCard(bvid) {
+    if (!bvid) return false;
+    if (typeof navigateTo === 'function') navigateTo('hotspot');
+    const grid = document.getElementById('hotspot-lifecycle-grid');
+    if (!grid) return false;
+    const findBox = () => grid.querySelector(`.hotspot-timeline-box[data-bvid="${String(bvid).replace(/"/g, '')}"]`);
+    let box = findBox();
+    if (!box) {
+        await loadHotspotLifecycle();
+        box = findBox();
+    }
+    if (!box) return false;
+    const card = box.closest('.hotspot-lifecycle-card');
+    const titleRow = card ? card.querySelector('.hotspot-card-title-row') : null;
+    if (!titleRow) return false;
+    await loadHotspotTimeline(bvid, titleRow);
+    if (typeof box.scrollIntoView === 'function') box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return true;
+}
+
+// 打开账号关联抽屉：同时加载 UP 主关联数据与时间轴。
+// 每次打开 / 关闭抽屉都递增；请求返回时序号已变，说明抽屉被关闭或换了账号，丢弃结果。
+let hotspotDrawerSeq = 0;
+
+async function openHotspotAccount(mid, bvid) {
+    const mask = document.getElementById('hotspot-drawer-mask');
+    const drawer = document.getElementById('hotspot-drawer');
+    if (!mask || !drawer) return;
+    const seq = ++hotspotDrawerSeq;
+    mask.classList.add('hotspot-drawer-mask-show');
+    drawer.classList.add('hotspot-drawer-open');
+    drawer.innerHTML = '<p class="text-muted">加载账号数据中...</p>';
+    try {
+        const result = await apiRequest(`/hotspot/lifecycle/accounts?bvid=${encodeURIComponent(bvid)}`);
+        if (seq !== hotspotDrawerSeq) return;
+        const d = result.data || {};
+        const fmt = v => (v === null || v === undefined ? '暂无' : Number(v).toLocaleString());
+        const growth = d.growth_ratio === null || d.growth_ratio === undefined ? '暂无'
+            : d.growth_ratio >= 1.5 ? `近90日播放 ${(d.growth_ratio * 100).toFixed(0)}%（显著上涨）`
+            : d.growth_ratio >= 1.1 ? `近90日播放 ${(d.growth_ratio * 100).toFixed(0)}%（温和上涨）`
+            : `近90日播放 ${(d.growth_ratio * 100).toFixed(0)}%（持平或下滑）`;
+        drawer.innerHTML = `
+            <div class="hotspot-drawer-header">
+                <h3>${escapeHtml(d.name || 'UP主')} <small>UID ${Number(d.mid) || ''}</small></h3>
+                <button class="hotspot-drawer-close" onclick="closeHotspotDrawer()" aria-label="关闭">×</button>
+            </div>
+            <div class="hotspot-drawer-body">
+                <div class="hotspot-drawer-stat-grid">
+                    <div><span>粉丝</span><b>${fmt(d.follower)}</b></div>
+                    <div><span>关注</span><b>${fmt(d.following)}</b></div>
+                    <div><span>累计播放</span><b>${fmt(d.archive_view)}</b></div>
+                    <div><span>近90日作品</span><b>${fmt(d.recent_count)}</b></div>
+                </div>
+                <p class="hotspot-drawer-growth">${growth}</p>
+                <div class="hotspot-drawer-guard">
+                    <span>舰长转化</span><b>${d.guard_count === null || d.guard_count === undefined ? '暂无直播数据' : d.guard_count + ' 人'}</b>
+                    ${d.live_status === 1 ? '<span class="hotspot-live-dot">直播中</span>' : ''}
+                </div>
+                <div class="hotspot-drawer-guard">
+                    <span>充电人数</span><b>${d.charge_count === null || d.charge_count === undefined ? '暂无数据' : d.charge_count + ' 人'}</b>
+                    ${d.charge_source === 'unavailable' ? '<span class="hotspot-live-dot" style="background:var(--ink-3, #8a8a8a);">接口不可用</span>' : ''}
+                </div>
+                <div class="hotspot-drawer-guard">
+                    <span>每千粉舰长率</span><b>${formatPermille(d.guard_count, d.follower)}</b>
+                </div>
+                <div class="hotspot-drawer-guard">
+                    <span>每千粉充电率</span><b>${formatPermille(d.charge_count, d.follower)}</b>
+                </div>
+                <div class="hotspot-drawer-actions">
+                    <a class="btn btn-primary btn-sm" target="_blank" href="https://space.bilibili.com/${Number(d.mid) || ''}">打开B站主页</a>
+                    <button class="btn btn-secondary btn-sm" type="button" onclick="jumpToAnalysis(${Number(d.mid) || 0})">去账号分析</button>
+                </div>
+            </div>`;
+    } catch (error) {
+        if (seq !== hotspotDrawerSeq) return;
+        drawer.innerHTML = `<p class="hotspot-drawer-error">账号数据加载失败：${escapeHtml(error.message)}</p>`;
+    }
+}
+
+function closeHotspotDrawer() {
+    hotspotDrawerSeq += 1;
+    const mask = document.getElementById('hotspot-drawer-mask');
+    const drawer = document.getElementById('hotspot-drawer');
+    if (mask) mask.classList.remove('hotspot-drawer-mask-show');
+    if (drawer) drawer.classList.remove('hotspot-drawer-open');
+}
+
+// 从抽屉跳转到账号分析页（保留原有分析页入口能力）。
+function jumpToAnalysis(mid) {
+    closeHotspotDrawer();
+    navigateTo('analysis');
+    const input = document.getElementById('analysis-uid-or-url');
+    if (input) input.value = String(mid);
+}
+
+// 触发一轮采集，成功后进入高频轮询；已失败状态点击可重试。
+async function triggerHotspotCollect() {
+    const btn = document.getElementById('hotspot-collect-btn');
+    if (!btn || btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = '采集中...';
+    try {
+        // 读取分区与数量选择：默认游戏区 1008（新 pid_v2），数量默认 20，可到 200（触发榜单翻页）。
+        const tid = Number(document.getElementById('hotspot-tid-select')?.value || 1008);
+        const limit = Number(document.getElementById('hotspot-limit-select')?.value || 20);
+        const minView = Number(document.getElementById('hotspot-min-view-select')?.value || 0);
+        const result = await apiRequest(`/hotspot/collect?tid=${tid}&limit=${limit}&min_view=${minView}&sample_comments=true&sample_danmaku=true`, { method: 'POST' });
+        const started = (result.data || {}).started;
+        if (!started) {
+            // 已有任务在跑，直接继续轮询。
+            btn.textContent = '采集中...';
+        }
+        pollHotspotCollectProgress(true);
+    } catch (error) {
+        btn.disabled = false;
+        btn.textContent = '立即采集';
+        document.getElementById('hotspot-collect-message').textContent = `启动失败：${error.message}`;
+    }
+}
+
+// 轮询采集进度；任务完成或失败后恢复按钮，并展示失败明细供重试参考。
+async function pollHotspotCollectProgress(highFrequency = false) {
+    const progress = document.getElementById('hotspot-collect-progress');
+    const message = document.getElementById('hotspot-collect-message');
+    const btn = document.getElementById('hotspot-collect-btn');
+    if (!progress || !message) return;
+    try {
+        const result = await apiRequest('/hotspot/collect/progress');
+        const data = result.data || {};
+        progress.value = Number(data.progress || 0);
+        message.textContent = data.message || '采集进度未知';
+        // 失败明细渲染在进度条下方，点击重试前可确认失败原因。
+        const failed = data.failed_items || [];
+        let detail = '';
+        if (data.status === 'failed') {
+            detail = '<p class="hotspot-collect-detail">采集异常，请检查日志或稍后重试。</p>';
+        } else if (failed.length) {
+            detail = `<p class="hotspot-collect-detail">失败 ${failed.length} 个：${failed.slice(0, 3).map(f => `${escapeHtml(String(f.bvid))}(${escapeHtml(String(f.error))})`).join('、')}${failed.length > 3 ? ' 等' : ''}</p>`;
+        }
+        const oldDetail = message.parentElement.querySelector('.hotspot-collect-detail');
+        if (oldDetail) oldDetail.remove();
+        if (detail) message.insertAdjacentHTML('afterend', detail);
+        if (data.status === 'completed' || data.status === 'failed' || data.status === 'idle') {
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = data.status === 'failed' ? '重试采集' : '立即采集';
+            }
+            if (data.status === 'completed') {
+                // 新数据落库后刷新生命周期卡片。
+                loadHotspotLifecycle();
+            }
+            // idle：后端没有采集任务在跑，停止轮询，等用户点击采集再启动，避免误显示“采集中”。
+            if (data.status === 'idle') return;
+            return;
+        }
+        if (btn) btn.textContent = '采集中...';
+    } catch (error) {
+        message.textContent = '进度暂不可用，请稍后重试';
+    }
+    // 普通轮询 5 秒一次；采集进行中 2 秒一次。
+    setTimeout(() => pollHotspotCollectProgress(false), highFrequency ? 2000 : 5000);
+}

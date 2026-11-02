@@ -1,0 +1,17 @@
+/* FishTool 插件视图在 AstrBot iframe 内的样式修正。 */
+html, body {
+  min-height: 100%;
+}
+
+/* 手动复制弹窗的文本框。 */
+.fishtool-astrbot-copy-area {
+  display: block;
+  width: 100%;
+  min-height: 120px;
+  max-height: 50vh;
+  margin: 12px 0;
+  font-family: "JetBrains Mono", Consolas, monospace;
+  font-size: 12px;
+  box-sizing: border-box;
+  resize: vertical;
+}

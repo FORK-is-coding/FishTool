@@ -1,0 +1,13 @@
+/* 本地字体（均为 OFL 授权）：标题 Archivo Expanded，数字 Outfit，等宽 JetBrains Mono，窄体 Barlow Condensed。 */
+@font-face{font-family:'Barlow Condensed';font-weight:500;font-style:normal;font-display:swap;src:url('./BarlowCondensed-500.woff2') format('woff2');}
+@font-face{font-family:'Barlow Condensed';font-weight:600;font-style:normal;font-display:swap;src:url('./BarlowCondensed-600.woff2') format('woff2');}
+@font-face{font-family:'Barlow Condensed';font-weight:700;font-style:normal;font-display:swap;src:url('./BarlowCondensed-700.woff2') format('woff2');}
+@font-face{font-family:'JetBrains Mono';font-weight:400;font-style:normal;font-display:swap;src:url('./JetBrainsMono-400.woff2') format('woff2');}
+@font-face{font-family:'JetBrains Mono';font-weight:600;font-style:normal;font-display:swap;src:url('./JetBrainsMono-600.woff2') format('woff2');}
+
+@font-face{font-family:'Archivo Expanded';font-weight:700;font-style:normal;font-display:swap;src:url('./ArchivoExpanded-700.woff2') format('woff2');}
+@font-face{font-family:'Archivo Expanded';font-weight:800;font-style:normal;font-display:swap;src:url('./ArchivoExpanded-800.woff2') format('woff2');}
+@font-face{font-family:'Archivo Expanded';font-weight:500;font-style:normal;font-display:swap;src:url('./ArchivoExpanded-500.woff2') format('woff2');}
+@font-face{font-family:'Outfit';font-weight:300;font-style:normal;font-display:swap;src:url('./Outfit-300.woff2') format('woff2');}
+@font-face{font-family:'Outfit';font-weight:500;font-style:normal;font-display:swap;src:url('./Outfit-500.woff2') format('woff2');}
+@font-face{font-family:'Outfit';font-weight:600;font-style:normal;font-display:swap;src:url('./Outfit-600.woff2') format('woff2');}

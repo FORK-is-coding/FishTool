@@ -1,0 +1,89 @@
+/* FishTool 首次启动开场动画：黑底纹理场景 + 实时演算磨砂磁带盒 + 文档卡侧面弹出、等比放大铺满 + 官网同款向左推移进入欢迎页。
+   只用 Chromium 83 支持的写法：不用 inset 简写，不用 is、where、has 伪类，不用 flex gap，mask-image 只写带 -webkit- 前缀的。
+   纹理统一引用 /static/tex/ 下的 C+ 素材，颜色与字体全部使用 style.base.css 的令牌。 */
+html.intro-pending body { background: #141414; }
+html.intro-pending .sidebar, html.intro-pending .main-content { visibility: hidden; }
+/* 欢迎页的入场由推移动效接管，不再叠加 C+ 的 rise（切到其他页时 app.intro.js 去掉该属性，rise 照常） */
+.page[data-intro-entered] > * { animation: none !important; }
+
+.fish-intro { display: none; position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 1200; overflow: hidden; background: #141414; color: #e6e6e6; }
+html.intro-pending .fish-intro, .fish-intro.is-leaving { display: block; }
+/* ---------------- 欢迎页右上角：重播开场动画 ----------------
+   放在 hero-meta 行最右（BUILD 文本右侧），与 meta 文字同一基线。
+   外形：24px 方块 + 2px 圆角，浅灰颗粒底 + 细边（C+ btn-line 的缩小版）；图标为回旋箭头；
+   悬停 / 聚焦时左侧展开 REPLAY INTRO 等宽标签，图标块变深灰并出现左侧黄色短竖条（C+ 主按钮的点睛做法）。 */
+.intro-replay {
+    position: relative; display: inline-flex; align-items: center; height: 24px; margin-left: 18px; padding: 0; border: 0;
+    border-radius: var(--r-btn); background: transparent; color: var(--ink-3); cursor: pointer; font: inherit;
+}
+.intro-replay-icon {
+    position: relative; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; overflow: hidden;
+    border-radius: var(--r-btn); background: var(--paper-2) url("../tex/grain.svg"); box-shadow: inset 0 0 0 1px var(--rule);
+    transition: background-color .2s, box-shadow .2s, color .2s;
+}
+.intro-replay-icon::after { content: ""; position: absolute; left: 3px; top: 6px; bottom: 6px; width: 3px; background: var(--signal); transform: scaleY(0); transition: transform .25s var(--ease); }
+.intro-replay-icon svg { width: 13px; height: 13px; stroke-width: 2; }
+/* 标签收起时 display:none（不占位、不被读作截断文本）。悬停 / 聚焦时绝对定位在图标左侧滑入，
+   不参与 meta 行的布局，BUILD 文本和按钮本身都不移动 */
+.intro-replay-label {
+    position: absolute; right: 100%; top: 0; display: none; margin-right: 8px; padding: 0 8px; white-space: nowrap;
+    border-radius: var(--r-btn); background: rgba(250, 250, 250, .96); box-shadow: inset 0 0 0 1px var(--rule);
+    font: 500 10px/24px var(--f-mono); letter-spacing: .12em; color: var(--ink-2); pointer-events: none;
+}
+/* 悬停 / 键盘聚焦 / .is-hot（测试钩子）三种状态共用一套样式。
+   不用 :focus-visible：Chromium 83 不支持（Chrome 86 起），写进同一条选择器列表会让整条规则在桌面端失效。
+   键盘聚焦由 app.intro.js 给按钮加 .is-kbd 判断（Tab 键触发的 focus 才加），鼠标点击不出现聚焦环。 */
+.intro-replay:hover .intro-replay-label, .intro-replay.is-kbd .intro-replay-label, .intro-replay.is-hot .intro-replay-label { display: block; animation: intro-replay-label .28s var(--ease) both; }
+@keyframes intro-replay-label { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: none; } }
+.intro-replay:hover .intro-replay-icon, .intro-replay.is-kbd .intro-replay-icon, .intro-replay.is-hot .intro-replay-icon { background-color: var(--btn); background-image: url("../tex/btn-hatch.svg"); color: #eee; box-shadow: none; }
+.intro-replay:hover .intro-replay-icon::after, .intro-replay.is-kbd .intro-replay-icon::after, .intro-replay.is-hot .intro-replay-icon::after { transform: scaleY(1); }
+.intro-replay:focus { outline: none; }
+.intro-replay.is-kbd .intro-replay-icon { box-shadow: 0 0 0 2px #fff, 0 0 0 3px var(--ink-2); }
+.intro-replay:active .intro-replay-icon { transform: translateY(1px); }
+/* 开场进行中按钮不可再次触发（开场层本身也盖住了它，这里只是防御键盘重复触发） */
+html.intro-pending .intro-replay { pointer-events: none; }
+
+/* 推移开始后主界面立即可操作：开场层不再拦截点击 */
+.fish-intro.is-leaving { pointer-events: none; }
+
+/* 场景底纹（3D 不可用时的兜底；正常情况下由 3D 场景背景贴图画同一套纹理，磨砂外壳才能透出它） */
+.fi-bg { position: absolute; top: 0; right: 0; bottom: 0; left: 0; background:
+    radial-gradient(70% 80% at 55% 50%, rgba(20, 20, 20, 0) 0, rgba(20, 20, 20, .9) 100%), url("../tex/hatch-dark.svg"), #141414; }
+.fi-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: block; opacity: 0; }
+.fi-line { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--tri); -webkit-mask-image: linear-gradient(90deg, #000 30%, transparent 75%); }
+
+/* 左侧步骤进度条（官网 __00-Loading_progress：贴左、宽 20px、自上而下填充）；黄色叠斜纹、顶端渐隐，不做整条纯黄 */
+.fi-rail { position: absolute; left: 0; top: 0; bottom: 0; width: 20px; background: #1f1f1f url("../tex/hatch-dark.svg"); }
+.fi-fill { position: absolute; left: 0; top: 0; width: 100%; height: 100%; transform-origin: top; transform: scaleY(0);
+    background: repeating-linear-gradient(-45deg, rgba(0, 0, 0, .25) 0 2px, transparent 2px 4px), var(--signal);
+    -webkit-mask-image: linear-gradient(#000 calc(100% - 24px), transparent); }
+.fi-sweep { position: absolute; left: 0; top: 0; width: 100%; height: 2px; background: rgba(255, 255, 255, .6); opacity: 0; }
+.fi-ticks { position: absolute; left: 24px; top: 0; bottom: 0; width: 12px; }
+.fi-ticks i { position: absolute; left: 0; width: 8px; height: 2px; background: #3c3c3c; }
+.fi-ticks i.is-past { background: #8a8a8a; }
+/* 当前刻度的右移与加长由 app.intro.js 每帧写入（换步 240ms），这里只给颜色 */
+.fi-ticks i.is-now { background: var(--signal); }
+.fi-step { position: absolute; left: 44px; top: 28px; font: 500 11px/1 var(--f-mono); letter-spacing: .14em; color: #8a8a8a; white-space: nowrap; }
+.fi-step b { margin-left: 10px; color: #e6e6e6; font-weight: 600; }
+
+.fi-caption { position: absolute; left: 44px; bottom: 44px; font: 500 12px/1.6 var(--f-mono); letter-spacing: .12em; color: #b3b3b3; white-space: pre; }
+.fi-caption i { display: inline-block; width: 3px; height: 14px; margin-left: 4px; vertical-align: -2px; background: var(--signal); }
+.fi-pct { position: absolute; left: 44px; bottom: 92px; display: flex; align-items: flex-end; opacity: 0; }
+.fi-pct::before { content: ""; align-self: center; width: 8px; height: 30px; margin-right: 14px; border-radius: 4px; background: var(--signal); }
+.fi-pct b { font: 300 56px/1 var(--f-en); letter-spacing: -.02em; color: #fafafa; }
+.fi-pct small { margin-left: 4px; font: 300 32px/1 var(--f-en); color: #8a8a8a; }
+.fi-meta { position: absolute; right: 40px; bottom: 44px; font: 500 10px/1.8 var(--f-mono); letter-spacing: .16em; color: #5a5a5a; text-align: right; }
+.fi-skip { position: absolute; top: 24px; right: 24px; opacity: 0; pointer-events: none; }
+.fi-skip.is-on { opacity: 1; pointer-events: auto; }
+
+/* 铺满屏幕的文档卡（与 3D 贴图同一份色块数据；卡片按 16:10 等比 cover，不拉伸） */
+.fi-doc { position: absolute; top: 0; right: 0; bottom: 0; left: 0; opacity: 0; overflow: hidden; background: #f4f4f2; }
+.fi-doc-inner { position: absolute; }
+.fi-doc-canvas { display: block; width: 100%; height: 100%; }
+
+/* 官网 sectionDivider 同类：深色斜纹层自右推入盖住画面（不用整屏纯黄），标题随后自右 2rem 推入；再整体向左推出 */
+.fi-divider { position: absolute; top: 0; right: 0; bottom: 0; left: 0; transform: translateX(100%); background: #191919 url("../tex/hatch-dark.svg"); }
+.fi-divider::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 6px; background: linear-gradient(var(--magenta) 0 84px, var(--mint) 84px 168px, var(--signal) 168px, rgba(255, 250, 0, 0)); }
+.fi-divider-title { position: absolute; left: 9%; bottom: 14%; opacity: 0; }
+.fi-divider-title span { display: block; font: 300 22px/1 var(--f-en); letter-spacing: .1em; color: #8a8a8a; }
+.fi-divider-title b { display: block; margin-top: 12px; font: 800 64px/1 var(--f-wide); letter-spacing: -.02em; color: #fafafa; }

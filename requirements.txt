@@ -1,0 +1,2 @@
+# 插件壳运行在 AstrBot 进程内，只用 AstrBot 自带依赖（httpx、websockets、psutil）。
+# FishTool 引擎依赖见 engine_requirements.txt，由插件装进独立 venv，不写在这里。

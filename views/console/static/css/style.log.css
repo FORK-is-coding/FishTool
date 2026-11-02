@@ -1,0 +1,108 @@
+/* ===== style.log.css —— 拆分自 style.css（日志区域），原始行 L847-L926 ===== */
+/* 日志区域：白卡 + 4px 圆角 + 轻阴影，通篇等宽正文。 */
+.logs-area {
+    color: var(--ink);
+    border: 0;
+    padding: 20px 22px;
+    border-radius: var(--r-card);
+    background-color: #fff;
+    box-shadow: var(--shadow-card);
+    font: 500 12px/1.6 var(--f-mono);
+    max-height: 600px;
+    overflow-y: auto;
+}
+
+/* style.modal.css 的共享卡片规则后加载且带 1px 边框，这里用页面前缀改为无边框 + 轻阴影。 */
+#logs-page .logs-area,
+#logs-page .logs-area:hover {
+    border: 0;
+    box-shadow: var(--shadow-card);
+}
+
+.logs-area pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+/* 真实任务进度：转圈、百分比、进度条与预计时间同步展示。 */
+.loading-state {
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr);
+    gap: 12px 16px;
+    align-items: center;
+    width: min(620px, 100%);
+    margin: 0 auto;
+    padding: 20px;
+    text-align: left;
+}
+
+/* 转圈：浅灰底环 + 深灰 / 青绿两段，不用暖色。 */
+.loading-spinner {
+    grid-row: 1 / span 3;
+    width: 40px;
+    height: 40px;
+    border: 3px solid var(--paper-3);
+    border-top-color: var(--ink-2);
+    border-right-color: var(--mint);
+    border-radius: 50%;
+    animation: loading-spin 850ms linear infinite;
+}
+
+.loading-copy {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    color: var(--ink);
+}
+
+/* 百分比：细体大号数字。 */
+.loading-percentage {
+    flex: 0 0 auto;
+    color: var(--ink);
+    font: 300 22px/1 var(--f-en);
+}
+
+/* 未知进度：只保留转圈与文案，不显示停在 0% 的假进度条。 */
+.loading-state--indeterminate .loading-spinner {
+    grid-row: 1 / span 2;
+}
+
+/* 状态牌：细线框等宽小字，不铺底色。 */
+.loading-status {
+    flex: 0 0 auto;
+    align-self: center;
+    padding: 3px 10px;
+    color: var(--ink-2);
+    font: 600 11px/1.2 var(--f-mono);
+    letter-spacing: .08em;
+    border: 0;
+    border-radius: 11px;
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--rule);
+}
+
+/* 进度条：4px 细条，青绿到黄由实到虚。 */
+.loading-track {
+    height: 4px;
+    overflow: hidden;
+    border-radius: 2px;
+    background: var(--paper-3);
+}
+
+.loading-track span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, var(--mint), var(--signal) 70%, rgba(255, 250, 0, .35));
+    transition: width 280ms ease;
+}
+
+.loading-state p {
+    color: var(--ink-3);
+    font-size: 13px;
+}
+
+@keyframes loading-spin {
+    to { transform: rotate(360deg); }
+}
