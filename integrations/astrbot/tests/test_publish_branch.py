@@ -61,6 +61,21 @@ def test_orphan_then_append_then_noop(tmp_path: Path, caller_repo: Path, bare_re
     assert _git("rev-list", "--count", "main", cwd=bare_remote) == "2"
 
 
+def test_falls_back_to_bot_identity(tmp_path: Path, bare_remote: Path, monkeypatch):
+    """CI 的检出仓库没有提交身份：用 github-actions[bot]，不能因为缺身份而提交失败。"""
+    bare_caller = tmp_path / "no_identity"
+    bare_caller.mkdir()
+    _git("init", "-q", cwd=bare_caller)
+    for var in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "empty_gitconfig"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    tree = _plugin_tree(tmp_path / "v1", "0.1.0")
+    publish(tree, "main", "release 0.1.0", remote_url=str(bare_remote), repo=bare_caller)
+    author = _git("log", "-1", "--format=%an <%ae>", "main", cwd=bare_remote)
+    assert author == "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+
+
 def test_dry_run_does_not_push(tmp_path: Path, caller_repo: Path, bare_remote: Path):
     tree = _plugin_tree(tmp_path / "v1", "0.1.0")
     publish(tree, "main", "dry", remote_url=str(bare_remote), repo=caller_repo, push=False)
