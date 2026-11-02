@@ -3,7 +3,7 @@
 两个发布目标，CI 都会写：
 
 - FishTool 仓库的孤儿分支 ``astrbot``：``…/FishTool/tree/astrbot`` 安装用。
-- 独立插件仓库（``FORK-is-coding/astrbot_plugin_fishtool``）的默认分支：AstrBot 插件市场
+- 独立插件仓库（``FORK-is-coding/astrbot_plugin_FishTool``）的默认分支：AstrBot 插件市场
   只解析仓库默认分支，FishTool 默认分支是 main，所以上架用独立仓库。
 
 用法::
@@ -14,7 +14,7 @@
 
     # 独立插件仓库（令牌经环境变量传入，不出现在命令行与日志里）
     PLUGIN_REPO_TOKEN=*** python integrations/astrbot/release_tools/publish_branch.py dist/plugin \
-        --repo-url https://github.com/FORK-is-coding/astrbot_plugin_fishtool.git --branch main \
+        --repo-url https://github.com/FORK-is-coding/astrbot_plugin_FishTool.git --branch main \
         --token-env PLUGIN_REPO_TOKEN --message "release v0.1.1 from FishTool@<sha>"
 
 做法（不碰当前工作区）：

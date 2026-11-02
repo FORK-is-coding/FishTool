@@ -64,7 +64,7 @@ python integrations/astrbot/release_tools/verify_package.py dist/plugin --max-zi
 | 位置 | 用途 |
 |---|---|
 | 本仓库孤儿分支 `astrbot` | `https://github.com/FORK-is-coding/FishTool/tree/astrbot` 从仓库安装 |
-| 独立插件仓库 `FORK-is-coding/astrbot_plugin_fishtool` 的默认分支 `main` | 插件市场上架源，也可直接从仓库安装 |
+| 独立插件仓库 `FORK-is-coding/astrbot_plugin_FishTool` 的默认分支 `main` | 插件市场上架源，也可直接从仓库安装 |
 
 为什么要独立仓库：AstrBot Cloud 发布页只解析仓库默认分支根目录的 `metadata.yaml`（发布页按 `raw.githubusercontent.com/<repo>/<default_branch>/metadata.yaml` 探测，解析请求不带分支参数）。FishTool 的默认分支是 `main`，根目录是 FishTool 本体，无法直接上架。
 

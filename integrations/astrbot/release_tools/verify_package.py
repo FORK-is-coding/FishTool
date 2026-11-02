@@ -37,7 +37,7 @@ REQUIRED_FILES = (
 )
 REQUIRED_META = ("name", "desc", "version", "author")
 ALLOWED_REPOS = {
-    "https://github.com/FORK-is-coding/astrbot_plugin_fishtool",
+    "https://github.com/FORK-is-coding/astrbot_plugin_FishTool",
     "https://github.com/FORK-is-coding/FishTool/tree/astrbot",
 }
 FORBIDDEN_NAMES = {".key", ".secrets", "user_config.yaml", "bili_ops.db", ".env"}
