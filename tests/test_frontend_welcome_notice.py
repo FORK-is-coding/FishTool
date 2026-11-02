@@ -26,6 +26,7 @@ _CHILD = Path(__file__).resolve().parent / "_welcome_notice_child.py"
 _KEY_PHRASES = (
     "个人创作者运营工作台",
     "免费开源软件项目",
+    "AGPL-3.0",
     "未开展任何形式的商业化服务",
     "不会以任何名义向用户收取费用",
     "已经遭遇诈骗行为",

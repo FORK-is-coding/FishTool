@@ -14,7 +14,7 @@
         <h3 id="welcome-notice-title">欢迎使用 FishTool！</h3>
         <div class="welcome-notice-body">
             <p>感谢您使用 FishTool！FishTool 是一款可接入多种 AI 大模型的<strong>个人创作者运营工作台</strong>，内置多项强大功能，希望能为您带来高效、愉快的创作赋能。</p>
-            <p>我们想特别说明：FishTool 是受开源协议保护的<strong>免费开源软件项目</strong>，您可以在官方社群、GitHub 上找到 FishTool 的全部源代码及相关资源。截至目前，FishTool 项目<strong>未开展任何形式的商业化服务</strong>，官方<strong>不会以任何名义向用户收取费用</strong>。</p>
+            <p>我们想特别说明：FishTool 是以 <strong>AGPL-3.0</strong> 协议发布的<strong>免费开源软件项目</strong>，您可以在官方社群、GitHub 上找到 FishTool 的全部源代码及相关资源。截至目前，FishTool 项目<strong>未开展任何形式的商业化服务</strong>，官方<strong>不会以任何名义向用户收取费用</strong>。</p>
             <p class="welcome-notice-alert">如果您在获取或使用 FishTool 的过程中被要求付费，表明您<strong>已经遭遇诈骗行为</strong>。请<strong>立即向相关方申请退款、举报</strong>，并及时通过邮件向我们反馈。</p>
             <p>📈 在使用本项目之前，请仔细阅读 <a href="#usage" class="welcome-notice-link" onclick="navigateTo('usage'); return false;">使用说明</a>。<strong>安装即表示您已阅读并同意其中的全部内容。</strong></p>
             <p>📮 反馈邮箱：<strong class="welcome-notice-mail">3575029912@qq.com</strong></p>
