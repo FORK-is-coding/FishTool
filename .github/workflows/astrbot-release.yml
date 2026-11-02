@@ -100,3 +100,18 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           python integrations/astrbot/release_tools/publish_branch.py dist/plugin --branch astrbot \
             --message "release ${GITHUB_REF_NAME} (v${{ steps.ver.outputs.version }}) from ${GITHUB_SHA}"
+      - name: Publish to plugin repository (marketplace source)
+        # AstrBot 插件市场只解析仓库默认分支；FishTool 默认分支是 main，所以市场条目指向独立插件仓库。
+        # 需要仓库 Secret PLUGIN_REPO_TOKEN：仅授权 FORK-is-coding/astrbot_plugin_FishTool、Contents 读写的 fine-grained token。
+        if: startsWith(github.ref, 'refs/tags/astrbot-v') || github.event.inputs.publish == 'true'
+        env:
+          PLUGIN_REPO_TOKEN: ${{ secrets.PLUGIN_REPO_TOKEN }}
+        run: |
+          if [ -z "${PLUGIN_REPO_TOKEN}" ]; then
+            echo "::error::secret PLUGIN_REPO_TOKEN is not set; cannot publish to the plugin repository"
+            exit 1
+          fi
+          python integrations/astrbot/release_tools/publish_branch.py dist/plugin \
+            --repo-url https://github.com/FORK-is-coding/astrbot_plugin_FishTool.git --branch main \
+            --token-env PLUGIN_REPO_TOKEN \
+            --message "release v${{ steps.ver.outputs.version }} from FORK-is-coding/FishTool@${GITHUB_SHA}"

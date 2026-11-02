@@ -6,7 +6,7 @@ desc: |
   控制台在 AstrBot 面板 → 插件 → FishTool → 视图中使用。数据保存在 data/plugin_data/astrbot_plugin_fishtool/。
 version: 0.1.0
 author: FORK-is-coding
-repo: https://github.com/FORK-is-coding/FishTool/tree/astrbot
+repo: https://github.com/FORK-is-coding/astrbot_plugin_FishTool
 astrbot_version: ">=4.29,<5"
 tags:
   - bilibili
