@@ -6,7 +6,8 @@
 - ``-fix20261027``：PR-04/07/08/09/13/14/24/25 改动过的脚本；
 - ``-fix20261030``：本轮改动过的脚本与样式表；
 - ``-ui20261101``：前端视觉改版 PR（C+ 白色档案）改动过的脚本与全部样式表；
-- ``-v029ui20261101``：桌面端 UI 对齐 + v0.2.9 PR 改动过的脚本与样式表，必须是最后一段后缀。
+- ``-v029ui20261101``：桌面端 UI 对齐 + v0.2.9 PR 改动过的脚本与样式表；
+- ``-v030``：v0.3.0 PR（版本号与 AGPL-3.0 声明）改动过的脚本，必须是最后一段后缀。
 """
 from pathlib import Path
 import re
@@ -28,6 +29,10 @@ BUMPED_UI_1101 = {
 BUMPED_V029 = {
     "js": ("app.ui.js", "app.auth.js", "app.lottery.js", "app.intro.js"),
     "css": ("style.base.css", "style.modal.css", "style.flexgap.css"),
+}
+# v0.3.0 PR：开场 BUILD 号与启动公告里的开源协议名称，两个脚本追加 -v030。
+BUMPED_V030 = {
+    "js": ("app.intro.js", "app.notice.js"),
 }
 # 语义折叠（可逆）PR：新增 app.comment.semantic.js / style.comment.semantic.css，并给
 # app.comment.js 追加 -semantic20261102 后缀（挂入当前 BV 钩子，老缓存必须失效重新加载）。
@@ -61,7 +66,9 @@ def test_assets_changed_in_1030_carry_bumped_version() -> None:
 
 def test_assets_changed_in_ui_redesign_end_with_ui_suffix() -> None:
     """视觉改版 PR 改过的脚本与样式表都带 -ui20261101；没被后续轮次改过的仍以它结尾。"""
-    later = set(BUMPED_V029["js"]) | set(BUMPED_V029["css"]) | set(BUMPED_SEMANTIC["js"])
+    later = (
+        set(BUMPED_V029["js"]) | set(BUMPED_V029["css"]) | set(BUMPED_SEMANTIC["js"]) | set(BUMPED_V030["js"])
+    )
     for kind, names in BUMPED_UI_1101.items():
         versions = _versions(kind)
         for name in names:
@@ -72,12 +79,23 @@ def test_assets_changed_in_ui_redesign_end_with_ui_suffix() -> None:
 
 
 def test_assets_changed_in_v029_end_with_v029_suffix() -> None:
-    """桌面端 UI 对齐 + v0.2.9 PR 改过的脚本与样式表都以 -v029ui20261101 结尾。"""
+    """桌面端 UI 对齐 + v0.2.9 PR 改过的脚本与样式表都带 -v029ui20261101；没被 v0.3.0 改过的仍以它结尾。"""
+    later = set(BUMPED_V030["js"])
     for kind, names in BUMPED_V029.items():
         versions = _versions(kind)
         for name in names:
             assert name in versions, f"index.html 未引用 {name}"
-            assert versions[name].endswith("-v029ui20261101"), f"{name} 版本号未更新: {versions[name]}"
+            assert "-v029ui20261101" in versions[name], f"{name} 版本号未更新: {versions[name]}"
+            if name not in later:
+                assert versions[name].endswith("-v029ui20261101"), f"{name} 版本号未更新: {versions[name]}"
+
+
+def test_assets_changed_in_v030_end_with_v030_suffix() -> None:
+    """v0.3.0 PR 改过的脚本以 -v030 结尾（只追加，不改前面的历史后缀）。"""
+    versions = _versions("js")
+    for name in BUMPED_V030["js"]:
+        assert name in versions, f"index.html 未引用 {name}"
+        assert versions[name].endswith("-v030"), f"{name} 版本号未更新: {versions[name]}"
 
 
 def test_semantic_fold_assets_carry_bumped_version() -> None:
@@ -97,7 +115,7 @@ def test_each_asset_is_referenced_once() -> None:
     html = INDEX_HTML.read_text(encoding="utf-8")
     groups = (
         ("js", BUMPED_SCRIPTS + BUMPED_1030["js"] + BUMPED_UI_1101["js"] + BUMPED_V029["js"]
-            + BUMPED_SEMANTIC["js"] + ("app.comment.semantic.js",)),
+            + BUMPED_SEMANTIC["js"] + BUMPED_V030["js"] + ("app.comment.semantic.js",)),
         ("css", BUMPED_1030["css"] + BUMPED_UI_1101["css"] + BUMPED_V029["css"]
             + ("style.comment.semantic.css",)),
     )

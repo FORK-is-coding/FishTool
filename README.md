@@ -179,4 +179,10 @@ QQ 群二维码在「欢迎」页的「加入群聊」里，也可以直接提 [
 
 ## License
 
-MIT
+FishTool 以 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0）发布。
+
+- 可以免费使用、修改和分发。
+- 分发修改版，或把修改版部署成网络服务供他人使用时，必须以 AGPL-3.0 公开对应的完整源代码。
+- 完整条款以 [LICENSE](LICENSE) 为准。
+
+v0.3.0 起由 MIT 改为 AGPL-3.0；v0.3.0 之前发布的版本（v0.2.9 及更早）仍按其附带的 MIT 许可证授权。

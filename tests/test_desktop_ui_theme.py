@@ -1,10 +1,10 @@
-"""桌面端原生控件与 Web 面板风格一致、侧栏文字标与 v0.2.9 版本号契约。
+"""桌面端原生控件与 Web 面板风格一致、侧栏文字标与 v0.3.0 版本号契约。
 
 1. desktop/ui_theme.py 的颜色常量与 style.base.css :root 设计令牌逐一相等；
 2. 桌宠菜单、预警气泡、托盘菜单、退出确认 / 错误对话框、启动加载页、悬停提示都从 ui_theme 取样式，
    不再写旧的暖白 / 粉色 / 紫色渐变配色；
 3. 前端不再调用原生 confirm()（桌面端会弹 Qt 系统对话框），改用 showAppConfirm；
-4. 侧栏顶部是「FISH / TOOL」文字标，双端可见版本号统一为 v0.2.9。
+4. 侧栏顶部是「FISH / TOOL」文字标，双端可见版本号统一为 v0.3.0。
 
 为什么不构造真实 MainWindow：WebEngine 只在子进程里构造（见 tests/test_desktop_webengine_isolation.py）；
 这里只构造不碰 WebEngine 的控件，其余用源码断言。
@@ -162,16 +162,18 @@ def test_frontend_has_no_native_confirm() -> None:
 
 
 def test_sidebar_wordmark_and_version() -> None:
-    """侧栏顶部是 FISH / TOOL 文字标（不再是 图标.png），可见版本号统一为 v0.2.9。"""
+    """侧栏顶部是 FISH / TOOL 文字标（不再是 图标.png），可见版本号统一为 v0.3.0。"""
     html = _INDEX.read_text(encoding="utf-8")
     logo = re.search(r'<div class="logo">(.*?)</div>\s*<nav', html, re.S)
     assert logo, "找不到侧栏 .logo"
     assert '<span class="logo-mark" aria-hidden="true">FISH<br>TOOL</span>' in logo.group(1)
     assert "logo-badge" not in logo.group(1) and "图标.png" not in logo.group(1)
-    assert '<span class="logo-version">v0.2.9测试版</span>' in html
-    assert '<span class="side-ver">v0.2.9</span>' in html
-    assert '<span class="meta-r">BUILD 0.2.9</span>' in html
-    assert "BUILD 0.2.9</div>" in (_JS / "app.intro.js").read_text(encoding="utf-8")
+    assert '<span class="logo-version">v0.3.0测试版</span>' in html
+    assert '<span class="side-ver">v0.3.0</span>' in html
+    assert '<span class="meta-r">BUILD 0.3.0</span>' in html
+    assert "BUILD 0.3.0</div>" in (_JS / "app.intro.js").read_text(encoding="utf-8")
     for path in (_INDEX, _JS / "app.intro.js"):
-        assert "0.2.5" not in path.read_text(encoding="utf-8"), path.name
+        text = path.read_text(encoding="utf-8")
+        for old in ("0.2.5", "0.2.9"):
+            assert old not in text, f"{path.name} 仍有旧版本号 {old}"
     assert re.search(r"\.logo-mark\s*\{[^}]*var\(--f-wide\)", _CSS.read_text(encoding="utf-8"))
