@@ -118,6 +118,27 @@ class Harness:
     def ext(self, method: str, endpoint: str, **kw) -> httpx.Response:
         return self.http.request(method, f"{self.base}/api/v1/plugins/extensions/{PLUGIN}/{endpoint}", headers=self.h(), **kw)
 
+    def install_from_repo(self, url: str) -> dict:
+        """走面板“从仓库安装”，返回 AstrBot 的响应。
+
+        面板对 GitHub 仓库地址调用 ``/plugins/install/github``（useExtensionPage.js performInstallRequest），
+        它会把 ``/tree/<branch>`` 解析成分支归档 zip；``/plugins/install/url`` 只用于直链 zip。
+        """
+        endpoint = "github" if "github.com/" in url else "git"
+        resp = self.http.post(f"{self.base}/api/v1/plugins/install/{endpoint}", headers=self.h(), json={"url": url}, timeout=900)
+        data = resp.json()
+        if data.get("status") != "ok":
+            raise RuntimeError(f"install from repo failed: {data}")
+        return data
+
+    def update_plugin(self) -> dict:
+        """走面板“更新”：按安装时记录的仓库源（含 /tree/<branch>）重新下载。"""
+        resp = self.http.post(f"{self.base}/api/v1/plugins/update", headers=self.h(), json={"plugin_id": PLUGIN}, timeout=900)
+        data = resp.json()
+        if data.get("status") != "ok":
+            raise RuntimeError(f"update failed: {data}")
+        return data
+
     def reload_plugin(self) -> dict:
         return self.http.post(f"{self.base}/api/v1/plugins/reload", headers=self.h(), json={"plugin_id": PLUGIN}, timeout=180).json()
 
@@ -279,9 +300,12 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--astrbot-python", required=True)
     ap.add_argument("--root", required=True)
-    ap.add_argument("--plugin", required=True)
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--plugin", help="本地构建好的插件树（复制安装）")
+    src.add_argument("--install-url", help="走面板“从仓库安装”，如 https://github.com/FORK-is-coding/FishTool/tree/astrbot")
     ap.add_argument("--port", type=int, default=6185)
     ap.add_argument("--reloads", type=int, default=3)
+    ap.add_argument("--check-update", action="store_true", help="安装后再走一次面板“更新”，确认数据保留")
     ap.add_argument("--keep-running", action="store_true")
     args = ap.parse_args(argv)
 
@@ -289,12 +313,29 @@ def main(argv=None) -> int:
     report: dict = {}
     try:
         h.init()
-        h.install_plugin(Path(args.plugin))
+        if args.plugin:
+            h.install_plugin(Path(args.plugin))
         h.start()
         h.login()
+        if args.install_url:
+            report["install"] = h.install_from_repo(args.install_url).get("message")
+            plugin_dir = h.root / "data" / "plugins" / PLUGIN
+            report["installed_version"] = (plugin_dir / "engine" / "VERSION").read_text("utf-8").strip()
         report["failed_plugins"] = h.failed()
         report["engine_boot"] = h.wait_engine()
         report["smoke"] = smoke(h)
+
+        if args.check_update:
+            key = h.root / "data" / "plugin_data" / PLUGIN / "config" / ".key"
+            key_before = key.read_bytes()
+            report["update"] = h.update_plugin().get("message")
+            st = h.wait_engine(timeout=600)
+            report["update_check"] = {
+                "key_preserved": key.read_bytes() == key_before,
+                "engines": count_engine_processes(h.root),
+                "pid": st.get("pid"),
+                "resident_status": h.proxy("comment/resident/status")["http_status"],
+            }
 
         reloads = []
         for i in range(args.reloads):
@@ -305,7 +346,15 @@ def main(argv=None) -> int:
             time.sleep(2)
             reloads.append({"i": i, "pid": st.get("pid"), "engines": count_engine_processes(h.root)})
         report["reloads"] = reloads
-        report["ok"] = all(r["ok"] for r in report["smoke"]) and all(r["engines"] == 1 for r in reloads)
+        update_ok = True
+        if args.check_update:
+            uc = report["update_check"]
+            update_ok = uc["key_preserved"] and uc["engines"] == 1 and uc["resident_status"] == 200
+        report["ok"] = (
+            all(r["ok"] for r in report["smoke"])
+            and all(r["engines"] == 1 for r in reloads)
+            and update_ok
+        )
         if args.keep_running:
             report["dashboard"] = h.base
             report["token"] = h.token
