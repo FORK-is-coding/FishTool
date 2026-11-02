@@ -68,7 +68,7 @@ from web.local_guard import is_cross_site_origin
 # 从 routers 导入符号
 from .routers import (
     hotspot, comment, config as config_router, logs, analysis,
-    auth as auth_router, lottery, benchmark,
+    auth as auth_router, lottery, benchmark, comment_semantic,
 )
 # 本机同源校验（Host / Origin），用于配置接口防 DNS rebinding 读取
 from .local_guard import require_local_read
@@ -89,6 +89,9 @@ event_aggregation_service = None
 topic_generation_service = None
 # 第三批 h：事件发现服务（3c 门面，由同一 lifespan 装配；开关默认关）。
 event_discovery_service = None
+# 语义折叠：评论语义去重/折叠服务（由 lifespan 装配后注入 comment_semantic 路由；
+# 装配失败不阻塞 Web 启动，端点按契约返 503）。
+semantic_service = None
 
 
 class _LazyBilibiliClient:
@@ -389,8 +392,33 @@ async def lifespan(app: FastAPI):
             source="web",
         )
 
+    # 语义折叠服务：装配失败只记日志 + 端点返 503，不阻塞 Web 启动。
+    # SemanticService 构造期不读 config/、不连库、不发网络（provider 惰性）。
+    global semantic_service
+    try:
+        from modules.comment.semantic.service import SemanticService
+
+        semantic_service = SemanticService()
+        comment_semantic.set_semantic_service(semantic_service)
+        # 进程重启后把残留的 queued/running 任务标记为 interrupted（不自动续跑、不自动发请求）。
+        if hasattr(semantic_service, "recover"):
+            await semantic_service.recover()
+        logger.info("语义折叠服务已装配（SemanticService）")
+    except Exception as exc:  # noqa: BLE001 - 装配失败不阻塞 Web 启动，端点按契约返 503
+        semantic_service = None
+        comment_semantic.set_semantic_service(None)
+        report_exception(
+            exc,
+            logger=logger,
+            action="装配语义折叠服务",
+            priority=ErrorPriority.HIGH,
+            toast_title="语义折叠服务不可用",
+            toast_message="语义折叠服务装配失败，相关功能暂时不可用，详细原因已写入日志。",
+            source="web",
+        )
+
     logger.info("Web服务已启动")
-    
+
     try:
         yield
     finally:
@@ -409,6 +437,13 @@ async def lifespan(app: FastAPI):
                 await benchmark_client.aclose()
             except Exception as exc:  # noqa: BLE001
                 logger.error("排名 client 关闭失败: %s", exc, exc_info=True)
+        # 语义折叠服务：取消/await 自己后台队列任务并关闭自有 provider；只关自己拥有的资源。
+        if semantic_service is not None and hasattr(semantic_service, "shutdown"):
+            try:
+                await semantic_service.shutdown()
+            except Exception as exc:  # noqa: BLE001 - 关闭失败不阻塞进程退出
+                logger.error("语义折叠服务关闭失败: %s", exc, exc_info=True)
+        comment_semantic.set_semantic_service(None)
         # 先摘掉 toast 桥，避免关闭阶段再向已断开的 WebSocket 广播。
         toast_unregister()
         logger.info("Web服务关闭中...")
@@ -577,6 +612,8 @@ templates = Jinja2Templates(directory=str(templates_dir))
 # 每个业务模块独立 APIRouter，按功能前缀挂载
 app.include_router(hotspot.router, prefix="/api/hotspot", tags=["热点发现"])
 app.include_router(comment.router, prefix="/api/comment", tags=["评论监控"])
+# 语义折叠（可逆）：前缀 /comment/semantic，挂到 /api -> /api/comment/semantic/*
+app.include_router(comment_semantic.router, prefix="/api", tags=["评论语义折叠"])
 # 配置接口含密钥相关读写：Host / Origin 须在本机白名单内（可用 FISHTOOL_ALLOWED_HOSTS 覆盖）
 app.include_router(
     config_router.router,

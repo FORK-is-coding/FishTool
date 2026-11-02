@@ -107,6 +107,7 @@ class DatabaseManager:
         # tasks 表迁移与其余迁移互不依赖，放在最前，避免与其他分支在序列末尾追加的迁移相邻冲突
         self._migrate_task_key_column()
         self._migrate_comment_member_columns()
+        self._migrate_comment_context_columns()
         self._migrate_up_master_charge_count()
         self._migrate_video_stats_columns()
         self._migrate_hotspot_watch_event_columns()
@@ -162,6 +163,35 @@ class DatabaseManager:
             logger.exception("评论用户字段迁移失败")
             raise
     
+    def _migrate_comment_context_columns(self) -> None:
+        """为旧数据库幂等补充评论上下文列（语义折叠首版）。
+
+        新增 ``root_rpid`` / ``parent_rpid`` / ``context_status`` 三列，均可空。
+        旧行补列后默认 NULL，语义层一律视为 ``unknown`` 上下文，不冒充顶层；
+        重新采集相同 rpid 时由 storage 层原位补齐，不破坏既有数据。
+
+        Args:
+            无。
+
+        Returns:
+            无；缺失列通过 SQLite ``ALTER TABLE`` 原位新增，重复启动跳过已存在列。
+        """
+        try:
+            existing = {column["name"] for column in inspect(self.engine).get_columns("comments")}
+            statements = {
+                "root_rpid": "ALTER TABLE comments ADD COLUMN root_rpid VARCHAR(50)",
+                "parent_rpid": "ALTER TABLE comments ADD COLUMN parent_rpid VARCHAR(50)",
+                "context_status": "ALTER TABLE comments ADD COLUMN context_status VARCHAR(20)",
+            }
+            with self.engine.begin() as connection:
+                for column_name, statement in statements.items():
+                    if column_name not in existing:
+                        connection.execute(text(statement))
+                        logger.info("数据库迁移完成: comments.%s", column_name)
+        except Exception:
+            logger.exception("评论上下文字段迁移失败")
+            raise
+
     def _migrate_up_master_charge_count(self) -> None:
         """为旧数据库幂等补充 ``up_masters.charge_count`` 列。
 

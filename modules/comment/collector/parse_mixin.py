@@ -14,6 +14,54 @@ from core.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _coerce_rpid_field(value: Any):
+    """把评论接口的 root/parent 字段规整为有效整数或 None。
+
+    契约（语义折叠首版）：仅当字段是 **JSON number**（含 0）时才算"已知"；
+    缺字段 / None / bool（True/False）一律判为未知，绝不用默认 0 冒充顶层。
+
+    Args:
+        value: 原接口 root/parent 原始值。
+
+    Returns:
+        int 或 None：合法数字返回其 int 值（0 合法），否则 None 表示未知。
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        # 浮点整数值（如 0.0）按整数处理；非整数值判未知。
+        return int(value) if value.is_integer() else None
+    return None
+
+
+def classify_comment_context(reply: Dict[str, Any]) -> Dict[str, Any]:
+    """从原始评论判定上下文状态与 root/parent rpid。
+
+    - root 与 parent **都明确为 0** -> ``top_level``，root_rpid/parent_rpid 置 None；
+    - root 或 parent 明确非 0 -> ``reply``，保留各自 rpid 字符串；
+    - 任一字段缺失/None/bool -> ``unknown``，不臆造。
+
+    Args:
+        reply: B 站评论接口单条原始数据。
+
+    Returns:
+        dict: {root_rpid: str|None, parent_rpid: str|None, context_status: str}
+    """
+    root = _coerce_rpid_field(reply.get('root'))
+    parent = _coerce_rpid_field(reply.get('parent'))
+    if root is None or parent is None:
+        return {'root_rpid': None, 'parent_rpid': None, 'context_status': 'unknown'}
+    if root == 0 and parent == 0:
+        return {'root_rpid': None, 'parent_rpid': None, 'context_status': 'top_level'}
+    return {
+        'root_rpid': str(root) if root else None,
+        'parent_rpid': str(parent) if parent else None,
+        'context_status': 'reply',
+    }
+
+
 class CommentParseMixin:
     def _parse_comment_replies(self, replies: List[Dict[str, Any]], is_hot: bool = False) -> List[Dict[str, Any]]:
         """批量解析评论数据
@@ -90,9 +138,15 @@ class CommentParseMixin:
             except (OSError, OverflowError, ValueError):
                 ctime = None
 
+        # 上下文判定：仅在原接口字段明确时判顶层/回复，缺字段保持未知
+        context = classify_comment_context(reply)
+
         # 构造标准化评论数据字典
         return {
             'rpid': reply.get('rpid'),  # 评论唯一ID（回复ID）
+            'root_rpid': context['root_rpid'],  # 根评论 rpid（顶层为 None）
+            'parent_rpid': context['parent_rpid'],  # 父评论 rpid（顶层为 None）
+            'context_status': context['context_status'],  # top_level/reply/unknown
             'oid': reply.get('oid'),    # 视频对象ID（aid）
             'uid': member.get('mid'),   # 评论者用户ID
             'uname': member.get('uname', ''),  # 评论者昵称

@@ -1,0 +1,260 @@
+/* ===== style.comment.semantic.css —— 评论语义折叠（可逆）实验面板 ===== */
+/* 复用既有设计 token（--paper/--ink/--paper-3/--r-card 等），不引入新图表、不改旧大屏样式。 */
+
+.semantic-panel {
+    margin-top: 24px;
+}
+
+.semantic-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+/* Chromium 83 flex gap fallback: direct children keep separation on desktop WebEngine. */
+.no-flex-gap .semantic-panel-head > * + * {
+    margin-left: 16px;
+}
+
+.no-flex-gap .semantic-scope > * + * {
+    margin-left: 16px;
+}
+
+.no-flex-gap .semantic-autofold > * + * {
+    margin-left: 8px;
+}
+
+.no-flex-gap .semantic-actions > * + * {
+    margin-left: 10px;
+}
+
+.no-flex-gap .semantic-group-head > * + * {
+    margin-left: 10px;
+}
+
+.no-flex-gap .semantic-member > * + *,
+.no-flex-gap .semantic-item > * + * {
+    margin-left: 8px;
+}
+
+.no-flex-gap .semantic-group-actions > * + *,
+.no-flex-gap .semantic-member-actions > * + * {
+    margin-left: 8px;
+}
+
+.no-flex-gap .semantic-pagination > * + * {
+    margin-left: 12px;
+}
+
+.semantic-panel-head h2 {
+    margin: 0;
+    color: var(--ink);
+}
+
+/* 实验标识 / 提示文案：弱化为次要信息色。 */
+.semantic-hint,
+.semantic-flag-note {
+    margin: 8px 0;
+    color: var(--text-secondary, #6b7280);
+    font-size: 13px;
+}
+
+.semantic-flag-note {
+    font-style: italic;
+}
+
+.semantic-warn,
+.semantic-consent-flag strong {
+    color: var(--danger, #c0392b);
+}
+
+.semantic-overview {
+    padding: 16px;
+    border-radius: var(--r-card, 12px);
+    background-color: var(--paper, #fff);
+    box-shadow: inset 0 0 0 1px var(--paper-3, #e5e7eb);
+}
+
+.semantic-provider {
+    margin: 0 0 10px;
+    color: var(--ink);
+}
+
+.semantic-scope {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-bottom: 12px;
+    font-size: 14px;
+    color: var(--text-secondary, #6b7280);
+}
+
+.semantic-scope strong {
+    color: var(--ink);
+}
+
+.semantic-autofold {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 10px 0;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.semantic-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 12px 0;
+}
+
+/* 任务进度 / 覆盖 / 错误：纯文本展示，无图表。 */
+.semantic-task-status {
+    margin: 10px 0 4px;
+    color: var(--ink);
+}
+
+.semantic-coverage {
+    margin: 4px 0;
+    font-size: 13px;
+    color: var(--text-secondary, #6b7280);
+}
+
+/* 分组与成员列表 */
+.semantic-groups,
+.semantic-items {
+    margin-top: 18px;
+}
+
+.semantic-groups h4,
+.semantic-items h4 {
+    margin: 0 0 10px;
+    color: var(--ink);
+}
+
+.semantic-group {
+    padding: 14px;
+    margin-bottom: 12px;
+    border-radius: var(--r-card, 12px);
+    background-color: var(--paper, #fff);
+    box-shadow: inset 0 0 0 1px var(--paper-3, #e5e7eb);
+}
+
+.semantic-group-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.semantic-badge {
+    padding: 2px 10px;
+    border-radius: 999px;
+    background-color: var(--accent-soft, #eef2ff);
+    color: var(--accent, #4f46e5);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.semantic-reason {
+    font-size: 13px;
+    color: var(--text-secondary, #6b7280);
+}
+
+.semantic-rep {
+    margin: 6px 0;
+    color: var(--ink);
+    font-weight: 600;
+}
+
+.semantic-members {
+    margin: 8px 0;
+}
+
+.semantic-members summary {
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--accent, #4f46e5);
+}
+
+.semantic-member,
+.semantic-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+    border-top: 1px solid var(--paper-3, #eef0f3);
+    font-size: 14px;
+    color: var(--ink);
+}
+
+.semantic-member-text {
+    flex: 1 1 60%;
+    word-break: break-word;
+}
+
+.semantic-chip {
+    padding: 1px 8px;
+    border-radius: 999px;
+    background-color: var(--paper-2, #f3f4f6);
+    font-size: 12px;
+    color: var(--text-secondary, #6b7280);
+}
+
+.semantic-chip-warn {
+    background-color: #fdecea;
+    color: var(--danger, #c0392b);
+}
+
+.semantic-group-actions,
+.semantic-member-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* allow / split 按钮始终可见（人工保护后不消失）。 */
+.btn-link {
+    padding: 2px 6px;
+    background: none;
+    border: 0;
+    color: var(--accent, #4f46e5);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.btn-link:disabled {
+    color: var(--text-secondary, #9ca3af);
+    cursor: default;
+}
+
+.semantic-pagination {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 10px;
+    font-size: 13px;
+    color: var(--text-secondary, #6b7280);
+}
+
+/* 同意模态：复用 .app-modal 外观，仅补充内部排版。 */
+.semantic-consent-modal {
+    max-width: 520px;
+    text-align: left;
+}
+
+.semantic-consent-list {
+    margin: 12px 0;
+    padding-left: 18px;
+    line-height: 1.7;
+    font-size: 14px;
+}
+
+.semantic-consent-flag {
+    margin: 6px 0 12px;
+    font-size: 14px;
+}

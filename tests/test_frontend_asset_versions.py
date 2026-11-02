@@ -29,6 +29,11 @@ BUMPED_V029 = {
     "js": ("app.ui.js", "app.auth.js", "app.lottery.js", "app.intro.js"),
     "css": ("style.base.css", "style.modal.css", "style.flexgap.css"),
 }
+# 语义折叠（可逆）PR：新增 app.comment.semantic.js / style.comment.semantic.css，并给
+# app.comment.js 追加 -semantic20261102 后缀（挂入当前 BV 钩子，老缓存必须失效重新加载）。
+BUMPED_SEMANTIC = {
+    "js": ("app.comment.js",),
+}
 
 
 def _versions(kind: str) -> dict:
@@ -56,7 +61,7 @@ def test_assets_changed_in_1030_carry_bumped_version() -> None:
 
 def test_assets_changed_in_ui_redesign_end_with_ui_suffix() -> None:
     """视觉改版 PR 改过的脚本与样式表都带 -ui20261101；没被后续轮次改过的仍以它结尾。"""
-    later = set(BUMPED_V029["js"]) | set(BUMPED_V029["css"])
+    later = set(BUMPED_V029["js"]) | set(BUMPED_V029["css"]) | set(BUMPED_SEMANTIC["js"])
     for kind, names in BUMPED_UI_1101.items():
         versions = _versions(kind)
         for name in names:
@@ -75,12 +80,26 @@ def test_assets_changed_in_v029_end_with_v029_suffix() -> None:
             assert versions[name].endswith("-v029ui20261101"), f"{name} 版本号未更新: {versions[name]}"
 
 
+def test_semantic_fold_assets_carry_bumped_version() -> None:
+    """语义折叠 PR：app.comment.js 追加 -semantic20261102；新增脚本/样式表各引用一次且带 ?v=。"""
+    js_versions = _versions("js")
+    for name in BUMPED_SEMANTIC["js"]:
+        assert name in js_versions, f"index.html 未引用 {name}"
+        assert js_versions[name].endswith("-semantic20261102"), f"{name} 版本号未更新: {js_versions[name]}"
+    # 新增的独立脚本 / 样式表：必须被引用且带独立 ?v=（老缓存失效）。
+    assert js_versions.get("app.comment.semantic.js"), "index.html 未引用 app.comment.semantic.js"
+    css_versions = _versions("css")
+    assert css_versions.get("style.comment.semantic.css"), "index.html 未引用 style.comment.semantic.css"
+
+
 def test_each_asset_is_referenced_once() -> None:
     """每个业务脚本与样式表只引用一次，避免新旧两个版本同时加载。"""
     html = INDEX_HTML.read_text(encoding="utf-8")
     groups = (
-        ("js", BUMPED_SCRIPTS + BUMPED_1030["js"] + BUMPED_UI_1101["js"] + BUMPED_V029["js"]),
-        ("css", BUMPED_1030["css"] + BUMPED_UI_1101["css"] + BUMPED_V029["css"]),
+        ("js", BUMPED_SCRIPTS + BUMPED_1030["js"] + BUMPED_UI_1101["js"] + BUMPED_V029["js"]
+            + BUMPED_SEMANTIC["js"] + ("app.comment.semantic.js",)),
+        ("css", BUMPED_1030["css"] + BUMPED_UI_1101["css"] + BUMPED_V029["css"]
+            + ("style.comment.semantic.css",)),
     )
     for kind, names in groups:
         for name in set(names):

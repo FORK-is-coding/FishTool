@@ -38,7 +38,7 @@ deduplicate() 返回完整结果：
 - user_duplicates / cross_user_groups / fuzzy_groups / time_hotspots
 """
 import asyncio
-from typing import List, Dict, Any, Set, Tuple, Optional
+from typing import List, Dict, Any, Set, Tuple, Optional, Callable
 from datetime import datetime, timedelta
 from collections import defaultdict, Counter
 import hashlib
@@ -265,25 +265,31 @@ class CommentDeduplicator:
         fuzzy_groups = []
         # 类型转换后存入 seen_indices
         seen_indices = set()
-        
+
+        # 本批次局部的相似度判定函数：默认实现下懒缓存 SimHash 指纹，
+        # 避免双重循环里同一文本被重复哈希；自定义判定函数原样透传。
+        similarity_fn = self._build_batch_similarity(
+            [c.get('content', '') for c in long_comments]
+        )
+
         # 双重循环：对每条评论找其后相似评论。相似度方法内部负责
         # SimHash 粗筛与编辑距离精算，确保它是唯一可替换的判定入口。
         for i, comment1 in enumerate(long_comments):
             if i in seen_indices:
                 # 跳过本轮继续循环
                 continue
-            
+
             # 查找与当前评论相似的评论
             similar_group = [comment1]
             similar_indices = [i]
-            
+
             for j, comment2 in enumerate(long_comments[i+1:], start=i+1):
                 if j in seen_indices:
                     # 跳过本轮继续循环
                     continue
-                
+
                 # 相似度方法封装完整判定流程，便于测试和业务策略替换。
-                similarity = self._calculate_similarity(
+                similarity = similarity_fn(
                     comment1.get('content', ''),
                     comment2.get('content', '')
                 )
@@ -480,7 +486,62 @@ class CommentDeduplicator:
         # 相似度 = 1 - (编辑距离 / 最大长度)
         similarity = 1.0 - (distance / max_len)
         return similarity
-    
+
+    def _build_batch_similarity(self, texts: List[str]) -> Callable[[str, str], float]:
+        """为一批文本构建相似度判定函数，批次内懒加载缓存 SimHash 指纹
+
+        性能优化：双重循环里同一文本会在多个 (i, j) 配对中重复计算
+        SimHash。本方法返回的判定函数内部持有一个仅在本次调用生命周期
+        内存在的局部缓存（不挂 self/模块），按文本懒加载指纹，批次结束
+        随闭包释放，避免 O(n^2) 次重复哈希，不改变相似度判定结果。
+
+        向后兼容：仅当 `self._calculate_similarity` 仍是类定义的原始
+        实现时才启用缓存（以 fp1/fp2 传入，逻辑和返回值不变）；一旦被
+        实例属性、子类或类级别替换，原样返回该已绑定的自定义函数，严格
+        保持两参数调用约定，不附加 fp1/fp2。判断是否被替换要与模块级稳定
+        常量 `_ORIGINAL_CALCULATE_SIMILARITY` 比较，不能与当前类属性比较，
+        否则替换行为会污染判断基准。
+
+        未来扩展点：子类可覆盖本工厂，使用调用方已批量准备的向量；默认
+        实现没有模型、密钥或网络依赖。向量相似度不等价于字符相似度，必须
+        独立校准阈值，并评估否定/反讽、声量保留与候选召回。texts 已经过
+        上游短文本筛选，改变短文本策略需要另行设计，不能仅靠此 hook。
+        同步两两循环内不得逐对请求模型；异步准备、预算与超时由未来外层
+        实现负责，本次仅预留接口，不启用语义去重。
+
+        Args:
+            texts: 本批次参与两两比较的原始文本（未归一化）。
+
+        Returns:
+            可调用对象 `(text1, text2) -> float`，语义与
+            `self._calculate_similarity(text1, text2)` 完全一致。
+        """
+        bound_similarity = self._calculate_similarity
+
+        # 与模块级稳定引用比较，而非当前类属性，避免替换行为污染判断基准
+        if getattr(bound_similarity, '__func__', None) is not _ORIGINAL_CALCULATE_SIMILARITY:
+            # 实例 / 子类 / 类级别已被替换为自定义判定函数：原样返回，
+            # 严格保持两参数调用约定，不额外计算指纹或包装。
+            return bound_similarity
+
+        # 默认实现：构建批次局部的懒加载 SimHash 指纹缓存（不挂 self/模块，
+        # 不做任何方法替换），缓存以原始文本为键，按需首次访问时才计算。
+        fingerprint_cache: Dict[str, int] = {}
+
+        def _similarity(text1: str, text2: str) -> float:
+            if text1 not in fingerprint_cache:
+                fingerprint_cache[text1] = self._simhash(text1)
+            if text2 not in fingerprint_cache:
+                fingerprint_cache[text2] = self._simhash(text2)
+            return bound_similarity(
+                text1,
+                text2,
+                fp1=fingerprint_cache[text1],
+                fp2=fingerprint_cache[text2],
+            )
+
+        return _similarity
+
     def _simhash(self, text: str) -> int:
         """计算文本的SimHash值
         
@@ -558,6 +619,11 @@ class CommentDeduplicator:
             previous_row = current_row
         
         return previous_row[-1]
+
+
+# 原始 _calculate_similarity 的稳定引用，类定义后、任何 monkeypatch 前捕获。
+# 判断是否被替换时必须用此常量比较，不能用当前类属性（会被污染）。
+_ORIGINAL_CALCULATE_SIMILARITY = CommentDeduplicator._calculate_similarity
 
 
 # ============ 使用示例 ============

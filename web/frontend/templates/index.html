@@ -18,6 +18,7 @@
 <link rel="stylesheet" href="/static/css/style.log.css?v=progress-20261026-ui20261101">
 <link rel="stylesheet" href="/static/css/style.config.css?v=split-20260824-ui20261101">
 <link rel="stylesheet" href="/static/css/style.comment.css?v=progress-20261026-ui20261101">
+<link rel="stylesheet" href="/static/css/style.comment.semantic.css?v=semantic-20261102">
 <link rel="stylesheet" href="/static/css/style.up.css?v=split-20260824-ui20261101">
 <link rel="stylesheet" href="/static/css/style.modal.css?v=split-20261026-toast-fix20261030-ui20261101-v029ui20261101">
 <link rel="stylesheet" href="/static/css/style.responsive.css?v=split-20260824-ui20261101">
@@ -592,6 +593,24 @@
                     </section>
                 </section>
 
+                <!-- 语义折叠（可逆）实验面板：评论页常驻，由 app.comment.semantic.js 驱动。
+                     可独立输入 BV，也会在单视频采集成功后自动带入当前 BV；
+                     不随页面加载自动计费（仅点「开始分析」才发起模型请求），首次使用弹同意模态。 -->
+                <section id="semantic-panel" class="section semantic-panel" aria-live="polite">
+                    <div class="semantic-panel-head">
+                        <div>
+                            <p class="dashboard-eyebrow">SEMANTIC FOLD · EXPERIMENTAL</p>
+                            <h2>语义折叠（实验）</h2>
+                        </div>
+                    </div>
+                    <!-- 独立 BV 选择：历史数据 / 刷新后也有入口，不依赖本次采集。 -->
+                    <div class="semantic-selector">
+                        <input type="text" id="semantic-bvid" class="form-control" placeholder="BV号（留空则用当前采集视频）" autocomplete="off">
+                        <button type="button" id="semantic-load-btn" class="btn btn-secondary">加载</button>
+                    </div>
+                    <div id="semantic-body"><p class="semantic-hint">输入视频 BV 号并点「加载」，或先采集单个视频后在此按语义折叠等价评论。</p></div>
+                </section>
+
                 <section class="section">
                     <h2>预警记录</h2>
                     <button class="btn btn-secondary" onclick="loadAlerts()">刷新预警</button>
@@ -980,12 +999,14 @@
 <script src="/static/js/app.hotspot.js?v=progress-20261026-fix20261027-fix20261030-ui20261101"></script>
 <!-- 第三批 g：事件工作台 / 机会列表 / 证据回看 / 最小反馈（新增脚本，不改既有结构）。 -->
 <script src="/static/js/app.events.js?v=batch3h-20261003-fix20261027"></script>
-<script src="/static/js/app.comment.js?v=progress-20261026-ui20261101"></script>
+<script src="/static/js/app.comment.js?v=progress-20261026-ui20261101-semantic20261102"></script>
 <script src="/static/js/app.config.js?v=split-20260824-fix20261030"></script>
 <script src="/static/js/app.up.js?v=report5-20261026-fix20261027-ui20261101"></script>
 <script src="/static/js/app.auth.js?v=split-20260824-fix20261027-fix20261030-ui20261101-v029ui20261101"></script>
 <script src="/static/js/app.lottery.js?v=welcomefix-20261026-fix20261027-fix20261030-v029ui20261101"></script>
 <script src="/static/js/app.ui.js?v=split-20261026-toast-fix20261030-v029ui20261101"></script>
+<!-- 语义折叠实验面板：依赖 app.core.js 工具与 app.ui.js 的 mountAppModal/showAppConfirm，须在二者之后加载。 -->
+<script src="/static/js/app.comment.semantic.js?v=semantic-20261102"></script>
 <!-- 欢迎页启动公告：依赖 app.ui.js 的 mountAppModal，必须在它之后加载。 -->
 <script src="/static/js/app.notice.js?v=notice20261101"></script>
 

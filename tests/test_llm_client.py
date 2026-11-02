@@ -477,6 +477,51 @@ def test_chat_completion_passes_module_kwarg(llm_env):
     assert recorded["module"] == "sentiment"
 
 
+def test_chat_completion_module_kwarg_not_in_payload(llm_env):
+    """module 是内部 kwarg，绝不混入发往服务端的 payload。"""
+    client = _make_client()
+    payload = {"choices": [], "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+    fake = client.client
+    fake.post_response = _FakeResponse(payload=payload)
+    client._record_token_usage = lambda **kw: None
+
+    asyncio.run(client.chat_completion([{"role": "user", "content": "hi"}], module="sentiment"))
+    assert "module" not in fake.posts[0]["json"]
+
+
+def test_chat_completion_temperature_zero_is_honored(llm_env):
+    """temperature=0 为合法值，不被配置默认值覆盖（旧 `or` 写法会误覆盖）。"""
+    client = _make_client()
+    fake = client.client
+    fake.post_response = _FakeResponse(payload={"choices": []})
+
+    asyncio.run(client.chat_completion([{"role": "user", "content": "hi"}], temperature=0))
+    assert fake.posts[0]["json"]["temperature"] == 0
+
+
+def test_chat_completion_omit_temperature_drops_field(llm_env):
+    """omit_temperature=True 时 payload 整段省略 temperature，且该 kwarg 不入 payload。"""
+    client = _make_client()
+    fake = client.client
+    fake.post_response = _FakeResponse(payload={"choices": []})
+
+    asyncio.run(client.chat_completion(
+        [{"role": "user", "content": "hi"}], omit_temperature=True))
+    body = fake.posts[0]["json"]
+    assert "temperature" not in body
+    assert "omit_temperature" not in body
+
+
+def test_chat_completion_http_error_attaches_status_and_detail(llm_env):
+    """HTTP 错误在异常实例上附带 status_code/detail，供上层归类脱敏。"""
+    client = _make_client()
+    client.client.post_error = _http_status_error(429, "rate limit exceeded")
+    with pytest.raises(LLMAPIError) as excinfo:
+        asyncio.run(client.chat_completion([{"role": "user", "content": "hi"}]))
+    assert excinfo.value.status_code == 429
+    assert excinfo.value.detail == "rate limit exceeded"
+
+
 def test_chat_completion_http_error_becomes_llm_api_error(llm_env):
     """HTTP 状态异常统一转 LLMAPIError。"""
     client = _make_client()
