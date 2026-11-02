@@ -4,10 +4,10 @@
 
 ## 安装
 
-AstrBot 面板 → 插件 → 从仓库安装，填写：
+推荐在 AstrBot 插件市场搜索 FishTool 安装。也可以在 AstrBot 面板 → 插件 → 从仓库安装，填写：
 
 ```text
-https://github.com/FORK-is-coding/FishTool/tree/astrbot
+https://github.com/FORK-is-coding/astrbot_plugin_fishtool
 ```
 
 要求 AstrBot ≥ 4.29。

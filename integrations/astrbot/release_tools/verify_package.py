@@ -36,6 +36,10 @@ REQUIRED_FILES = (
     ".astrbot-plugin/i18n/en-US.json",
 )
 REQUIRED_META = ("name", "desc", "version", "author")
+ALLOWED_REPOS = {
+    "https://github.com/FORK-is-coding/astrbot_plugin_fishtool",
+    "https://github.com/FORK-is-coding/FishTool/tree/astrbot",
+}
 FORBIDDEN_NAMES = {".key", ".secrets", "user_config.yaml", "bili_ops.db", ".env"}
 FORBIDDEN_DIRS = {"__pycache__", "tests", "desktop", "docs", "evidence", ".git", "venv", ".venv"}
 FORBIDDEN_SUFFIX = {".db", ".sqlite", ".sqlite3", ".log", ".pyc", ".pem"}
@@ -76,8 +80,9 @@ def verify(root: Path, max_zip_mb: float = 16.0) -> list[str]:
             errors.append(f"metadata.name must be astrbot_plugin_fishtool, got {meta.get('name')!r}")
         if not re.fullmatch(r"\d+\.\d+\.\d+([.-][0-9A-Za-z.]+)?", meta.get("version", "")):
             errors.append(f"metadata.version invalid: {meta.get('version')!r}")
-        if "/tree/astrbot" not in meta.get("repo", ""):
-            errors.append("metadata.repo must point to the astrbot release branch")
+        # 插件市场只解析仓库默认分支，所以 repo 指向独立插件仓库（其默认分支就是插件根）。
+        if meta.get("repo", "").rstrip("/") not in ALLOWED_REPOS:
+            errors.append(f"metadata.repo must be one of {sorted(ALLOWED_REPOS)}, got {meta.get('repo')!r}")
     try:
         json.loads((root / "_conf_schema.json").read_text("utf-8"))
         for loc in ("zh-CN", "en-US"):

@@ -59,14 +59,20 @@ python integrations/astrbot/release_tools/verify_package.py dist/plugin --max-zi
 
 ## 发布
 
-发布分支 `astrbot` 是孤儿分支，只由 CI 写（`.github/workflows/astrbot-release.yml`）：
+推送 tag `astrbot-v<版本>`（如 `astrbot-v0.1.1`）后，CI 依次执行：测试 → `build_plugin.py` → `verify_package.py` → 发布到两个位置。两处都只追加提交，不强推：
 
-1. 推送 tag `astrbot-v<版本>`（如 `astrbot-v0.1.0`）；
-2. CI：测试 → `build_plugin.py` → `verify_package.py` → `publish_branch.py`（只追加提交，不强推）。
+| 位置 | 用途 |
+|---|---|
+| 本仓库孤儿分支 `astrbot` | `https://github.com/FORK-is-coding/FishTool/tree/astrbot` 从仓库安装 |
+| 独立插件仓库 `FORK-is-coding/astrbot_plugin_fishtool` 的默认分支 `main` | 插件市场上架源，也可直接从仓库安装 |
 
-用户安装：AstrBot 面板 → 插件 → 从仓库安装 → `https://github.com/FORK-is-coding/FishTool/tree/astrbot`。
+为什么要独立仓库：AstrBot Cloud 发布页只解析仓库默认分支根目录的 `metadata.yaml`（发布页按 `raw.githubusercontent.com/<repo>/<default_branch>/metadata.yaml` 探测，解析请求不带分支参数）。FishTool 的默认分支是 `main`，根目录是 FishTool 本体，无法直接上架。
 
-插件市场：`https://cloud.astrbot.app/publish`，仓库地址填 `/tree/astrbot`。上架前需人工验收（B 站扫码、LLM Key、评论监控、自诊报告下载）。
+独立仓库的推送令牌放在 FishTool 仓库的 Secret `PLUGIN_REPO_TOKEN`：fine-grained token，只授权 `astrbot_plugin_fishtool` 一个仓库，权限 Contents: Read and write。令牌只通过一次性 HTTP 认证头使用，不写进 remote 地址或日志。
+
+两个安装源使用同一个数据目录（`data/plugin_data/astrbot_plugin_fishtool/`）。AstrBot 更新插件时用安装时记录的源，所以从 `/tree/astrbot` 安装的用户会继续从该分支更新。
+
+插件市场：`https://cloud.astrbot.app/publish` → 授权 GitHub App 访问 `astrbot_plugin_fishtool` → 选择该仓库解析。上架前需人工验收（B 站扫码、LLM Key、评论监控、自诊报告下载）。
 
 ## 插件 Web API
 
