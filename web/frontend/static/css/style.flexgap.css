@@ -10,6 +10,18 @@
    - 断点下改为纵向排列的容器，在同一断点内把 margin-left 换成 margin-top。
    新增 flex gap 时请同步在此补一条，tests/test_frontend_flex_gap_fallback.py 会校验覆盖。 */
 
+/* ---------- Semantic fold panel (style.comment.semantic.css) ---------- */
+.no-flex-gap .semantic-panel-head > * + * { margin-left: 16px; }
+.no-flex-gap .semantic-scope > * + * { margin-left: 16px; }
+.no-flex-gap .semantic-autofold > * + * { margin-left: 8px; }
+.no-flex-gap .semantic-actions > * + * { margin-left: 10px; }
+.no-flex-gap .semantic-group-head > * + * { margin-left: 10px; }
+.no-flex-gap .semantic-member > * + *,
+.no-flex-gap .semantic-item > * + * { margin-left: 8px; }
+.no-flex-gap .semantic-group-actions > * + *,
+.no-flex-gap .semantic-member-actions > * + * { margin-left: 8px; }
+.no-flex-gap .semantic-pagination > * + * { margin-left: 12px; }
+
 /* ---------- 单行横向容器：相邻子项左外边距 = 原 gap ---------- */
 .no-flex-gap .logo > * + * { margin-left: 10px; }                                   /* style.base.css .logo */
 .no-flex-gap .dashboard-header > * + *,

@@ -59,7 +59,7 @@ class CommentStorageMixin:
                 batch_rpids.add(rpid)
                 existing = session.query(Comment).filter_by(rpid=rpid).first()
                 
-                # 已存在评论只原位补齐缺失的等级/会员字段，不重复插入。
+                # 已存在评论只原位补齐缺失的等级/会员/上下文字段，不重复插入。
                 if existing:
                     changed = False
                     if not existing.level_info and comment_data.get('level_info'):
@@ -67,6 +67,15 @@ class CommentStorageMixin:
                         changed = True
                     if existing.vip is None and comment_data.get('vip') is not None:
                         existing.vip = comment_data['vip']
+                        changed = True
+                    # 上下文补齐：仅在本次采集"已知"且旧库"未知/缺失"时补齐，
+                    # 已知上下文绝不被未知覆盖（重新采集不破坏既有数据）。
+                    new_status = comment_data.get('context_status')
+                    old_status = existing.context_status
+                    if new_status and new_status != 'unknown' and (not old_status or old_status == 'unknown'):
+                        existing.context_status = new_status
+                        existing.root_rpid = comment_data.get('root_rpid')
+                        existing.parent_rpid = comment_data.get('parent_rpid')
                         changed = True
                     if changed:
                         saved_count += 1
@@ -85,6 +94,9 @@ class CommentStorageMixin:
                     like=comment_data.get('like', 0),  # 点赞数
                     reply_count=comment_data.get('reply_count', 0),  # 回复数
                     sentiment='neutral',  # 默认情感标签为中性，等待后续情感分析
+                    root_rpid=comment_data.get('root_rpid'),  # 根评论 rpid（顶层为 None）
+                    parent_rpid=comment_data.get('parent_rpid'),  # 父评论 rpid（顶层为 None）
+                    context_status=comment_data.get('context_status'),  # 上下文状态（缺省未知）
                 )
                 # 添加到会话等待提交
                 # 将元素加入容器/布局

@@ -408,13 +408,17 @@ def test_get_alerts_is_read_none_returns_all(db_env) -> None:
 
 
 def test_get_alerts_bvid_filter_branch_runs(db_env) -> None:
-    """按 bvid 过滤分支可执行（video_id 为整型，字符串过滤不匹配）。"""
+    """BV 号应先解析视频外键，仅返回该视频的预警；未知 BV 返回空。"""
     monitor = _monitor()
-    _run(monitor._save_monitoring_record("BV1", [], [_alert()]))
+    _run(monitor._save_monitoring_record("BV1", [], [_alert(type="target_video")]))
+    _run(monitor._save_monitoring_record("BV2", [], [_alert(type="other_video")]))
 
     rows = _run(monitor.get_alerts(bvid="BV1"))
 
-    assert rows == []
+    assert [row["type"] for row in rows] == ["target_video"]
+    assert isinstance(rows[0]["video_id"], int)
+    assert [row["type"] for row in _run(monitor.get_alerts(bvid="BV2"))] == ["other_video"]
+    assert _run(monitor.get_alerts(bvid="BV-missing")) == []
 
 
 def test_get_alerts_respects_limit(db_env) -> None:

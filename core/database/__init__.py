@@ -61,6 +61,18 @@ from .base import Base, logger
 from .models_account import Account, CookiePool
 from .models_video import Video, VideoStats, UPMaster
 from .models_comment import Comment, CommentAlert
+from .models_comment_semantic import (
+    SemanticRun,
+    SemanticGroup,
+    SemanticGroupMember,
+    SemanticPreference,
+    SemanticProtection,
+    SemanticAudit,
+    SemanticDailyUsage,
+    CONTEXT_TOP_LEVEL,
+    CONTEXT_REPLY,
+    CONTEXT_UNKNOWN,
+)
 from .models_hotspot import Hotspot, Topic, Activity
 from .models_hotspot_signal import HotspotSignal, HotKeywordSignal
 from .models_system import Task, OperationLog, LLMUsage, MonitorState
@@ -83,6 +95,9 @@ __all__ = [
     'Account', 'CookiePool', 'Video', 'VideoStats', 'UPMaster',
     'Comment', 'CommentAlert', 'Hotspot', 'Topic', 'Activity', 'HotspotSignal',
     'HotKeywordSignal',
+    'SemanticRun', 'SemanticGroup', 'SemanticGroupMember', 'SemanticPreference',
+    'SemanticProtection', 'SemanticAudit', 'SemanticDailyUsage',
+    'CONTEXT_TOP_LEVEL', 'CONTEXT_REPLY', 'CONTEXT_UNKNOWN',
     'Task', 'OperationLog', 'LLMUsage', 'MonitorState', 'BenchmarkRun',
     'HttpQuotaBucket',
     'HotspotWatch',

@@ -268,6 +268,35 @@ function renderSingleVideoMonitorResult(bvid, result) {
 
     // 将完整结果一次写入，减少反复操作 DOM 带来的页面闪动。
     document.getElementById('monitor-result').innerHTML = buildSingleVideoMonitorHtml(result, sentiment);
+
+    // 最小 currentbvid 钩子：把本次成功采集的 BV 告知语义折叠面板（独立脚本）。
+    // 该面板为实验性可选功能，缺失时此调用无副作用，不改动既有采集/大屏行为。
+    setCurrentCommentBvid(bvid);
+}
+
+// 当前评论页选中的 BV 号：仅由单视频采集成功时更新，供语义折叠面板（app.comment.semantic.js）读取。
+// 用模块级变量 + window 暴露，既不污染既有逻辑，也让独立脚本与测试可取到同一值。
+let currentCommentBvid = '';
+
+/**
+ * 记录当前评论页选中的 BV 号，并通知已登记的语义折叠面板回调。
+ * @param {string} bvid 完成去空白校验的 BV 号。
+ * @returns {void}
+ */
+function setCurrentCommentBvid(bvid) {
+    const normalized = String(bvid || '').trim();
+    if (!normalized) return;
+    currentCommentBvid = normalized;
+    if (typeof window !== 'undefined') window.currentCommentBvid = normalized;
+    // 语义折叠面板加载后会把回调挂到 window.onCommentBvidSelected；未加载时静默跳过。
+    if (typeof window !== 'undefined' && typeof window.onCommentBvidSelected === 'function') {
+        try {
+            window.onCommentBvidSelected(normalized);
+        } catch (error) {
+            // 面板回调异常不得回退影响既有采集结果渲染。
+            console.error('语义折叠面板 bvid 钩子执行失败:', error);
+        }
+    }
 }
 
 // 构建单视频监控结果 HTML：统计、情感比例与预警逐条展示。

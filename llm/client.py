@@ -277,18 +277,29 @@ class LLMClient:
         # 按字符数/4 粗略估算输入 token
         estimated_tokens = sum(len(m['content']) // 4 for m in messages)
         self._check_token_limit(estimated_tokens)
-        
+
+        # 内部专用 kwarg：只用于本地记账/参数控制，绝不混入发往服务端的 payload。
+        # - module: 用量归属标签（记录 LLMUsage 用）
+        # - omit_temperature: 部分兼容端点不支持 temperature，置 True 时整段省略
+        module = kwargs.pop('module', 'unknown')
+        omit_temperature = kwargs.pop('omit_temperature', False)
+
         # 构建请求
-        # 温度与 max_tokens 未显式传入时取配置默认值
+        # temperature / max_tokens 未显式传入（None）时取配置默认值；
+        # 注意用 `is None` 判断，避免 temperature=0 这类合法假值被覆盖。
         payload = {
             'model': self.model,
             'messages': messages,
-            'temperature': temperature or config.get('llm.temperature', 0.7),
-            'max_tokens': max_tokens or config.get('llm.max_tokens', 2000),
+            'max_tokens': max_tokens if max_tokens is not None else config.get('llm.max_tokens', 2000),
             'stream': stream,
             **kwargs
         }
-        
+        if not omit_temperature:
+            payload['temperature'] = (
+                temperature if temperature is not None
+                else config.get('llm.temperature', 0.7)
+            )
+
         # 异常保护：局部失败不影响主流程
         try:
             # 赋值并准备后续使用
@@ -307,7 +318,7 @@ class LLMClient:
                 self._record_token_usage(
                     prompt_tokens=usage.get('prompt_tokens', 0),
                     completion_tokens=usage.get('completion_tokens', 0),
-                    module=kwargs.get('module', 'unknown')
+                    module=module
                 )
             
             return result
@@ -315,12 +326,19 @@ class LLMClient:
         except httpx.HTTPStatusError as e:
             # 对模型不存在做可操作的中文提示，避免用户只能看到原始英文错误
             response_text = e.response.text or ''
+            status_code = e.response.status_code
             if 'model_not_found' in response_text or 'model does not exist' in response_text.lower():
                 message = f"LLM模型不存在：{self.model}。请在配置中改为 qwen-plus、qwen-max 或 qwen-turbo，并确认API Key已配置"
             else:
                 message = f"API请求失败: {response_text}"
-            logger.error(f"LLM API请求失败: HTTP {e.response.status_code}, {message}")
-            raise LLMAPIError(message)
+            # 日志只记状态码，不落原始响应体（可能含密钥/敏感信息）
+            logger.error(f"LLM API请求失败: HTTP {status_code}")
+            # 在异常实例上附带状态码与原始细节，供上层（如 provider）归类后脱敏；
+            # 不改变异常消息，保持既有调用方兼容。
+            err = LLMAPIError(message)
+            err.status_code = status_code
+            err.detail = response_text
+            raise err
         # 异常处理
         except Exception as e:
             logger.error(f"LLM请求异常: {e}", exc_info=True)
@@ -350,16 +368,24 @@ class LLMClient:
         # 检查Token限制
         estimated_tokens = sum(len(m['content']) // 4 for m in messages)
         self._check_token_limit(estimated_tokens)
-        
+
+        # 内部专用 kwarg 不入 payload（与 chat_completion 对齐）
+        kwargs.pop('module', None)
+        omit_temperature = kwargs.pop('omit_temperature', False)
+
         payload = {
             'model': self.model,
             'messages': messages,
-            'temperature': temperature or config.get('llm.temperature', 0.7),
-            'max_tokens': max_tokens or config.get('llm.max_tokens', 2000),
+            'max_tokens': max_tokens if max_tokens is not None else config.get('llm.max_tokens', 2000),
             'stream': True,
             **kwargs
         }
-        
+        if not omit_temperature:
+            payload['temperature'] = (
+                temperature if temperature is not None
+                else config.get('llm.temperature', 0.7)
+            )
+
         # 异常保护：局部失败不影响主流程
         try:
             # 上下文管理：确保资源自动释放

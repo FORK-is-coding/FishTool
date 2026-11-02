@@ -66,9 +66,18 @@ class Comment(Base):
     
     # 关键词
     keywords = Column(JSON, comment='提取的关键词')
-    
+
+    # 上下文（语义折叠首版）：仅在原接口 root/parent 字段明确时判定；缺字段保持未知，
+    # 绝不用默认 0 冒充顶层。nullable，旧库经幂等迁移补列后默认 NULL=未知。
+    root_rpid = Column(String(50), comment='根评论 rpid；顶层评论原接口 root=0 时为 None')
+    parent_rpid = Column(String(50), comment='父评论 rpid；顶层评论原接口 parent=0 时为 None')
+    context_status = Column(
+        String(20),
+        comment='上下文状态: top_level/reply/unknown（NULL 视为 unknown）',
+    )
+
     created_at = Column(DateTime, default=datetime.now)
-    
+
     video = relationship("Video", back_populates="comments")
 
 class CommentAlert(Base):
