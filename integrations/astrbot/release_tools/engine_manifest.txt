@@ -1,0 +1,12 @@
+# 引擎快照白名单（相对 FishTool 仓库根）。新增目录不会被自动打包。
+# 行首 "!" 表示排除（glob，相对仓库根）。__pycache__ / *.pyc 总是排除。
+app.py
+core/
+modules/
+web/
+bilibili/
+llm/
+config/config.yaml
+config/budget.yaml
+# 前端静态资源由 views/console/ 提供，引擎不再重复打包（后端不读取 static，只在目录存在时挂载）。
+!web/frontend/static/**

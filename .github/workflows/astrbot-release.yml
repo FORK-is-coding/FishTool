@@ -1,0 +1,102 @@
+name: astrbot-release
+
+# 构建 FishTool AstrBot 插件并发布到孤儿分支 "astrbot"。
+# - push 到 feat/astrbot-adapter 或改动 integrations/astrbot/**：只跑测试与打包校验（不发布）。
+# - 推送 tag astrbot-v*：测试 → 构建 → 校验 → 发布到 astrbot 分支。
+# - workflow_dispatch：手动构建；publish=true 时才发布。
+on:
+  push:
+    branches: ["feat/astrbot-adapter"]
+    tags: ["astrbot-v*"]
+    paths:
+      - "integrations/astrbot/**"
+      - ".github/workflows/astrbot-*.yml"
+      - "web/frontend/**"
+      - "requirements.txt"
+  pull_request:
+    paths:
+      - "integrations/astrbot/**"
+      - ".github/workflows/astrbot-*.yml"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "插件版本号（如 0.1.0）"
+        required: false
+      publish:
+        description: "是否发布到 astrbot 分支"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: astrbot-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python }}" }
+      - name: Install engine deps (locked, without PySide6)
+        run: |
+          python integrations/astrbot/release_tools/build_plugin.py --out /tmp/probe
+          pip install -r /tmp/probe/engine_requirements.txt -r integrations/astrbot/tests/requirements-test.txt
+      - name: Adapter tests
+        env:
+          FISHTOOL_BASE_REF: origin/main
+        run: pytest integrations/astrbot/tests -q
+      - name: Exception policy (main-line rule applies to integrations/)
+        run: python tools/check_exception_handling.py
+      - name: FishTool regression (no desktop / Qt)
+        run: |
+          pytest -q -p no:cacheprovider \
+            --ignore-glob='tests/test_desktop_*' \
+            --ignore=tests/test_diagnosis_pdf_theme.py \
+            --ignore=tests/test_frontend_flex_gap_fallback.py \
+            --ignore=tests/test_frontend_intro.py \
+            --ignore=tests/test_frontend_qtwebengine_compat.py \
+            --ignore=tests/test_frontend_welcome_notice.py
+
+  release:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/astrbot-v') || (github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Resolve version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/astrbot-v* ]]; then
+            echo "version=${GITHUB_REF_NAME#astrbot-v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build plugin tree
+        run: python integrations/astrbot/release_tools/build_plugin.py --out dist/plugin --version "${{ steps.ver.outputs.version }}"
+      - name: Verify package
+        run: python integrations/astrbot/release_tools/verify_package.py dist/plugin --max-zip-mb 16
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: astrbot_plugin_fishtool-${{ steps.ver.outputs.version || github.sha }}
+          path: dist/plugin
+          include-hidden-files: true
+      - name: Publish to orphan branch "astrbot"
+        if: startsWith(github.ref, 'refs/tags/astrbot-v') || github.event.inputs.publish == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python integrations/astrbot/release_tools/publish_branch.py dist/plugin --branch astrbot \
+            --message "release ${GITHUB_REF_NAME} (v${{ steps.ver.outputs.version }}) from ${GITHUB_SHA}"

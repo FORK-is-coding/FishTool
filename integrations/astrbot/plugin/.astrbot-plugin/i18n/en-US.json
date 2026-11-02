@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "display_name": "FishTool Bilibili Ops Toolkit",
+    "short_desc": "Bilibili comment monitoring, account self-diagnosis, trending topics, lottery filtering",
+    "desc": "AstrBot plugin edition of FishTool. The engine runs as a separate process; the console lives in the plugin view."
+  },
+  "config": {
+    "engine": {
+      "description": "Engine process",
+      "autostart": { "description": "Start the engine when the plugin is enabled" },
+      "python": {
+        "description": "Engine Python interpreter",
+        "hint": "Empty = create an isolated venv from AstrBot's interpreter. Must be Python 3.11 or 3.12."
+      },
+      "pip_index_url": { "description": "pip index URL (optional)" },
+      "port": { "description": "Engine port, 0 = auto (listens on 127.0.0.1 only)" },
+      "request_timeout_s": { "description": "Request timeout (seconds)" },
+      "long_request_timeout_s": { "description": "Long request timeout (seconds)" },
+      "block_api_key_write": { "description": "Block Open API Key callers from write and credential endpoints" }
+    }
+  },
+  "views": {
+    "console": {
+      "title": "FishTool Console",
+      "description": "Comment monitoring, trending topics, self-diagnosis, lottery tools and settings"
+    }
+  }
+}

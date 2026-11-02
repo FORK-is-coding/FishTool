@@ -1,0 +1,47 @@
+{
+  "engine": {
+    "type": "object",
+    "description": "引擎进程",
+    "items": {
+      "autostart": {
+        "type": "bool",
+        "default": true,
+        "description": "插件启用时自动启动引擎"
+      },
+      "python": {
+        "type": "string",
+        "default": "",
+        "description": "引擎 Python 解释器",
+        "hint": "留空=用 AstrBot 当前解释器创建独立 venv。必须是 3.11 或 3.12。AstrBot 桌面客户端若内置 Python 无法创建 venv，请填写外部 Python 路径。"
+      },
+      "pip_index_url": {
+        "type": "string",
+        "default": "",
+        "description": "pip 镜像地址（可选）",
+        "hint": "例如 https://pypi.tuna.tsinghua.edu.cn/simple"
+      },
+      "port": {
+        "type": "int",
+        "default": 0,
+        "description": "引擎端口，0=自动分配（仅监听 127.0.0.1）"
+      },
+      "request_timeout_s": {
+        "type": "int",
+        "default": 120,
+        "description": "普通请求超时（秒）"
+      },
+      "long_request_timeout_s": {
+        "type": "int",
+        "default": 1800,
+        "description": "长请求超时（秒）",
+        "hint": "评论同步监控、账号自诊等同步长请求的超时"
+      },
+      "block_api_key_write": {
+        "type": "bool",
+        "default": false,
+        "description": "禁止 Open API Key 调用写接口与凭据接口",
+        "hint": "默认关闭：API Key 与面板登录同等可用。把 API Key 交给第三方时建议打开。"
+      }
+    }
+  }
+}
