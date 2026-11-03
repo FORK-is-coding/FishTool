@@ -1,6 +1,7 @@
 # FishTool B站运营工具箱（AstrBot 插件）
 
 [FishTool](https://github.com/FORK-is-coding/FishTool) 的 AstrBot 插件版，让你一人拥有企业级运营工作流，你的AI新媒体运营，为创作赋能而生。
+>本仓库为Astrbot插件版，issue与PR请前往https://github.com/FORK-is-coding/FishTool 。
 ## 安装
 
 推荐在 AstrBot 插件市场搜索 FishTool 安装。也可以在 AstrBot 面板 → 插件 → 从仓库安装，填写：

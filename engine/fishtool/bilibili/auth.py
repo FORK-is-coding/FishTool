@@ -41,6 +41,7 @@ B站API封装 - 扫码登录
 """
 import asyncio
 import qrcode
+from qrcode.image.pure import PyPNGImage
 from io import BytesIO
 from typing import Optional, Callable, List
 from datetime import datetime
@@ -120,23 +121,28 @@ class QRCodeLogin:
             
             # 生成二维码图片
             # 参数：version=1 最小版本，纠错级别 L，像素 10，边框 4
+            # 固定用纯 Python 的 PyPNGImage 出图，不依赖 Pillow：
+            # qrcode 默认工厂有 Pillow 用 PilImage、没有就静默换成 PyPNGImage，
+            # 而 PyPNGImage.save() 不接受 format 参数，缺 Pillow 时会抛 TypeError。
             qr = qrcode.QRCode(
                 version=1,
                 error_correction=qrcode.constants.ERROR_CORRECT_L,
                 box_size=10,
                 border=4,
+                image_factory=PyPNGImage,
             )
             # 添加data
             qr.add_data(self.qrcode_url)
             qr.make(fit=True)
-            
-            img = qr.make_image(fill_color="black", back_color="white")
-            
+
+            # PyPNGImage 固定输出 1-bit 白底黑码 PNG，与原先 fill/back 颜色一致
+            img = qr.make_image()
+
             # 转换为字节
             # 用 BytesIO 避免落盘，直接得到 PNG 字节流
             img_bytes = BytesIO()
-            # 保存数据
-            img.save(img_bytes, format='PNG')
+            # PyPNGImage 只写 PNG，不传 format
+            img.save(img_bytes)
             img_bytes = img_bytes.getvalue()
             
             logger.info("二维码生成成功")

@@ -5,6 +5,7 @@ cryptography==41.0.7
 PyYAML==6.0.1
 SQLAlchemy==2.0.23
 fastapi==0.108.0
+starlette==0.32.0.post1
 uvicorn[standard]==0.25.0
 jinja2==3.1.2
 httpx==0.25.2
@@ -13,3 +14,4 @@ qrcode[pil]==7.4.2
 markdown2==2.4.12
 pdfkit==1.0.0
 pydantic==2.5.2
+pydantic-core==2.14.5
