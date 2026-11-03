@@ -1,6 +1,13 @@
 # FishTool B站运营工具箱（AstrBot 插件）
 
-[FishTool](https://github.com/FORK-is-coding/FishTool) 的 AstrBot 插件版，让你一人拥有企业级运营工作流，你的AI新媒体运营，为创作赋能而生。
+[FishTool](https://github.com/FORK-is-coding/FishTool) 的 AstrBot 插件版，可以把你的bot变成真正具备生产力的虚拟秘书，让你一人拥有企业级运营工作流，成为你的虚拟运营主管，为你的视频创作而工作。
+
+FishTool是一个为B站UP主打造的智能运营Agent，可自由配置你喜欢的AI大模型作为你的助理，目前覆盖【选题参考 → 热点发现 → 舆情监控 → 竞品调研 → 账号自诊 → 抽奖真人筛选】的完整新媒体运营链路。
+
+FishTool的未来更新目标是成为开源、免费、共创、普惠、为所有视频创作者提供专业运营方法论与工具的、能够覆盖新媒体-社区-用户-发行-营销等多方面业务场景的专业运营工作台。
+
+欢迎提 Issue 和 PR，如您具备相关领域工作经验，也欢迎提出想法与思路，让本项目能够更好地服务于个人创作者的实际需求。
+
 >本仓库为Astrbot插件版，issue与PR请前往https://github.com/FORK-is-coding/FishTool 。
 ## 安装
 

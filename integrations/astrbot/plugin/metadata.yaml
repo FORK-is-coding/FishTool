@@ -12,4 +12,12 @@ astrbot_version: ">=4.29,<5"
 tags:
   - bilibili
   - 运营
-  - 舆情
+  - 评论
+  - 视频
+  - 工具
+  - 监控
+  - 自动化
+  - AI增强
+  - dsh
+  - api
+  - 功能拓展
