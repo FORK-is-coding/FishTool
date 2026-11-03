@@ -225,11 +225,16 @@ def smoke(h: Harness) -> list[dict]:
         return "ok"
 
     def tunnel_get():
-        # POST 隧道还原 GET + query（bvid 必填，缺失会 422）
+        # POST 隧道还原 GET + query（bvid 必填，缺失会 422）。
+        # 冒烟库是空库，该视频不存在：preferences 按契约返回 404（issue #45）。
+        # 这里只验证隧道把 GET 与 query 原样还原到了路由——200/404 都说明 bvid 已送达，
+        # 422 才说明 query 丢失。
         resp = h.ext("POST", "api/comment/semantic/preferences",
                      json={"__fishtool_tunnel": 1, "method": "GET", "query": {"bvid": "BV1xx411c7mD"}, "body": None})
         d = resp.json()["data"]
-        assert d["http_status"] == 200, d
+        assert d["http_status"] in (200, 404), d
+        if d["http_status"] == 404:
+            assert (d["body"].get("detail") or {}).get("error_code") == "not_found", d
         return d["http_status"]
 
     def view_entry():

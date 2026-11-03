@@ -92,11 +92,11 @@ class _FakeService:
         }
         self.preflight_error: Optional[Exception] = None
         self.start_value: Dict[str, Any] = {
-            'task_id': 't1', 'bvid': 'BV1', 'status': 'queued', 'revision': 0,
+            'task_id': 't1', 'bvid': 'BV1GJ411x7h7', 'status': 'queued', 'revision': 0,
         }
         self.start_error: Optional[Exception] = None
         self.status_value: Optional[Dict[str, Any]] = {
-            'task_id': 't1', 'bvid': 'BV1', 'status': 'running', 'revision': 1,
+            'task_id': 't1', 'bvid': 'BV1GJ411x7h7', 'status': 'running', 'revision': 1,
             'progress': {'percent': 40},
         }
         self.results_value: Optional[Dict[str, Any]] = {
@@ -171,7 +171,7 @@ def test_local_token_issued(client):
 
 
 def test_preflight_returns_counts_scope_identity(client, service):
-    resp = client.get('/api/comment/semantic/preflight?bvid=BV1&limit=200')
+    resp = client.get('/api/comment/semantic/preflight?bvid=BV1GJ411x7h7&limit=200')
     assert resp.status_code == 200
     data = resp.json()['data']
     assert data['counts']['raw_total'] == 10
@@ -182,21 +182,21 @@ def test_preflight_returns_counts_scope_identity(client, service):
 
 def test_preflight_unknown_video_404(client, service):
     service.preflight_error = SemanticNotFound('unknown video')
-    resp = client.get('/api/comment/semantic/preflight?bvid=BVX')
+    resp = client.get('/api/comment/semantic/preflight?bvid=BV1ghost0000')
     assert resp.status_code == 404
     assert resp.json()['detail']['error_code'] == 'not_found'
 
 
 def test_get_preferences_delegates_store(client, service):
-    resp = client.get('/api/comment/semantic/preferences?bvid=BV1')
+    resp = client.get('/api/comment/semantic/preferences?bvid=BV1GJ411x7h7')
     assert resp.status_code == 200
     assert resp.json()['data']['revision'] == 0
-    assert ('preference', 'BV1') in service.store.calls
+    assert ('preference', 'BV1GJ411x7h7') in service.store.calls
 
 
 def test_put_preferences_requires_token(client):
     resp = client.put('/api/comment/semantic/preferences',
-                      json={'bvid': 'BV1', 'expected_revision': 0, 'auto_fold': True})
+                      json={'bvid': 'BV1GJ411x7h7', 'expected_revision': 0, 'auto_fold': True})
     assert resp.status_code == 403
 
 
@@ -205,7 +205,7 @@ def test_put_preferences_sanitizes_model_identity(client, service, token):
     resp = client.put(
         '/api/comment/semantic/preferences',
         json={
-            'bvid': 'BV1', 'expected_revision': 0, 'consent_version': 'semantic-fold-v1',
+            'bvid': 'BV1GJ411x7h7', 'expected_revision': 0, 'consent_version': 'semantic-fold-v1',
             'model_identity': {'api_base': 'https://a.com', 'model': 'm', 'api_key': 'SECRET'},
         },
         headers=_wh(token),
@@ -219,7 +219,7 @@ def test_put_preferences_sanitizes_model_identity(client, service, token):
 def test_put_preferences_rejects_bad_model_identity(client, token):
     resp = client.put(
         '/api/comment/semantic/preferences',
-        json={'bvid': 'BV1', 'expected_revision': 0, 'model_identity': {'model': 'm'}},
+        json={'bvid': 'BV1GJ411x7h7', 'expected_revision': 0, 'model_identity': {'model': 'm'}},
         headers=_wh(token),
     )
     assert resp.status_code == 400
@@ -230,7 +230,7 @@ def test_put_preferences_conflict_409(client, service, token):
     service.store.set_preference_error = SemanticConflict('stale revision')
     resp = client.put(
         '/api/comment/semantic/preferences',
-        json={'bvid': 'BV1', 'expected_revision': 5, 'auto_fold': True},
+        json={'bvid': 'BV1GJ411x7h7', 'expected_revision': 5, 'auto_fold': True},
         headers=_wh(token),
     )
     assert resp.status_code == 409
@@ -242,14 +242,14 @@ def test_put_preferences_conflict_409(client, service, token):
 # ---------------------------------------------------------------------------
 def test_create_task_requires_token(client):
     resp = client.post('/api/comment/semantic/tasks',
-                       json={'bvid': 'BV1', 'consent_version': 'semantic-fold-v1', 'request_key': 'k1'})
+                       json={'bvid': 'BV1GJ411x7h7', 'consent_version': 'semantic-fold-v1', 'request_key': 'k1'})
     assert resp.status_code == 403
 
 
 def test_create_task_success(client, token):
     resp = client.post(
         '/api/comment/semantic/tasks',
-        json={'bvid': 'BV1', 'limit': 200, 'consent_version': 'semantic-fold-v1', 'request_key': 'k1'},
+        json={'bvid': 'BV1GJ411x7h7', 'limit': 200, 'consent_version': 'semantic-fold-v1', 'request_key': 'k1'},
         headers=_wh(token),
     )
     assert resp.status_code == 200
@@ -260,7 +260,7 @@ def test_create_task_budget_429(client, service, token):
     service.start_error = SemanticBudgetExceeded('daily budget exhausted')
     resp = client.post(
         '/api/comment/semantic/tasks',
-        json={'bvid': 'BV1', 'consent_version': 'semantic-fold-v1', 'request_key': 'k1'},
+        json={'bvid': 'BV1GJ411x7h7', 'consent_version': 'semantic-fold-v1', 'request_key': 'k1'},
         headers=_wh(token),
     )
     assert resp.status_code == 429
@@ -271,7 +271,7 @@ def test_create_task_provider_not_configured_503(client, service, token):
     service.start_error = SemanticProviderError('not configured', ProviderErrorCategory.NOT_CONFIGURED)
     resp = client.post(
         '/api/comment/semantic/tasks',
-        json={'bvid': 'BV1', 'consent_version': 'semantic-fold-v1', 'request_key': 'k1'},
+        json={'bvid': 'BV1GJ411x7h7', 'consent_version': 'semantic-fold-v1', 'request_key': 'k1'},
         headers=_wh(token),
     )
     assert resp.status_code == 503
@@ -282,7 +282,7 @@ def test_create_task_provider_server_502(client, service, token):
     service.start_error = SemanticProviderError('upstream 500', ProviderErrorCategory.SERVER)
     resp = client.post(
         '/api/comment/semantic/tasks',
-        json={'bvid': 'BV1', 'consent_version': 'semantic-fold-v1', 'request_key': 'k1'},
+        json={'bvid': 'BV1GJ411x7h7', 'consent_version': 'semantic-fold-v1', 'request_key': 'k1'},
         headers=_wh(token),
     )
     assert resp.status_code == 502
@@ -331,7 +331,7 @@ def test_resume_task_success(client, token):
 
 def test_latest_none_when_no_task(client, service):
     service.store.latest_value = None
-    resp = client.get('/api/comment/semantic/latest?bvid=BV1')
+    resp = client.get('/api/comment/semantic/latest?bvid=BV1GJ411x7h7')
     assert resp.status_code == 200
     assert resp.json()['data'] is None
 
@@ -341,7 +341,7 @@ def test_latest_none_when_no_task(client, service):
 # ---------------------------------------------------------------------------
 def test_decision_requires_token(client):
     resp = client.post('/api/comment/semantic/decisions',
-                       json={'bvid': 'BV1', 'task_id': 't1', 'action': 'undo_group',
+                       json={'bvid': 'BV1GJ411x7h7', 'task_id': 't1', 'action': 'undo_group',
                              'expected_revision': 1, 'group_id': 'g1', 'request_key': 'r1'})
     assert resp.status_code == 403
 
@@ -349,7 +349,7 @@ def test_decision_requires_token(client):
 def test_decision_rejects_unknown_action(client, token):
     resp = client.post(
         '/api/comment/semantic/decisions',
-        json={'bvid': 'BV1', 'task_id': 't1', 'action': 'nuke',
+        json={'bvid': 'BV1GJ411x7h7', 'task_id': 't1', 'action': 'nuke',
               'expected_revision': 1, 'request_key': 'r1'},
         headers=_wh(token),
     )
@@ -360,7 +360,7 @@ def test_decision_rejects_unknown_action(client, token):
 def test_decision_success_returns_revision(client, service, token):
     resp = client.post(
         '/api/comment/semantic/decisions',
-        json={'bvid': 'BV1', 'task_id': 't1', 'action': 'undo_group',
+        json={'bvid': 'BV1GJ411x7h7', 'task_id': 't1', 'action': 'undo_group',
               'expected_revision': 1, 'group_id': 'g1', 'request_key': 'r1'},
         headers=_wh(token),
     )
@@ -373,7 +373,7 @@ def test_decision_stale_group_409(client, service, token):
     service.store.decide_error = SemanticConflict('stale group')
     resp = client.post(
         '/api/comment/semantic/decisions',
-        json={'bvid': 'BV1', 'task_id': 't1', 'action': 'split_member',
+        json={'bvid': 'BV1GJ411x7h7', 'task_id': 't1', 'action': 'split_member',
               'expected_revision': 1, 'rpid': '123', 'request_key': 'r2'},
         headers=_wh(token),
     )
@@ -384,11 +384,89 @@ def test_validation_error_maps_400(client, service, token):
     service.store.decide_error = SemanticValidationError('bad id', reason='unknown_id')
     resp = client.post(
         '/api/comment/semantic/decisions',
-        json={'bvid': 'BV1', 'task_id': 't1', 'action': 'allow_member',
+        json={'bvid': 'BV1GJ411x7h7', 'task_id': 't1', 'action': 'allow_member',
               'expected_revision': 1, 'rpid': '9', 'request_key': 'r3'},
         headers=_wh(token),
     )
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# bvid 规范化（issue #46）与偏好 404（issue #45）
+# ---------------------------------------------------------------------------
+_BAD_BVIDS = ['   ', 'BV', 'BV1GJ411x7h', 'BV1GJ411x7h7x', "BV1';DROP TABLE videos;--", '../../etc/passwd']
+
+
+@pytest.mark.parametrize('bad', _BAD_BVIDS)
+@pytest.mark.parametrize('path', ['/preflight', '/preferences', '/latest'])
+def test_query_bvid_rejected_400(client, service, path, bad):
+    resp = client.get(f'/api/comment/semantic{path}', params={'bvid': bad})
+    assert resp.status_code == 400
+    assert resp.json()['detail']['error_code'] == 'validation_error'
+    assert service.store.calls == []  # 不触达 store
+
+
+@pytest.mark.parametrize('path', ['/preflight', '/preferences', '/latest'])
+def test_query_bvid_whitespace_stripped(client, service, path):
+    resp = client.get(f'/api/comment/semantic{path}', params={'bvid': ' BV1GJ411x7h7 '})
+    assert resp.status_code == 200
+
+
+def test_get_preferences_strips_before_store(client, service):
+    client.get('/api/comment/semantic/preferences', params={'bvid': '\tBV1GJ411x7h7 '})
+    assert ('preference', 'BV1GJ411x7h7') in service.store.calls
+
+
+def test_put_preferences_strips_bvid(client, service, token):
+    resp = client.put('/api/comment/semantic/preferences', headers=_wh(token),
+                      json={'bvid': ' BV1GJ411x7h7', 'expected_revision': 0, 'auto_fold': False})
+    assert resp.status_code == 200
+    assert service.store.last_set_preference_kwargs['bvid'] == 'BV1GJ411x7h7'
+
+
+@pytest.mark.parametrize('bad', _BAD_BVIDS)
+def test_put_preferences_rejects_bad_bvid(client, service, token, bad):
+    resp = client.put('/api/comment/semantic/preferences', headers=_wh(token),
+                      json={'bvid': bad, 'expected_revision': 0, 'auto_fold': True})
+    assert resp.status_code == 400
+    assert service.store.last_set_preference_kwargs == {}
+
+
+def test_create_task_rejects_bad_bvid(client, token):
+    resp = client.post('/api/comment/semantic/tasks', headers=_wh(token),
+                       json={'bvid': 'BV', 'consent_version': 'semantic-fold-v1', 'request_key': 'k1'})
+    assert resp.status_code == 400
+
+
+def test_decision_rejects_bad_bvid(client, service, token):
+    resp = client.post('/api/comment/semantic/decisions', headers=_wh(token),
+                       json={'bvid': '   ', 'task_id': 't1', 'action': 'undo_group',
+                             'expected_revision': 1, 'group_id': 'g1', 'request_key': 'r1'})
+    assert resp.status_code == 400
+    assert not any(c[0] == 'decide' for c in service.store.calls)
+
+
+def test_bad_bvid_message_does_not_echo_input(client):
+    payload = "BV<script>alert(1)</script>"
+    resp = client.get('/api/comment/semantic/preferences', params={'bvid': payload})
+    assert resp.status_code == 400
+    assert '<script>' not in resp.text
+
+
+def test_get_preferences_unknown_video_404(client, service):
+    def _missing(bvid):
+        raise SemanticNotFound(f'视频不存在: {bvid}')
+    service.store.preference = _missing
+    resp = client.get('/api/comment/semantic/preferences?bvid=BV1ghost0000')
+    assert resp.status_code == 404
+    assert resp.json()['detail']['error_code'] == 'not_found'
+
+
+def test_put_preferences_unknown_video_404(client, service, token):
+    service.store.set_preference_error = SemanticNotFound('视频不存在')
+    resp = client.put('/api/comment/semantic/preferences', headers=_wh(token),
+                      json={'bvid': 'BV1ghost0000', 'expected_revision': 0, 'auto_fold': True})
+    assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +477,6 @@ def test_service_unavailable_503(token):
     app = FastAPI()
     app.include_router(router_module.router, prefix='/api')
     local = TestClient(app, base_url='http://127.0.0.1')
-    resp = local.get('/api/comment/semantic/preflight?bvid=BV1')
+    resp = local.get('/api/comment/semantic/preflight?bvid=BV1GJ411x7h7')
     assert resp.status_code == 503
     assert resp.json()['detail']['error_code'] == 'semantic_service_unavailable'

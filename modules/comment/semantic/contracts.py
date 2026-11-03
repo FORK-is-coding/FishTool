@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
@@ -143,6 +144,46 @@ class SemanticProviderError(SemanticError):
         self.category = category
 
 
+# --------------------------------------------------------------------------
+# bvid 规范化（router 与 store 入口共用的单一事实源）
+# --------------------------------------------------------------------------
+#: B 站 BV 号："BV" 前缀 + 10 位字母数字（与 modules/lottery/target.py 口径一致）。
+#: 前缀大小写不敏感：采集链路不改写用户输入的 bvid，已入库的 "bv1…" 视频不能被锁在面板外。
+#: 这里只校验、不改写大小写，键值仍与 videos.bvid 原样对齐。
+_BVID_PATTERN = re.compile(r"[Bb][Vv][0-9A-Za-z]{10}")
+
+
+def normalize_bvid(bvid: Any, *, strict: bool = True) -> str:
+    """去首尾空白并（可选）校验 BV 号格式，返回规范值。
+
+    所有以 bvid 为键的读写都必须先过这里：否则 " BV1xx…" 与 "BV1xx…" 会被当成
+    两个不同的键，绕过 ``UNIQUE(bvid)``（issue #46）。
+
+    - ``strict=True``（HTTP 入口）：额外校验 ``BV`` + 10 位字母数字。
+    - ``strict=False``（store 入口）：只去空白、拒空；store 写入前另有 videos 存在性
+      校验兜底，非法格式不可能对应已采集视频，因此不在持久层重复格式规则。
+
+    Args:
+        bvid: 原始入参。
+        strict: 是否校验 BV 号格式。
+
+    Returns:
+        str: 去空白后的 BV 号。
+
+    Raises:
+        SemanticValidationError: 非字符串、空白或（strict 时）格式非法。消息不回显原始值。
+    """
+    if not isinstance(bvid, str):
+        raise SemanticValidationError("bvid 必须是字符串", reason="invalid_bvid")
+    value = bvid.strip()
+    if not value:
+        raise SemanticValidationError("bvid 不能为空", reason="invalid_bvid")
+    if strict and not _BVID_PATTERN.fullmatch(value):
+        raise SemanticValidationError(
+            "bvid 格式非法，应为 BV 开头的 12 位视频号", reason="invalid_bvid")
+    return value
+
+
 __all__ = [
     # 版本 / 限额常量
     "CONSENT_VERSION", "RULE_VERSION", "DEFAULT_LIMIT", "MAX_LIMIT",
@@ -155,6 +196,8 @@ __all__ = [
     "SemanticError", "SemanticNotFound", "SemanticConflict",
     "SemanticBudgetExceeded", "SemanticValidationError",
     "SemanticProviderError", "ProviderErrorCategory",
+    # 入参规范化
+    "normalize_bvid",
     # DTO 工具
     "SYSTEM_PROMPT", "TokenEstimate", "sanitize_items",
     "build_user_payload", "serialize_payload", "estimate_request_tokens",

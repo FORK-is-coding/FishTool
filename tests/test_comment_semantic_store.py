@@ -21,6 +21,7 @@ from core.database import (
     DatabaseManager,
     Video,
     SemanticGroupMember,
+    SemanticPreference,
     SemanticProtection,
 )
 from modules.comment.semantic.store import (
@@ -96,6 +97,17 @@ def test_snapshot_unknown_video_raises(store):
         s.snapshot("BVnope")
 
 
+def test_snapshot_strips_bvid_whitespace(store):
+    """issue #46：snapshot 是 create_task 的键来源，带空白入参也必须落到规范 bvid。"""
+    s, m = store
+    seed_video(m)
+    snap = s.snapshot(f"  {BVID}\t")
+    assert snap["video"]["bvid"] == BVID
+    state = s.create_task(snap, IDENTITY, None, request_key=uuid.uuid4().hex)
+    assert state["bvid"] == BVID
+    assert s.latest_task(BVID)["task_id"] == state["task_id"]
+
+
 def test_snapshot_eligibility_and_counts(store):
     s, m = store
     vid = seed_video(m)
@@ -141,13 +153,85 @@ def test_snapshot_deterministic_newest_order(store):
 # ---------------------------------------------------------------------------
 
 def test_preference_default_no_row(store):
-    s, _ = store
+    s, m = store
+    seed_video(m)
     pref = s.preference(BVID)
     assert pref == {"auto_fold": True, "revision": 0, "consent_version": None, "model_identity": None}
 
 
-def test_set_preference_cas_and_revision(store):
+def _pref_rows(manager):
+    """读出 semantic_preferences 全部 (bvid, video_id)。"""
+    session = manager.get_session()
+    try:
+        return [(p.bvid, p.video_id) for p in session.query(SemanticPreference).all()]
+    finally:
+        session.close()
+
+
+def test_preference_unknown_video_raises(store):
+    """issue #45：视频不存在时与 snapshot 契约一致抛 NotFound，不返回缺省 DTO。"""
     s, _ = store
+    with pytest.raises(SemanticNotFound):
+        s.preference("BVghost00000")
+
+
+def test_set_preference_unknown_video_raises_and_writes_nothing(store):
+    """issue #45：视频不存在时拒写，不落 video_id 为 NULL 的孤儿行。"""
+    s, m = store
+    with pytest.raises(SemanticNotFound):
+        s.set_preference("BVghost00000", 0, auto_fold=True)
+    assert _pref_rows(m) == []
+
+
+def test_set_preference_links_video_id(store):
+    s, m = store
+    vid = seed_video(m)
+    s.set_preference(BVID, 0, auto_fold=False)
+    assert _pref_rows(m) == [(BVID, vid)]
+
+
+def test_set_preference_backfills_legacy_null_video_id(store):
+    """修复前遗留的 video_id=NULL 行：视频存在时下一次写入回填，不涨 revision。"""
+    s, m = store
+    vid = seed_video(m)
+    session = m.get_session()
+    try:
+        session.add(SemanticPreference(bvid=BVID, video_id=None, auto_fold=True, revision=0))
+        session.commit()
+    finally:
+        session.close()
+    pref = s.set_preference(BVID, 0, auto_fold=True)  # 无实际变更
+    assert pref["revision"] == 0
+    assert _pref_rows(m) == [(BVID, vid)]
+
+
+def test_bvid_whitespace_normalized_to_same_row(store):
+    """issue #46：首尾空白不能产生第二条偏好，读写都落到同一个键。"""
+    s, m = store
+    vid = seed_video(m)
+    s.set_preference(f" {BVID}", 0, auto_fold=False)
+    assert s.preference(f"{BVID} ")["auto_fold"] is False
+    s.set_preference(f"\t{BVID}\n", 0, auto_fold=True)  # 命中同一行：revision 0 -> 1
+    assert s.preference(BVID)["revision"] == 1
+    with pytest.raises(SemanticConflict):  # 若空白变体是新键，这里会以 rev0 静默新建
+        s.set_preference(f" {BVID}", 0, auto_fold=False)
+    assert _pref_rows(m) == [(BVID, vid)]
+
+
+@pytest.mark.parametrize("bad", ["", "   ", None, 123])
+def test_store_rejects_blank_or_non_string_bvid(store, bad):
+    s, _ = store
+    with pytest.raises(SemanticValidationError):
+        s.preference(bad)
+    with pytest.raises(SemanticValidationError):
+        s.set_preference(bad, 0, auto_fold=True)
+    with pytest.raises(SemanticValidationError):
+        s.latest_task(bad)
+
+
+def test_set_preference_cas_and_revision(store):
+    s, m = store
+    seed_video(m)
     # 首次创建安全落在 revision 0（契约：creates initial revision0 safely）
     p0 = s.set_preference(BVID, 0, auto_fold=False, consent_version="semantic-fold-v1")
     assert p0["auto_fold"] is False
@@ -163,7 +247,8 @@ def test_set_preference_cas_and_revision(store):
 
 
 def test_set_preference_initial_requires_rev0(store):
-    s, _ = store
+    s, m = store
+    seed_video(m)
     with pytest.raises(SemanticConflict):
         s.set_preference(BVID, 5, auto_fold=True)
 
@@ -624,6 +709,62 @@ def test_decide_idempotent_request_key(store):
     d2 = s.decide(BVID, state["task_id"], "undo_group", 0, group_id=gid, request_key=rk)
     assert d2["idempotent"] is True
     assert d1["revision"] == d2["revision"]
+
+
+def _delete_video(manager, bvid=BVID):
+    """模拟视频行事后缺失（任务/审计仍在）。"""
+    session = manager.get_session()
+    try:
+        session.query(Video).filter_by(bvid=bvid).delete()
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_result_and_decide_replay_survive_missing_video(store):
+    """回归：存在性校验只加在公共入口；已持久化任务的结果与幂等重放不因视频缺失而 404。"""
+    s, m = store
+    state, snap = running_task_with_two_equiv(s, m)
+    pub = s.publish_groups(state["task_id"], state["revision"], [equiv_group(snap, [100, 101])])
+    gid = pub["groups"][0]["group_id"]
+    rk = uuid.uuid4().hex
+    s.decide(BVID, state["task_id"], "undo_group", 0, group_id=gid, request_key=rk)
+    _delete_video(m)
+
+    res = s.result(state["task_id"])
+    assert res["preference"]["revision"] == 1
+    replay = s.decide(BVID, state["task_id"], "undo_group", 0, group_id=gid, request_key=rk)
+    assert replay["idempotent"] is True
+    assert replay["preference"]["revision"] == 1
+    # 公共入口仍按契约 404。
+    with pytest.raises(SemanticNotFound):
+        s.preference(BVID)
+
+
+def test_decide_first_row_unknown_video_writes_nothing(store):
+    """decide 首次建偏好行时视频已缺失：拒写，不落 video_id 为 NULL 的孤儿行。"""
+    s, m = store
+    state, snap = running_task_with_two_equiv(s, m)
+    pub = s.publish_groups(state["task_id"], state["revision"], [equiv_group(snap, [100, 101])])
+    gid = pub["groups"][0]["group_id"]
+    _delete_video(m)
+    with pytest.raises(SemanticNotFound):
+        s.decide(BVID, state["task_id"], "undo_group", 0, group_id=gid, request_key=uuid.uuid4().hex)
+    assert _pref_rows(m) == []
+    session = m.get_session()
+    try:
+        assert session.query(SemanticProtection).count() == 0  # 整体回滚，保护行也未写
+    finally:
+        session.close()
+
+
+def test_decide_strips_bvid_whitespace(store):
+    s, m = store
+    state, snap = running_task_with_two_equiv(s, m)
+    pub = s.publish_groups(state["task_id"], state["revision"], [equiv_group(snap, [100, 101])])
+    gid = pub["groups"][0]["group_id"]
+    s.decide(f" {BVID} ", state["task_id"], "undo_group", 0, group_id=gid, request_key=uuid.uuid4().hex)
+    assert [r[0] for r in _pref_rows(m)] == [BVID]
 
 
 def test_protection_survives_regroup_new_task(store):

@@ -39,6 +39,7 @@ from modules.comment.semantic.contracts import (
     SemanticNotFound,
     SemanticProviderError,
     SemanticValidationError,
+    normalize_bvid,
 )
 from web.local_guard import (
     LOCAL_TOKEN_HEADER,
@@ -155,6 +156,34 @@ def _sanitize_model_identity(raw: Optional[Dict[str, Any]]) -> Optional[Dict[str
     return {'api_base': api_base.strip(), 'model': model.strip()}
 
 
+def _clean_bvid(raw: str) -> str:
+    """规范化 bvid（去首尾空白 + BV 号格式校验），非法时投影为 400 validation_error。
+
+    所有带 bvid 的端点（query 与 body）都经此处，保证同一视频只有一个键（issue #46）。
+
+    Args:
+        raw: 客户端传入的 bvid。
+
+    Returns:
+        str: 规范化后的 BV 号。
+
+    Raises:
+        HTTPException: 400 bvid 为空白或格式非法。
+    """
+    try:
+        return normalize_bvid(raw)
+    except SemanticValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={'error_code': 'validation_error', 'message': str(exc)},
+        ) from None
+
+
+def _bvid_query(bvid: str = Query(min_length=1, max_length=64)) -> str:
+    """query 参数 bvid 的依赖：长度约束后再走 ``_clean_bvid`` 规范化。"""
+    return _clean_bvid(bvid)
+
+
 # --------------------------------------------------------------------------
 # 请求模型（严格模型：拒绝未知字段，照契约字段抄）
 # --------------------------------------------------------------------------
@@ -232,7 +261,7 @@ async def issue_local_token() -> Dict[str, Any]:
 # --------------------------------------------------------------------------
 @router.get('/preflight', dependencies=[Depends(require_local_read)])
 async def preflight(
-    bvid: str = Query(min_length=1, max_length=64),
+    bvid: str = Depends(_bvid_query),
     limit: int = Query(default=_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
 ) -> Dict[str, Any]:
     """返回快照计数/范围 + 模型是否已配置 / provider 身份 / 是否需要 consent / 版本 / 限额。
@@ -247,7 +276,7 @@ async def preflight(
         Dict[str, Any]: ``{success, data: <preflight 投影>}``。
 
     Raises:
-        HTTPException: 404 未知视频；503 服务未装配。
+        HTTPException: 400 bvid 非法；404 未知视频；503 服务未装配。
     """
     service = get_semantic_service()
     try:
@@ -261,7 +290,7 @@ async def preflight(
 
 
 @router.get('/preferences', dependencies=[Depends(require_local_read)])
-async def get_preferences(bvid: str = Query(min_length=1, max_length=64)) -> Dict[str, Any]:
+async def get_preferences(bvid: str = Depends(_bvid_query)) -> Dict[str, Any]:
     """读取某视频的语义折叠偏好（auto_fold / revision / consent_version / model_identity）。
 
     偏好读经 store 同步方法（``service.store.preference``）；model_identity 不含密钥。
@@ -273,7 +302,7 @@ async def get_preferences(bvid: str = Query(min_length=1, max_length=64)) -> Dic
         Dict[str, Any]: ``{success, data: <preference>}``。
 
     Raises:
-        HTTPException: 503 服务未装配。
+        HTTPException: 400 bvid 非法；404 未知视频；503 服务未装配。
     """
     service = get_semantic_service()
     try:
@@ -300,13 +329,14 @@ async def put_preferences(request: PreferenceUpdateRequest) -> Dict[str, Any]:
         Dict[str, Any]: ``{success, data: <preference>}``。
 
     Raises:
-        HTTPException: 400 校验；409 版本冲突；503 服务未装配。
+        HTTPException: 400 校验；404 未知视频；409 版本冲突；503 服务未装配。
     """
     service = get_semantic_service()
+    bvid = _clean_bvid(request.bvid)
     model_identity = _sanitize_model_identity(request.model_identity)
     try:
         data = service.store.set_preference(
-            request.bvid,
+            bvid,
             request.expected_revision,
             auto_fold=request.auto_fold,
             consent_version=request.consent_version,
@@ -340,9 +370,10 @@ async def create_task(request: TaskCreateRequest) -> Dict[str, Any]:
         HTTPException: 400 校验；404 未知视频；409 身份不符/幂等冲突；429 预算；503 未配置。
     """
     service = get_semantic_service()
+    bvid = _clean_bvid(request.bvid)
     try:
         data = await service.start(
-            request.bvid,
+            bvid,
             request.limit,
             request.consent_version,
             request.request_key,
@@ -476,7 +507,7 @@ async def resume_task(task_id: str, request: ResumeRequest) -> Dict[str, Any]:
 
 
 @router.get('/latest', dependencies=[Depends(require_local_read)])
-async def latest_task(bvid: str = Query(min_length=1, max_length=64)) -> Dict[str, Any]:
+async def latest_task(bvid: str = Depends(_bvid_query)) -> Dict[str, Any]:
     """返回某视频最近一次任务的公开状态（刷新/重启后加载最新任务与偏好用）。
 
     Args:
@@ -516,6 +547,7 @@ async def submit_decision(request: DecisionRequest) -> Dict[str, Any]:
         HTTPException: 400 动作非法/校验；404 任务/分组不存在；409 版本冲突/陈旧分组；503 未装配。
     """
     service = get_semantic_service()
+    bvid = _clean_bvid(request.bvid)
     if request.action not in _DECISION_ACTIONS:
         raise HTTPException(
             status_code=400,
@@ -523,7 +555,7 @@ async def submit_decision(request: DecisionRequest) -> Dict[str, Any]:
         )
     try:
         data = service.store.decide(
-            request.bvid,
+            bvid,
             request.task_id,
             request.action,
             request.expected_revision,

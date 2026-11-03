@@ -233,7 +233,8 @@ class SemanticService:
             and _identity_equal(stored_identity, identity)
         )
         return {
-            "bvid": bvid,
+            # 回传规范化后的 bvid（snapshot 已去空白），非 HTTP 直调也不回显原始入参。
+            "bvid": (snapshot.get("video") or {}).get("bvid", bvid),
             "video": snapshot.get("video"),
             "counts": snapshot.get("counts"),
             "scope": snapshot.get("scope"),
@@ -259,6 +260,12 @@ class SemanticService:
         后台 worker（全局串行）。幂等 request_key 由 store 保证。
         """
         limit = _clamp_limit(limit)
+        # 资源存在性是最基本的前提，必须先于 consent / 模型配置校验（issue #47）：
+        # 否则 BV 号打错时用户只会看到 503「模型未配置」或 400「未同意」，排查方向被带偏。
+        # store.preference 在视频不存在时抛 SemanticNotFound（-> 404），且只是一次轻量
+        # 单行查询；完整 snapshot 仍留到所有门禁通过之后再做。
+        pref = self.store.preference(bvid)
+
         if consent_version != CONSENT_VERSION:
             raise SemanticValidationError(
                 "同意版本不匹配，请重新确认", reason="consent_version_mismatch")
@@ -270,7 +277,6 @@ class SemanticService:
             raise SemanticProviderError(
                 "未配置可用的语义折叠模型", category=ProviderErrorCategory.NOT_CONFIGURED)
 
-        pref = self.store.preference(bvid)
         if pref.get("consent_version") != CONSENT_VERSION or not _identity_equal(
                 pref.get("model_identity"), identity):
             # 同意缺失/与当前模型身份不绑定：要求前端走同意 modal 后再 start。
