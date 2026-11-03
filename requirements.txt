@@ -18,6 +18,8 @@ PySide6==6.12.0
 websocket-client==1.6.4
 # Web框架
 fastapi==0.108.0
+# fastapi 0.108.0 要求 starlette>=0.29.0,<0.33.0；单独锁住，避免环境里残留的新版 starlette 被沿用
+starlette==0.32.0.post1
 # ASGI服务器
 uvicorn[standard]==0.25.0
 # 模板渲染（web/main.py Jinja2Templates 必需）
@@ -33,3 +35,5 @@ markdown2==2.4.12
 pdfkit==1.0.0
 # 静态类型检查
 pydantic==2.5.2
+# pydantic 2.5.2 硬性要求 pydantic-core==2.14.5，二者必须同步改；版本不一致时 import pydantic 直接抛 SystemError
+pydantic-core==2.14.5

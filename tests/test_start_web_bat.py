@@ -59,6 +59,21 @@ def test_bat_starts_web_via_unified_entry_on_loopback() -> None:
     assert "web/main.py" not in text and "web\\main.py" not in text
 
 
+def test_probe_imports_cover_pillow() -> None:
+    """依赖探测要 import PIL：只有 qrcode 没有 Pillow 的 Python 不能算“依赖齐全”。"""
+    text = _raw().decode("utf-8")
+    probe = next(line for line in text.split("\r\n") if "import fastapi" in line)
+    modules = {m.strip() for m in probe.split("import", 1)[1].split('"', 1)[0].split(",")}
+    assert {"pydantic", "qrcode", "PIL"} <= modules
+
+
+def test_bat_runs_pip_check_after_install() -> None:
+    """自动安装后执行 pip check，提示旧环境残留的版本冲突。"""
+    text = _raw().decode("utf-8")
+    install = text.index("-m pip install -r requirements.txt")
+    assert "-m pip check" in text[install:]
+
+
 def test_bat_waits_for_health_before_opening_browser() -> None:
     """浏览器在 /health 返回 ok 之后才打开，并且可以用环境变量关掉。"""
     text = _raw().decode("utf-8")
