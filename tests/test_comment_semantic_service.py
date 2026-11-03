@@ -28,6 +28,7 @@ from modules.comment.semantic.contracts import (
     ProviderErrorCategory,
     SemanticBudgetExceeded,
     SemanticConflict,
+    SemanticNotFound,
     SemanticProviderError,
     SemanticValidationError,
 )
@@ -386,6 +387,52 @@ def test_start_requires_bound_consent():
     with pytest.raises(SemanticValidationError) as ei:
         run(service.start("BV1", 200, CONSENT_VERSION, "rk1"))
     assert ei.value.reason == "consent_required"
+
+
+class _MissingVideoStore(FakeStore):
+    """视频不存在：preference/snapshot 都按真实 store 契约抛 SemanticNotFound。"""
+
+    def preference(self, bvid: str) -> Dict[str, Any]:
+        raise SemanticNotFound(f"视频不存在: {bvid}")
+
+    def snapshot(self, bvid: str, limit: int = 200) -> Dict[str, Any]:
+        raise SemanticNotFound(f"视频不存在: {bvid}")
+
+
+@pytest.mark.parametrize("configured, consent", [
+    (False, CONSENT_VERSION),   # 原先：503 未配置模型
+    (True, CONSENT_VERSION),    # 原先：400 未授予同意
+    (True, "wrong-version"),    # 原先：400 同意版本不匹配
+])
+def test_start_unknown_video_404_before_other_gates(configured, consent):
+    """issue #47：视频不存在必须先于 consent / 模型配置校验暴露为 NotFound。"""
+    store = _MissingVideoStore(_snapshot(3))
+    service = _service(store, FakeProvider(configured=configured))
+    with pytest.raises(SemanticNotFound):
+        run(service.start("BVghost00000", 200, consent, "rk1"))
+    assert service._tasks == {}  # 未创建/调度任何任务
+
+
+def test_preflight_and_start_real_store_normalize_bvid():
+    """真实 store：直调 service（绕过 router）带空白的 bvid 也只落规范键、回规范值。"""
+    from core.database import SemanticPreference, get_session
+    from modules.comment.semantic.store import SemanticStore
+
+    bvid = "BVnorm000001"
+    _seed_video_comments(bvid, 2)
+    store = SemanticStore()
+    store.set_preference(f" {bvid}", 0, consent_version=CONSENT_VERSION,
+                         model_identity=dict(IDENTITY))
+    service = svc.SemanticService(store=store, provider_factory=lambda: FakeProvider())
+    service._schedule = lambda task_id: None  # 只验证创建，不跑 worker
+
+    pf = run(service.preflight(f"{bvid}\t"))
+    assert pf["bvid"] == bvid and pf["consent_needed"] is False
+    state = run(service.start(f" {bvid} ", 200, CONSENT_VERSION, "rk-norm"))
+    assert state["bvid"] == bvid
+    with get_session() as s:
+        assert [p.bvid for p in s.query(SemanticPreference).filter(
+            SemanticPreference.bvid.like(f"%{bvid}%"))] == [bvid]
 
 
 def test_start_creates_task_then_runs_to_completion():

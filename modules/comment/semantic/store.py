@@ -57,6 +57,7 @@ from .contracts import (
     SemanticConflict,
     SemanticBudgetExceeded,
     SemanticValidationError,
+    normalize_bvid,
 )
 
 #: 单条内容合格 UTF-8 字节上限（别名，对齐 contracts 命名）。
@@ -204,10 +205,15 @@ class SemanticStore:
         return self._session_factory()
 
     @staticmethod
-    def _video_id_for(session, bvid: str) -> Optional[int]:
-        """查 bvid 对应的本地 video.id（不存在返回 None，不建占位）。"""
+    def _require_video(session, bvid: str) -> Video:
+        """查 bvid 对应的本地视频；不存在抛 SemanticNotFound（与 snapshot 契约一致）。
+
+        偏好/决策写入前必须调用，避免落下 video_id 为 NULL 的孤儿偏好行（issue #45）。
+        """
         video = session.query(Video).filter_by(bvid=bvid).first()
-        return video.id if video else None
+        if video is None:
+            raise SemanticNotFound(f"视频不存在: {bvid}")
+        return video
 
     # ------------------------------------------------------------------
     # 快照
@@ -231,6 +237,7 @@ class SemanticStore:
             SemanticNotFound: 视频不存在。
             SemanticValidationError: limit 超出 [1, MAX_LIMIT]（直调不静默钳制）。
         """
+        bvid = normalize_bvid(bvid, strict=False)
         if limit is None:
             limit = DEFAULT_LIMIT
         limit = int(limit)
@@ -240,9 +247,7 @@ class SemanticStore:
             )
         session = self._session()
         try:
-            video = session.query(Video).filter_by(bvid=bvid).first()
-            if not video:
-                raise SemanticNotFound(f"视频不存在: {bvid}")
+            video = self._require_video(session, bvid)
 
             raw_total = session.query(Comment).filter_by(video_id=video.id).count()
             # 确定性 newest：按 id 降序取 limit 条，再反转成模型输入顺序（老->新）。
@@ -324,20 +329,34 @@ class SemanticStore:
         }
 
     def preference(self, bvid: str) -> Dict[str, Any]:
-        """读取视频偏好；无记录返回 auto_fold=True, revision=0 的缺省。
+        """读取视频偏好；视频存在但无记录时返回 auto_fold=True, revision=0 的缺省。
 
         Args:
-            bvid: 视频 BV 号。
+            bvid: 视频 BV 号（首尾空白会被去除）。
 
         Returns:
             {auto_fold, revision, consent_version, model_identity}
+
+        Raises:
+            SemanticNotFound: 视频不存在（与 snapshot 契约一致）。
+            SemanticValidationError: bvid 为空白。
         """
+        bvid = normalize_bvid(bvid, strict=False)
         session = self._session()
         try:
-            pref = session.query(SemanticPreference).filter_by(bvid=bvid).first()
-            return self._pref_dto(pref)
+            self._require_video(session, bvid)
+            return self._stored_preference(session, bvid)
         finally:
             session.close()
+
+    def _stored_preference(self, session, bvid: str) -> Dict[str, Any]:
+        """内部读偏好：不做视频存在性校验。
+
+        供 result() / decide 幂等重放使用：这些路径的 bvid 来自已持久化的任务/审计，
+        即便视频行事后缺失，也应照常返回结果，而不是因公共入口的 404 契约而失败。
+        """
+        pref = session.query(SemanticPreference).filter_by(bvid=bvid).first()
+        return self._pref_dto(pref)
 
     def set_preference(
         self,
@@ -364,16 +383,20 @@ class SemanticStore:
 
         Raises:
             SemanticConflict: 修订号不匹配。
+            SemanticNotFound: 视频不存在（不落 video_id 为 NULL 的孤儿行）。
+            SemanticValidationError: bvid 为空白。
         """
+        bvid = normalize_bvid(bvid, strict=False)
         session = self._session()
         try:
+            video = self._require_video(session, bvid)
             pref = session.query(SemanticPreference).filter_by(bvid=bvid).first()
             if pref is None:
                 if int(expected_revision) != 0:
                     raise SemanticConflict("偏好修订冲突：期望 0（首次创建）")
                 pref = SemanticPreference(
                     bvid=bvid,
-                    video_id=self._video_id_for(session, bvid),
+                    video_id=video.id,
                     auto_fold=True if auto_fold is None else bool(auto_fold),
                     revision=0,
                     consent_version=consent_version,
@@ -399,6 +422,10 @@ class SemanticStore:
                 changed = True
             if changed:
                 pref.revision = int(pref.revision) + 1
+            if pref.video_id is None:
+                # 修复前写入的行可能 video_id 为 NULL：视频已存在时顺手回填。
+                # 只是关联修复，不算用户可见变更，不涨 revision。
+                pref.video_id = video.id
             session.commit()
             return self._pref_dto(pref)
         except SemanticError:
@@ -580,6 +607,7 @@ class SemanticStore:
 
     def latest_task(self, bvid: str) -> Optional[Dict[str, Any]]:
         """取该视频最近创建的语义任务 State DTO（无则 None）。"""
+        bvid = normalize_bvid(bvid, strict=False)
         session = self._session()
         try:
             run = (
@@ -1267,7 +1295,7 @@ class SemanticStore:
             )}
             return {
                 "task": public_task,
-                "preference": self.preference(run.bvid),
+                "preference": self._stored_preference(session, run.bvid),
                 "revision": state["revision"],
                 "counts": {
                     **(snapshot.get("counts", {})),
@@ -1332,6 +1360,7 @@ class SemanticStore:
             raise SemanticValidationError(f"未知操作: {action}")
         if not request_key:
             raise SemanticValidationError("request_key 不能为空")
+        bvid = normalize_bvid(bvid, strict=False)
         session = self._session()
         try:
             # 幂等：命中既有审计直接返回。
@@ -1343,7 +1372,7 @@ class SemanticStore:
             if prior is not None:
                 return {
                     "revision": prior.revision_after,
-                    "preference": self.preference(bvid),
+                    "preference": self._stored_preference(session, bvid),
                     "action": prior.action,
                     "affected_rpids": (prior.detail or {}).get("affected_rpids", []),
                     "idempotent": True,
@@ -1361,7 +1390,7 @@ class SemanticStore:
                     raise SemanticConflict("偏好修订冲突：期望 0（首次创建）")
                 pref = SemanticPreference(
                     bvid=bvid,
-                    video_id=self._video_id_for(session, bvid),
+                    video_id=self._require_video(session, bvid).id,
                     auto_fold=True,
                     revision=0,
                 )
