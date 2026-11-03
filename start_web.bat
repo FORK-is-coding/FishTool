@@ -114,6 +114,13 @@ if errorlevel 1 (
     set "RC=1"
     goto :end
 )
+rem Report version conflicts left over from packages installed earlier (warning only:
+rem unrelated packages in a shared Python can also conflict).
+%PY_NODEPS% -m pip check
+if errorlevel 1 (
+    echo [警告] pip check 发现依赖版本冲突，见上面的输出。若启动报错，建议新建虚拟环境：
+    echo        python -m venv .venv  然后  .venv\Scripts\python -m pip install -r requirements.txt
+)
 set "PY=%PY_NODEPS%"
 
 rem ---------- start ----------
@@ -151,10 +158,13 @@ exit /b 0
 :probe
 rem Usage: call :probe <python command...>
 rem 3.11/3.12 with deps -> PY; right version but missing deps -> first PY_NODEPS.
+rem The import list mirrors requirements.txt (PIL comes from qrcode[pil]). Importing
+rem pydantic also fails when pydantic-core does not match, so a drifted env counts as
+rem missing deps and the pinned install below repairs it.
 if defined PY exit /b 0
 %* -c "import sys; sys.exit(0 if (3, 11) <= sys.version_info[:2] <= (3, 12) else 1)" >nul 2>&1
 if errorlevel 1 exit /b 0
-%* -c "import fastapi, uvicorn, jinja2, yaml, sqlalchemy, aiohttp, cryptography, httpx, bs4, pydantic, qrcode, markdown2, pdfkit, requests" >nul 2>&1
+%* -c "import fastapi, uvicorn, jinja2, yaml, sqlalchemy, aiohttp, cryptography, httpx, bs4, pydantic, qrcode, PIL, markdown2, pdfkit, requests" >nul 2>&1
 rem No parenthesized block here: a path like "(x86)" would close it early.
 if not errorlevel 1 goto :probe_ok
 if not defined PY_NODEPS set "PY_NODEPS=%*"
