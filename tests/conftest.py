@@ -8,6 +8,45 @@ from pathlib import Path
 import pytest
 
 
+def _relax_private_mkdir_on_windows() -> None:
+    """测试进程内：Windows 上把 ``os.mkdir(mode=0o700)`` 改为默认 mode（继承父目录 ACL）。
+
+    CPython 3.8.20 / 3.9.20 / 3.10.15 / 3.11.10 / 3.12.4 / 3.13.0 起（gh-118486，CVE-2024-4030），
+    Windows 上 ``mkdir(mode=0o700)`` 会给新目录设置受保护 DACL，只授权
+    OWNER RIGHTS / SYSTEM / Administrators。``tempfile.mkdtemp`` 与 pytest 的
+    ``tmp_path`` / ``--basetemp`` 都这样建目录。进程运行在受限令牌下（沙箱、代理工具，
+    限制 SID 只含用户本人）时，能建出这个目录，却不能在里面再建子目录或文件，报
+    ``PermissionError: [WinError 5]``；本文件 import 期的隔离根目录因此失败，所有测试
+    文件收集报错。
+
+    放宽后目录继承用户 %TEMP% 的 ACL，即 3.12.4 之前的行为；只作用于测试进程，生产代码
+    不受影响（仓库代码里没有 0o700 用法）。不做“能否建子目录”的探测：受限令牌下探测时
+    建出的 0o700 目录本进程删不掉，每次运行都会残留。设置 ``BILI_TEST_RELAX_TMP_ACL=0``
+    可关闭。
+
+    Returns:
+        无。
+    """
+    if os.name != "nt" or os.environ.get("BILI_TEST_RELAX_TMP_ACL", "").strip() == "0":
+        return
+    if getattr(os.mkdir, "_bili_ops_relaxed", False):
+        # 本文件会被同时当作目录 conftest 与插件 tests.conftest 导入，只包一层
+        return
+    real_mkdir = os.mkdir
+
+    def _mkdir(path, mode=0o777, *args, **kwargs):
+        if mode == 0o700:
+            mode = 0o777
+        return real_mkdir(path, mode, *args, **kwargs)
+
+    _mkdir._bili_ops_relaxed = True
+    os.mkdir = _mkdir
+
+
+# 必须早于本文件里的 mkdtemp，以及 pytest 首次创建 basetemp
+_relax_private_mkdir_on_windows()
+
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -237,7 +276,32 @@ def _isolate_web_lifespan(tmp_path, monkeypatch):
 # 说明：仅做运行时 monkeypatch，不改任何生产源码；不做 os.chdir（避免打断
 #   test_lottery_frontend_paths_match_backend_contract 的相对路径读 JS）。
 # ===========================================================================
-_ISOLATED_ROOT = Path(tempfile.mkdtemp(prefix="bili_ops_test_isolation_"))
+def _make_isolation_root() -> Path:
+    """创建本次会话的落盘隔离根目录，并确认能在里面建子目录。
+
+    父目录默认是系统临时目录，可用环境变量 ``BILI_TEST_ISO_ROOT`` 指定（例如沙箱里
+    只有某个目录可写时）。创建或写入失败时抛 ``pytest.UsageError`` 给出一条明确提示，
+    而不是让每个测试文件各报一次收集错误。
+
+    Returns:
+        Path: 新建的隔离根目录（会话结束时由 pytest_sessionfinish 删除）。
+    """
+    parent = os.environ.get("BILI_TEST_ISO_ROOT", "").strip() or None
+    try:
+        if parent:
+            Path(parent).mkdir(parents=True, exist_ok=True)
+        root = Path(tempfile.mkdtemp(prefix="bili_ops_test_isolation_", dir=parent))
+        (root / ".probe").mkdir()
+        (root / ".probe").rmdir()
+    except OSError as exc:
+        raise pytest.UsageError(
+            f"[conftest] 无法创建测试隔离目录：{exc}。"
+            "请把环境变量 BILI_TEST_ISO_ROOT 设为一个可写目录后重试。"
+        ) from exc
+    return root
+
+
+_ISOLATED_ROOT = _make_isolation_root()
 _ISOLATED_LOGS_DIR = _ISOLATED_ROOT / "logs"
 _ISOLATED_LOTTERY_DIR = _ISOLATED_ROOT / "lottery_cache"
 _ISOLATED_DATA_DIR = _ISOLATED_ROOT / "data"
@@ -397,3 +461,27 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "live: 需显式授权（BILIBILI_LIVE_CONTRACT=1）才执行的真网络契约验证（默认跳过）"
     )
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """会话结束删除隔离根目录；设置 BILI_TEST_KEEP_ISO=1 时保留，便于排查。
+
+    先关闭写在隔离目录里的日志文件 handler（Windows 上文件被占用时删不掉）；
+    不调用全局 logging.shutdown()，以免关掉 pytest 自身和其他插件的 handler。
+    """
+    if os.environ.get("BILI_TEST_KEEP_ISO", "").strip() == "1":
+        return
+    import logging
+    import shutil
+
+    root = _ISOLATED_ROOT.resolve()
+    loggers = [logging.getLogger()] + [
+        lg for lg in logging.Logger.manager.loggerDict.values() if isinstance(lg, logging.Logger)
+    ]
+    for lg in loggers:
+        for handler in list(lg.handlers):
+            filename = getattr(handler, "baseFilename", "")
+            if filename and _resolves_under(filename, root):
+                lg.removeHandler(handler)
+                handler.close()
+    shutil.rmtree(root, ignore_errors=True)
