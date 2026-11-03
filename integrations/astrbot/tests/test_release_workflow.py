@@ -32,6 +32,17 @@ def test_every_publish_step_passes_a_token():
         )
 
 
+def test_adapter_guard_skipped_only_for_mainline_prs():
+    """主线 PR 跳过 test_main_untouched；适配分支（名含 astrbot）的 PR 和 push/tag 照常守护。"""
+    text = WORKFLOW.read_text("utf-8")
+    step = next(s for s in re.split(r"\n\s*- name: ", text) if s.startswith("Adapter tests"))
+    match = re.search(r"^\s+FISHTOOL_SKIP_UNTOUCHED:\s*(.+)$", step, re.M)
+    assert match, "Adapter tests 步骤需要按事件设置 FISHTOOL_SKIP_UNTOUCHED"
+    assert match.group(1).strip() == (
+        "${{ (github.event_name == 'pull_request' && !contains(github.head_ref, 'astrbot')) && '1' || '' }}"
+    )
+
+
 def test_plugin_repository_is_published_before_orphan_branch():
     """插件市场源优先：孤儿分支失败时，插件仓库已经发布成功。"""
     names = [s.splitlines()[0] for s in _publish_steps()]
