@@ -2,8 +2,9 @@ name: astrbot_plugin_fishtool
 display_name: FishTool B站运营工具箱
 short_desc: B站评论舆情监控、账号自诊、热点选题、抽奖筛选
 desc: |
-  FishTool 的 AstrBot 插件版。引擎以独立进程运行（独立 Python 3.11/3.12 环境，首次启动自动创建），
-  控制台在 AstrBot 面板 → 插件 → FishTool → 视图中使用。数据保存在 data/plugin_data/astrbot_plugin_fishtool/。
+  想要虚拟秘书吗？让你的bot成为生产力！为B站视频创作而生，让你一人拥有企业级新媒体运营工作流。 覆盖【选题 → 热点追踪 → 舆情监控 → 竞品调研 → 账号自诊 → 真人筛选】的完整运营链路。 
+  让运营不再成为企业特权，让工具回归普惠本真。 适用于新媒体|社区|内容|用户|产品|直播|营销策划等多种运营场景。 
+  控制台在 AstrBot 面板 → 插件 → FishTool → 视图中使用。
 version: 0.1.0
 author: FORK-is-coding
 repo: https://github.com/FORK-is-coding/astrbot_plugin_FishTool
