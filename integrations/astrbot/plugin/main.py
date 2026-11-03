@@ -97,6 +97,7 @@ class FishToolPlugin(Star):
             py = await ensure_engine_env(
                 self.layout,
                 PLUGIN_DIR,
+                logger,
                 str(self.ecfg.get("python") or ""),
                 str(self.ecfg.get("pip_index_url") or ""),
                 on_progress=self._set_progress,
