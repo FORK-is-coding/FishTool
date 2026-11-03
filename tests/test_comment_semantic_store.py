@@ -20,6 +20,7 @@ from core.database import (
     Comment,
     DatabaseManager,
     Video,
+    SemanticAudit,
     SemanticGroupMember,
     SemanticPreference,
     SemanticProtection,
@@ -765,6 +766,128 @@ def test_decide_strips_bvid_whitespace(store):
     gid = pub["groups"][0]["group_id"]
     s.decide(f" {BVID} ", state["task_id"], "undo_group", 0, group_id=gid, request_key=uuid.uuid4().hex)
     assert [r[0] for r in _pref_rows(m)] == [BVID]
+
+
+@pytest.mark.parametrize("action", ["split_member", "allow_member"])
+def test_member_decision_rejects_task_of_other_video(store, action):
+    """split_member/allow_member 必须校验任务属于请求里的视频，不能把保护/审计/修订写到别的视频。"""
+    s, m = store
+    state, snap = running_task_with_two_equiv(s, m)  # 任务属于 BVID
+    s.publish_groups(state["task_id"], state["revision"], [equiv_group(snap, [100, 101])])
+    other = "BV1otherVideo"
+    seed_video(m, bvid=other)
+    with pytest.raises(SemanticValidationError):
+        s.decide(other, state["task_id"], action, 0, rpid="100", request_key=uuid.uuid4().hex)
+    session = m.get_session()
+    try:
+        assert session.query(SemanticPreference).count() == 0
+        assert session.query(SemanticProtection).count() == 0
+        assert session.query(SemanticAudit).count() == 0
+    finally:
+        session.close()
+
+
+# ---------------------------------------------------------------------------
+# 并发首写：偏好行「先查后插」的竞态窗口
+# ---------------------------------------------------------------------------
+
+def _race_before_first_add(store_obj, model_cls, competitor):
+    """在 store 第一次 add(model_cls 实例) 之前执行 competitor，确定性地复现并发窗口。
+
+    competitor 应在另一条独立连接上提交写入（模拟另一个进程），这样本会话查完
+    「无行」之后、自己插入之前，对方已经落库——正是线上撞 UNIQUE 的时序。
+    返回列表在窗口被命中后含一个 True，用于断言测试确实走到了竞态路径。
+    """
+    real_factory = store_obj._session_factory
+    fired = []
+
+    def factory():
+        session = real_factory()
+        real_add = session.add
+
+        def add(obj, *args, **kwargs):
+            if isinstance(obj, model_cls) and not fired:
+                fired.append(True)
+                competitor()
+            return real_add(obj, *args, **kwargs)
+
+        session.add = add
+        return session
+
+    store_obj._session_factory = factory
+    return fired
+
+
+@pytest.fixture()
+def rival(tmp_path):
+    """与 store fixture 同库、但走独立连接的第二个 store（模拟另一个进程）。"""
+    manager = DatabaseManager(str(tmp_path / "semantic.db"))
+    yield SemanticStore(session_factory=manager.get_session)
+    manager.engine.dispose()
+
+
+def test_set_preference_concurrent_first_insert_retries(store, rival):
+    """对方抢先建行（仍是 rev0）：本方重做后按 CAS 正常写入，不再冒出 IntegrityError。"""
+    s, m = store
+    vid = seed_video(m)
+    fired = _race_before_first_add(
+        s, SemanticPreference, lambda: rival.set_preference(BVID, 0, auto_fold=True))
+    pref = s.set_preference(BVID, 0, auto_fold=False)
+    assert fired == [True]
+    assert pref["auto_fold"] is False and pref["revision"] == 1
+    assert _pref_rows(m) == [(BVID, vid)]
+
+
+def test_set_preference_concurrent_first_insert_conflict_when_advanced(store, rival):
+    """对方抢先建行并已推进修订：本方拿 rev0 重做得到 409 语义的冲突，而不是 500。"""
+    s, m = store
+    seed_video(m)
+
+    def advance():
+        rival.set_preference(BVID, 0, auto_fold=True)
+        rival.set_preference(BVID, 0, auto_fold=False)  # rev0 -> rev1
+
+    fired = _race_before_first_add(s, SemanticPreference, advance)
+    with pytest.raises(SemanticConflict):
+        s.set_preference(BVID, 0, auto_fold=True)
+    assert fired == [True]
+    assert s.preference(BVID)["revision"] == 1
+
+
+def test_decide_concurrent_first_pref_row_retries(store, rival):
+    """decide 首次建偏好行时被对方抢先：重做后基于已存在的行完成决策。"""
+    s, m = store
+    state, snap = running_task_with_two_equiv(s, m)
+    s.publish_groups(state["task_id"], state["revision"], [equiv_group(snap, [100, 101])])
+    fired = _race_before_first_add(
+        s, SemanticPreference, lambda: rival.set_preference(BVID, 0, auto_fold=False))
+    dec = s.decide(BVID, state["task_id"], "split_member", 0, rpid="100",
+                   request_key=uuid.uuid4().hex)
+    assert fired == [True]
+    assert dec["revision"] == 1 and dec["idempotent"] is False
+    assert dec["preference"]["auto_fold"] is False  # 保留了对方写入的偏好
+    assert len(_pref_rows(m)) == 1
+
+
+def test_decide_concurrent_same_request_key_is_idempotent(store, rival):
+    """同一 request_key 并发提交（双击/重试）：后到的一方重做时命中审计，按幂等返回。"""
+    s, m = store
+    state, snap = running_task_with_two_equiv(s, m)
+    s.publish_groups(state["task_id"], state["revision"], [equiv_group(snap, [100, 101])])
+    s.set_preference(BVID, 0, auto_fold=True)  # 偏好行已存在，只剩审计/保护会撞约束
+    rk = uuid.uuid4().hex
+    fired = _race_before_first_add(
+        s, SemanticAudit,
+        lambda: rival.decide(BVID, state["task_id"], "split_member", 0, rpid="100", request_key=rk))
+    dec = s.decide(BVID, state["task_id"], "split_member", 0, rpid="100", request_key=rk)
+    assert fired == [True]
+    assert dec["idempotent"] is True and dec["revision"] == 1
+    session = m.get_session()
+    try:
+        assert session.query(SemanticAudit).count() == 1
+        assert session.query(SemanticProtection).filter_by(bvid=BVID, rpid="100").count() == 1
+    finally:
+        session.close()
 
 
 def test_protection_survives_regroup_new_task(store):

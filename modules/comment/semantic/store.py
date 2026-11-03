@@ -387,55 +387,95 @@ class SemanticStore:
             SemanticValidationError: bvid 为空白。
         """
         bvid = normalize_bvid(bvid, strict=False)
-        session = self._session()
-        try:
-            video = self._require_video(session, bvid)
-            pref = session.query(SemanticPreference).filter_by(bvid=bvid).first()
-            if pref is None:
-                if int(expected_revision) != 0:
-                    raise SemanticConflict("偏好修订冲突：期望 0（首次创建）")
-                pref = SemanticPreference(
-                    bvid=bvid,
-                    video_id=video.id,
-                    auto_fold=True if auto_fold is None else bool(auto_fold),
-                    revision=0,
-                    consent_version=consent_version,
-                    model_identity=model_identity,
-                )
-                session.add(pref)
-                session.commit()
-                return self._pref_dto(pref)
+        return self._retry_first_insert(
+            lambda session: self._set_preference_tx(
+                session, bvid, expected_revision, auto_fold, consent_version, model_identity
+            )
+        )
 
-            if int(pref.revision) != int(expected_revision):
-                raise SemanticConflict(
-                    f"偏好修订冲突：期望 {expected_revision}，实际 {pref.revision}"
-                )
-            changed = False
-            if auto_fold is not None and bool(pref.auto_fold) != bool(auto_fold):
-                pref.auto_fold = bool(auto_fold)
-                changed = True
-            if consent_version is not None and pref.consent_version != consent_version:
-                pref.consent_version = consent_version
-                changed = True
-            if model_identity is not None and pref.model_identity != model_identity:
-                pref.model_identity = model_identity
-                changed = True
-            if changed:
-                pref.revision = int(pref.revision) + 1
-            if pref.video_id is None:
-                # 修复前写入的行可能 video_id 为 NULL：视频已存在时顺手回填。
-                # 只是关联修复，不算用户可见变更，不涨 revision。
-                pref.video_id = video.id
+    def _retry_first_insert(self, tx: Callable[[Any], Dict[str, Any]]) -> Dict[str, Any]:
+        """在新会话里执行 ``tx``；首次插入被并发抢先时重做一次。
+
+        偏好行是「先查后插」：两个连接同时首次写同一视频，都查到无行、都去插入，
+        后提交的一方撞 ``UNIQUE(bvid)`` 抛 IntegrityError（原先直接冒成 500）。
+        回滚后用新会话重做：此时行已存在，按既有 CAS 规则处理——客户端拿 rev0 来写
+        已被对方推进的行会得到 SemanticConflict（409），未推进则正常写入。只重做一次：
+        第二次不会再走插入分支，再撞约束说明是别的完整性问题，原样上抛。
+
+        Args:
+            tx: 接收 session、在其中完成读写并 commit 的事务体。
+
+        Returns:
+            tx 的返回值。
+
+        Raises:
+            SemanticError: tx 抛出的语义异常。
+            IntegrityError: 重做后仍违反约束。
+        """
+        for attempt in range(2):
+            session = self._session()
+            try:
+                return tx(session)
+            except IntegrityError:
+                session.rollback()
+                if attempt:
+                    raise
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    def _set_preference_tx(
+        self,
+        session,
+        bvid: str,
+        expected_revision: int,
+        auto_fold: Optional[bool],
+        consent_version: Optional[str],
+        model_identity: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """set_preference 的事务体（由 _retry_first_insert 负责会话、回滚与重做）。"""
+        video = self._require_video(session, bvid)
+        pref = session.query(SemanticPreference).filter_by(bvid=bvid).first()
+        if pref is None:
+            if int(expected_revision) != 0:
+                raise SemanticConflict("偏好修订冲突：期望 0（首次创建）")
+            pref = SemanticPreference(
+                bvid=bvid,
+                video_id=video.id,
+                auto_fold=True if auto_fold is None else bool(auto_fold),
+                revision=0,
+                consent_version=consent_version,
+                model_identity=model_identity,
+            )
+            session.add(pref)
             session.commit()
             return self._pref_dto(pref)
-        except SemanticError:
-            session.rollback()
-            raise
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
+
+        if int(pref.revision) != int(expected_revision):
+            raise SemanticConflict(
+                f"偏好修订冲突：期望 {expected_revision}，实际 {pref.revision}"
+            )
+        changed = False
+        if auto_fold is not None and bool(pref.auto_fold) != bool(auto_fold):
+            pref.auto_fold = bool(auto_fold)
+            changed = True
+        if consent_version is not None and pref.consent_version != consent_version:
+            pref.consent_version = consent_version
+            changed = True
+        if model_identity is not None and pref.model_identity != model_identity:
+            pref.model_identity = model_identity
+            changed = True
+        if changed:
+            pref.revision = int(pref.revision) + 1
+        if pref.video_id is None:
+            # 修复前写入的行可能 video_id 为 NULL：视频已存在时顺手回填。
+            # 只是关联修复，不算用户可见变更，不涨 revision。
+            pref.video_id = video.id
+        session.commit()
+        return self._pref_dto(pref)
 
     # ------------------------------------------------------------------
     # 任务状态 DTO
@@ -1361,92 +1401,104 @@ class SemanticStore:
         if not request_key:
             raise SemanticValidationError("request_key 不能为空")
         bvid = normalize_bvid(bvid, strict=False)
-        session = self._session()
-        try:
-            # 幂等：命中既有审计直接返回。
-            prior = (
-                session.query(SemanticAudit)
-                .filter_by(bvid=bvid, request_key=request_key)
+        return self._retry_first_insert(
+            lambda session: self._decide_tx(
+                session, bvid, task_id, action, expected_revision, group_id, rpid, request_key
+            )
+        )
+
+    def _decide_tx(
+        self,
+        session,
+        bvid: str,
+        task_id: int,
+        action: str,
+        expected_revision: int,
+        group_id: Optional[str],
+        rpid: Optional[str],
+        request_key: str,
+    ) -> Dict[str, Any]:
+        """decide 的事务体（由 _retry_first_insert 负责会话、回滚与重做）。
+
+        重做时：并发方若用同一 request_key 已写入审计，命中幂等分支原样返回；
+        否则按已存在的偏好行做 CAS。
+        """
+        # 幂等：命中既有审计直接返回。
+        prior = (
+            session.query(SemanticAudit)
+            .filter_by(bvid=bvid, request_key=request_key)
+            .first()
+        )
+        if prior is not None:
+            return {
+                "revision": prior.revision_after,
+                "preference": self._stored_preference(session, bvid),
+                "action": prior.action,
+                "affected_rpids": (prior.detail or {}).get("affected_rpids", []),
+                "idempotent": True,
+            }
+
+        # 解析受影响 rpid 集合并校验范围/任务归属。
+        affected = self._resolve_decision_targets(
+            session, bvid, task_id, action, group_id, rpid
+        )
+
+        # CAS 偏好修订。
+        pref = session.query(SemanticPreference).filter_by(bvid=bvid).first()
+        if pref is None:
+            if int(expected_revision) != 0:
+                raise SemanticConflict("偏好修订冲突：期望 0（首次创建）")
+            pref = SemanticPreference(
+                bvid=bvid,
+                video_id=self._require_video(session, bvid).id,
+                auto_fold=True,
+                revision=0,
+            )
+            session.add(pref)
+            session.flush()
+        if int(pref.revision) != int(expected_revision):
+            raise SemanticConflict(
+                f"偏好修订冲突：期望 {expected_revision}，实际 {pref.revision}"
+            )
+        rev_before = int(pref.revision)
+
+        protect = action in ("undo_group", "split_member")
+        for target in affected:
+            row = (
+                session.query(SemanticProtection)
+                .filter_by(bvid=bvid, rpid=target)
                 .first()
             )
-            if prior is not None:
-                return {
-                    "revision": prior.revision_after,
-                    "preference": self._stored_preference(session, bvid),
-                    "action": prior.action,
-                    "affected_rpids": (prior.detail or {}).get("affected_rpids", []),
-                    "idempotent": True,
-                }
-
-            # 解析受影响 rpid 集合并校验范围/任务归属。
-            affected = self._resolve_decision_targets(
-                session, bvid, task_id, action, group_id, rpid
-            )
-
-            # CAS 偏好修订。
-            pref = session.query(SemanticPreference).filter_by(bvid=bvid).first()
-            if pref is None:
-                if int(expected_revision) != 0:
-                    raise SemanticConflict("偏好修订冲突：期望 0（首次创建）")
-                pref = SemanticPreference(
-                    bvid=bvid,
-                    video_id=self._require_video(session, bvid).id,
-                    auto_fold=True,
-                    revision=0,
-                )
-                session.add(pref)
-                session.flush()
-            if int(pref.revision) != int(expected_revision):
-                raise SemanticConflict(
-                    f"偏好修订冲突：期望 {expected_revision}，实际 {pref.revision}"
-                )
-            rev_before = int(pref.revision)
-
-            protect = action in ("undo_group", "split_member")
-            for target in affected:
-                row = (
-                    session.query(SemanticProtection)
-                    .filter_by(bvid=bvid, rpid=target)
-                    .first()
-                )
-                if protect:
-                    if row is None:
-                        session.add(SemanticProtection(
-                            bvid=bvid, rpid=target, keep_separate=True,
-                            source=action, revision=rev_before,
-                        ))
-                    else:
-                        row.keep_separate = True
-                        row.source = action
-                        row.revision = rev_before
+            if protect:
+                if row is None:
+                    session.add(SemanticProtection(
+                        bvid=bvid, rpid=target, keep_separate=True,
+                        source=action, revision=rev_before,
+                    ))
                 else:
-                    if row is not None:
-                        row.keep_separate = False
-                        row.revision = rev_before
+                    row.keep_separate = True
+                    row.source = action
+                    row.revision = rev_before
+            else:
+                if row is not None:
+                    row.keep_separate = False
+                    row.revision = rev_before
 
-            pref.revision = rev_before + 1
-            session.add(SemanticAudit(
-                bvid=bvid, task_id=task_id, action=action, group_id=group_id,
-                rpid=rpid, request_key=request_key,
-                revision_before=rev_before, revision_after=pref.revision,
-                detail={"affected_rpids": affected},
-            ))
-            session.commit()
-            return {
-                "revision": pref.revision,
-                "preference": self._pref_dto(pref),
-                "action": action,
-                "affected_rpids": affected,
-                "idempotent": False,
-            }
-        except SemanticError:
-            session.rollback()
-            raise
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
+        pref.revision = rev_before + 1
+        session.add(SemanticAudit(
+            bvid=bvid, task_id=task_id, action=action, group_id=group_id,
+            rpid=rpid, request_key=request_key,
+            revision_before=rev_before, revision_after=pref.revision,
+            detail={"affected_rpids": affected},
+        ))
+        session.commit()
+        return {
+            "revision": pref.revision,
+            "preference": self._pref_dto(pref),
+            "action": action,
+            "affected_rpids": affected,
+            "idempotent": False,
+        }
 
     @staticmethod
     def _resolve_decision_targets(
@@ -1473,10 +1525,12 @@ class SemanticStore:
         # split_member / allow_member
         if not rpid:
             raise SemanticValidationError("该操作需要 rpid")
-        # 校验该 rpid 确属于本任务某个已发布组（防止错域引用）。
+        # 校验该 rpid 确属于本任务、本视频的某个已发布组（防止错域引用）。
+        # 必须带 bvid：只按 task_id+rpid 查时，task 属于视频 B、请求写视频 A 也能命中，
+        # 保护/审计/修订就会落到视频 A 名下（与 undo_group/allow_group 的组查询口径对齐）。
         member = (
             session.query(SemanticGroupMember)
-            .filter_by(task_id=task_id, rpid=str(rpid))
+            .filter_by(task_id=task_id, rpid=str(rpid), bvid=bvid)
             .first()
         )
         if member is None:
