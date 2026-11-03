@@ -1,3 +1,6 @@
+# -*- coding: utf-8 -*-
+# Keep the line above first: pip < 25.0 decodes requirements files with the locale
+# encoding (GBK on Chinese Windows) unless a coding line appears in the first two lines.
 # 网络请求
 aiohttp==3.9.1
 # 加密

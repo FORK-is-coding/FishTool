@@ -53,6 +53,10 @@ jobs:
       - name: Adapter tests
         env:
           FISHTOOL_BASE_REF: origin/main
+          # test_main_untouched 只守护适配分支（分支名含 astrbot）不改主线文件。
+          # 主线 PR 只是因为碰到 integrations/astrbot/** 才触发本 workflow，跳过这条守卫，
+          # 否则它必然失败，并让后面的 FishTool regression 步骤一起被跳过。
+          FISHTOOL_SKIP_UNTOUCHED: ${{ (github.event_name == 'pull_request' && !contains(github.head_ref, 'astrbot')) && '1' || '' }}
         run: pytest integrations/astrbot/tests -q
       - name: Exception policy (main-line rule applies to integrations/)
         run: python tools/check_exception_handling.py
