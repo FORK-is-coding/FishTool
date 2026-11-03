@@ -10,15 +10,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import logging
 import os
 import shutil
 import sys
 from pathlib import Path
 
 from .constants import ENGINE_REQ_NAME, SUPPORTED_ENGINE_PYTHON
-
-_log = logging.getLogger("astrbot")
 
 
 class EngineEnvError(RuntimeError):
@@ -79,22 +76,25 @@ def requirements_digest(req: Path) -> str:
     return hashlib.sha256(req.read_bytes()).hexdigest()
 
 
-def _read_lock(path: Path) -> dict:
+def _read_lock(path: Path, logger) -> dict:
     if not path.is_file():
         return {}
     try:
         return json.loads(path.read_text("utf-8"))
     except (OSError, ValueError) as exc:
-        _log.warning("[fishtool] venv.lock.json 无法读取，将重新安装依赖: %s", exc)
+        logger.warning(f"[fishtool] venv.lock.json 无法读取，将重新安装依赖: {exc}")
         return {}
 
 
-async def ensure_engine_env(layout, plugin_dir: Path, base_python: str = "", index_url: str = "", on_progress=None) -> Path:
+async def ensure_engine_env(
+    layout, plugin_dir: Path, logger, base_python: str = "", index_url: str = "", on_progress=None
+) -> Path:
     """创建/复用引擎 venv；requirements 内容哈希不变则跳过安装。
 
     Args:
         layout: DataLayout。
         plugin_dir: 插件目录（含 engine_requirements.txt）。
+        logger: 调用方传入的 ``astrbot.api.logger``（插件规范禁止自建 logging）。
         base_python: 用来创建 venv 的解释器；空 = AstrBot 当前解释器。
         index_url: pip 镜像地址。
         on_progress: 可选回调 ``(message: str) -> None``，用于面板显示进度。
@@ -103,7 +103,7 @@ async def ensure_engine_env(layout, plugin_dir: Path, base_python: str = "", ind
         Path: venv 内 python 路径。
     """
     def progress(msg: str) -> None:
-        _log.info("[fishtool] %s", msg)
+        logger.info(f"[fishtool] {msg}")
         if on_progress:
             on_progress(msg)
 
@@ -111,7 +111,7 @@ async def ensure_engine_env(layout, plugin_dir: Path, base_python: str = "", ind
     if not req.is_file():
         raise EngineEnvError(f"缺少 {ENGINE_REQ_NAME}，插件包不完整")
     digest = requirements_digest(req)
-    lock = _read_lock(layout.venv_lock)
+    lock = _read_lock(layout.venv_lock, logger)
     py = layout.venv_python
     base = (base_python or "").strip() or sys.executable
     if py.exists() and lock.get("req_sha256") == digest and (not base_python or lock.get("base") == base):
