@@ -1262,3 +1262,210 @@ def test_real_store_cross_budget_after_settled_retry_ends_partial_not_running(mo
     assert final["budget"]["attempt_count"] == 3
     assert final["budget"]["in_flight"] is None
 
+
+# ==========================================================================
+# PR 0c：跨批阶段轮内停止后续跑不重复付费
+# ==========================================================================
+def test_cross_resume_mid_round_skips_reviewed_windows():
+    """跨批第 3 个窗口预算停下,续跑同一轮时前 2 个已复核窗口不再调用、不再计数。
+
+    原实现 checkpoint 只在每轮结束时写,续跑会把这一轮从头重跑:已复核窗口原样重新
+    计费,windows_attempted 也被重复累加。
+    """
+    import modules.comment.semantic.service as mod
+
+    cross_calls: List[tuple] = []
+    state = {"stop_at": 3}
+
+    def handler(items, title, phase, omit):
+        if phase == PHASE_CROSS:
+            cross_calls.append(tuple(i["id"] for i in items))
+            if state["stop_at"] and len(cross_calls) == state["stop_at"]:
+                raise SemanticBudgetExceeded("模拟预算耗尽", scope="task")
+        return _empty()
+
+    store = FakeStore(_snapshot(12), max_attempts=10000,
+                      task_budget=10 ** 9, daily_budget=10 ** 9)
+    service = _service(store, FakeProvider(handler=handler))
+    old = mod.BATCH_SIZE
+    mod.BATCH_SIZE = 2  # 12 条 -> 6 批;cross 每窗 2 个候选
+    try:
+        async def scenario():
+            await service.start("BV1", 200, CONSENT_VERSION, "rk-0c-1")
+            await _drain(service)
+            first = list(cross_calls)
+            stopped = service.status("t1")
+            state["stop_at"] = None
+            await service.resume("t1", stopped["revision"], acknowledge_unknown=True)
+            await _drain(service)
+            return first, cross_calls[len(first):], stopped, service.status("t1")
+
+        first, after, stopped, final = run(scenario())
+    finally:
+        mod.BATCH_SIZE = old
+
+    assert stopped["status"] == "partial"
+    assert stopped["coverage"]["reason"] == "budget"  # 不被逐窗口进度覆盖成 cross_pairs_unvisited
+    reviewed_before_stop = first[:2]  # 第 3 个窗口抛预算,未完成
+    assert not any(w in reviewed_before_stop for w in after)
+    assert first[2] in after  # 未完成的窗口续跑时补上
+    cp = store._task["checkpoint"]["cross"]
+    assert "plan" not in cp  # 轮全部完成后清掉轮内计划
+    # windows_attempted 数的是开始处理的窗口:2(完成)+1(停下)+续跑补做的。本用例由 provider
+    # 内抛预算异常,3 次都真的发出;若是 reserve 超限停下,那 1 次并未发出(计数口径沿用原实现)。
+    assert final["coverage"]["windows_attempted"] == len(first) + len(after)
+
+
+def test_cross_resume_after_round_does_not_resurrect_merged_singletons(monkeypatch):
+    """第 1 轮把单条并进组后中断,续跑第 2 轮不能把已并入的单条当成独立候选再比较。
+
+    原实现续跑时从 phase1 结果重建 singletons,而 working 已含合并后的组:
+    同一 id 同时以组成员和单条身份出现,重复送模型比较(重复收费),还可能二次合并。
+    """
+    import modules.comment.semantic.service as mod
+
+    seen_cross: List[List[str]] = []
+
+    def handler(items, title, phase, omit):
+        ids = [i["id"] for i in items]
+        if phase == PHASE_CROSS:
+            is_verify = any(i.get("members") is None for i in items)
+            if is_verify:
+                return _eg(ids[0], ids)  # 复核:全部成员确为一组
+            seen_cross.append(ids)
+            if "c0" in ids and "c1" in ids:
+                return _eg("c0", ["c0", "c1"])  # 第 1 轮提议把 c0、c1 合并
+        return _empty()
+
+    store = FakeStore(_snapshot(6), max_attempts=10000, task_budget=10 ** 9, daily_budget=10 ** 9)
+    service = _service(store, FakeProvider(handler=handler))
+    orig = mod.SemanticService._persist_cross
+    stopped = {"done": False}
+
+    import inspect
+
+    signature = inspect.signature(orig)
+
+    def persist_then_stop(self, *args, **kwargs):
+        rev = orig(self, *args, **kwargs)
+        # 按参数名取 coverage,不依赖 _persist_cross 的参数位置。
+        coverage = signature.bind(self, *args, **kwargs).arguments["coverage"]
+        if coverage.get("rounds_done") == 1 and not stopped["done"]:
+            stopped["done"] = True
+            raise SemanticBudgetExceeded("第 1 轮结束后停下", scope="task")
+        return rev
+
+    monkeypatch.setattr(mod.SemanticService, "_persist_cross", persist_then_stop)
+    monkeypatch.setattr(mod, "BATCH_SIZE", 2)  # 6 条 -> 3 批 -> 进入 cross,窗口 2 个候选
+
+    async def scenario():
+        await service.start("BV1", 200, CONSENT_VERSION, "rk-0c-2")
+        await _drain(service)
+        before = len(seen_cross)
+        cur = service.status("t1")
+        await service.resume("t1", cur["revision"], acknowledge_unknown=True)
+        await _drain(service)
+        return seen_cross[before:]
+
+    after = run(scenario())
+    # 续跑后的每个窗口里,c1(已并入 c0 组)不能作为独立候选出现
+    assert after, "续跑应当执行第 2 轮"
+    assert all("c1" not in window for window in after)
+    groups = store.status_groups()
+    members = [m for g in groups for m in g["member_ids"]]
+    assert len(members) == len(set(members))
+    assert any(set(g["member_ids"]) == {"c0", "c1"} for g in groups)
+
+
+def test_cross_resume_mid_verify_does_not_regroup_window(monkeypatch):
+    """窗口的分组调用成功、合并复核做到一半停下：续跑只复核剩下的提议，不再为这个窗口付分组调用。
+
+    审查发现：只按“窗口是否完成”记进度时，复核途中停下会让整窗重做；而前面提议的合并
+    已改写了候选，重做的窗口是另一组候选，既重复收费，模型还可能给出不同结果。
+    """
+    import modules.comment.semantic.service as mod
+
+    grouping_calls: List[List[str]] = []
+    verify_calls: List[List[str]] = []
+    state = {"stop_on_verify": 2}
+
+    def handler(items, title, phase, omit):
+        ids = [i["id"] for i in items]
+        if phase != PHASE_CROSS:
+            return _empty()
+        if any(i.get("members") is None for i in items):
+            verify_calls.append(ids)
+            if state["stop_on_verify"] and len(verify_calls) == state["stop_on_verify"]:
+                raise SemanticBudgetExceeded("第二个提议复核时停下", scope="task")
+            return _eg(ids[0], ids)
+        grouping_calls.append(ids)
+        # 一个窗口里给出两个互不相交的合并提议
+        if {"c0", "c1", "c2", "c3"} <= set(ids):
+            return {"data": {"equivalent_groups": [
+                        {"representative_id": "c0", "member_ids": ["c0", "c1"],
+                         "reason": "r", "aspect": "a", "stance": "s"},
+                        {"representative_id": "c2", "member_ids": ["c2", "c3"],
+                         "reason": "r", "aspect": "a", "stance": "s"}],
+                     "related_groups": [], "uncertain_ids": []},
+                    "usage_tokens": 5, "usage_estimated": False}
+        return _empty()
+
+    store = FakeStore(_snapshot(4), max_attempts=10000, task_budget=10 ** 9, daily_budget=10 ** 9)
+    service = _service(store, FakeProvider(handler=handler))
+    # 4 条 -> 2 批进入 cross；cross 窗口放得下 4 个候选，第一个窗口里出现两个提议
+    monkeypatch.setattr(mod, "BATCH_SIZE", 2)
+    monkeypatch.setattr(mod, "_chunk_items",
+                        lambda items, title, phase: [items[i:i + 2] for i in range(0, len(items), 2)]
+                        if phase == PHASE_BATCH else [items])
+
+    async def scenario():
+        await service.start("BV1", 200, CONSENT_VERSION, "rk-0c-4")
+        await _drain(service)
+        first = (len(grouping_calls), len(verify_calls), service.status("t1")["status"])
+        state["stop_on_verify"] = None
+        cur = service.status("t1")
+        await service.resume("t1", cur["revision"], acknowledge_unknown=True)
+        await _drain(service)
+        return first
+
+    first_grouping, first_verify, first_status = run(scenario())
+    assert first_status == "partial"
+    assert first_grouping == 1 and first_verify == 2
+    # 续跑：被打断的窗口不再做分组调用，只复核剩下的 c2/c3。
+    # 测试只切出一个窗口（max_rounds == 1），没有第 2 轮，所以续跑后不应有任何分组调用。
+    resumed_grouping = grouping_calls[first_grouping:]
+    resumed_verify = verify_calls[first_verify:]
+    assert resumed_grouping == []
+    assert resumed_verify == [["c2", "c3"]]
+    groups = store.status_groups()
+    assert {frozenset(g["member_ids"]) for g in groups} == {frozenset({"c0", "c1"}), frozenset({"c2", "c3"})}
+
+
+def test_cross_checkpoint_from_older_version_still_resumes_by_round():
+    """旧版 checkpoint(没有 singletons/plan 字段)续跑时按原有轮粒度继续,不报错。"""
+    snap = _snapshot(4)
+    store = FakeStore(snap, max_attempts=200)
+    service = _service(store, FakeProvider())
+    store.create_task(snap, IDENTITY, {}, "rk-0c-3")
+    store.force(status="interrupted", checkpoint={
+        "phase1": {"batches": {
+            "0": {"ids": ["c0", "c1"], "status": "done", "equivalent_groups": [],
+                  "related_groups": [], "degraded": False},
+            "1": {"ids": ["c2", "c3"], "status": "done", "equivalent_groups": [],
+                  "related_groups": [], "degraded": False}}, "total": 2},
+        "cross": {"rounds_done": 0, "working": [], "coverage": {}, "reviewed_pairs": []},
+    })
+    import modules.comment.semantic.service as mod
+    old = mod.BATCH_SIZE
+    mod.BATCH_SIZE = 2
+    try:
+        async def scenario():
+            await service.resume("t1", store._task["revision"], acknowledge_unknown=True)
+            await _drain(service)
+            return service.status("t1")
+
+        final = run(scenario())
+    finally:
+        mod.BATCH_SIZE = old
+    assert final["status"] in ("completed", "partial")
+    assert final["phase"] == "done"
