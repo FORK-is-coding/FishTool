@@ -1064,8 +1064,82 @@ def test_recover_and_resume_requires_ack(store):
         s.resume_task(state["task_id"], cur["revision"], acknowledge_unknown=False)
     resumed = s.resume_task(state["task_id"], cur["revision"], acknowledge_unknown=True)
     assert resumed["status"] == "queued"
-    # 既有计费保留
-    assert resumed["budget"]["reserved_tokens"] >= 100
+    # 结果未知的请求可能已计费：按预约估算计入已用量（不退款），预约同时回收。
+    budget = resumed["budget"]
+    assert budget["in_flight"] is None
+    assert budget["settled_tokens"] == 100
+    assert budget["reserved_tokens"] == 0
+    assert budget["daily_settled"] == 100
+    assert budget["daily_reserved"] == 0
+    assert resumed["coverage"]["last_settlement_estimated"] is True
+
+
+def test_resume_releases_leaked_reservation_from_failed_task(store):
+    """失败任务残留的在飞记录（无 outcome_unknown，旧版异常路径漏结算）续跑时也要结算。
+
+    原实现只清 outcome_unknown 的记录：这种残留会让续跑后的第一次 reserve 抛
+    “已有在飞请求”，任务卡在 running；预约也一直占着当日预算。
+    """
+    s, m = store
+    state, _ = new_task(s, m)
+    r = s.update_task(state["task_id"], 0, status="running")
+    rv = s.reserve_attempt(state["task_id"], r["revision"], 250)
+    f = s.update_task(state["task_id"], rv["revision"], status="failed")
+    assert f["budget"]["in_flight"] is not None
+
+    resumed = s.resume_task(state["task_id"], f["revision"])
+
+    assert resumed["status"] == "queued"
+    assert resumed["budget"]["in_flight"] is None
+    assert resumed["budget"]["reserved_tokens"] == 0
+    assert resumed["budget"]["settled_tokens"] == 250
+    assert resumed["budget"]["daily_reserved"] == 0
+    # 续跑后能正常预约下一次请求
+    nxt = s.update_task(state["task_id"], resumed["revision"], status="running")
+    again = s.reserve_attempt(state["task_id"], nxt["revision"], 10)
+    assert again["budget"]["in_flight"]["estimated_tokens"] == 10
+
+
+def test_resume_settles_reservation_on_its_own_reserve_date(store, monkeypatch):
+    """跨午夜续跑：残留预约按预约所属日回收与入账，不碰续跑当日的行。"""
+    import modules.comment.semantic.store as store_mod
+
+    s, m = store
+    state, _ = new_task(s, m)
+    r = s.update_task(state["task_id"], 0, status="running")
+    monkeypatch.setattr(store_mod, "_today", lambda: "2031-01-01")
+    s.reserve_attempt(state["task_id"], r["revision"], 300)
+    s.recover_interrupted()
+    cur = s.get_task(state["task_id"])
+
+    monkeypatch.setattr(store_mod, "_today", lambda: "2031-01-02")
+    s.resume_task(state["task_id"], cur["revision"], acknowledge_unknown=True)
+
+    from core.database import SemanticDailyUsage
+    session = m.get_session()
+    try:
+        rows = {row.date: row for row in session.query(SemanticDailyUsage).all()}
+    finally:
+        session.close()
+    assert rows["2031-01-01"].reserved_tokens == 0
+    assert rows["2031-01-01"].settled_tokens == 300
+    assert "2031-01-02" not in rows
+
+
+def test_resume_without_inflight_keeps_ledger_unchanged(store):
+    """没有在飞记录时续跑不改台账。"""
+    s, m = store
+    state, _ = new_task(s, m)
+    r = s.update_task(state["task_id"], 0, status="running")
+    rv = s.reserve_attempt(state["task_id"], r["revision"], 40)
+    st = s.settle_attempt(state["task_id"], rv["revision"], 33)
+    f = s.update_task(state["task_id"], st["revision"], status="partial")
+
+    resumed = s.resume_task(state["task_id"], f["revision"])
+
+    assert resumed["budget"]["settled_tokens"] == 33
+    assert resumed["budget"]["reserved_tokens"] == 0
+    assert resumed["coverage"]["last_settlement_estimated"] is False
 
 
 def test_cancel_idempotent(store):
