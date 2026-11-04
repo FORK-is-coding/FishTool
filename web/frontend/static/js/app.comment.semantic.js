@@ -579,13 +579,9 @@
             html += ` · ${escapeHtml(String(Math.round(Math.min(1, ratio) * 100)))}%`;
         }
         html += '</div>';
-        // 跨批覆盖：service 输出 pairs_visited / pairs_unvisited（-1 表示未知）。
-        if (coverage.pairs_visited !== undefined || coverage.pairs_unvisited !== undefined) {
-            const visited = Number(coverage.pairs_visited) || 0;
-            const unvisited = Number(coverage.pairs_unvisited);
-            const totalText = Number.isFinite(unvisited) && unvisited >= 0
-                ? String(visited + unvisited) : '未知';
-            html += `<p class="semantic-coverage">跨批覆盖：${escapeHtml(String(visited))}/${escapeHtml(totalText)}`;
+        const coverageText = crossCoverageText(coverage);
+        if (coverageText) {
+            html += `<p class="semantic-coverage">跨批覆盖：${escapeHtml(coverageText)}`;
             if (coverage.oversize_skipped) html += ` · 超限跳过 ${escapeHtml(String(coverage.oversize_skipped))}`;
             if (coverage.partial) html += ' · 未完全覆盖';
             html += '</p>';
@@ -607,6 +603,37 @@
             html += `<p class="semantic-warn">错误：${text(errMsg)}</p>`;
         }
         area.innerHTML = html;
+    }
+
+    // 跨批覆盖的展示文本；没有可展示的内容时返回空串。
+    // 后端统一输出 total_pairs / pairs_reviewed / pairs_unvisited；旧版本落库的任务可能只有
+    // pairs_visited / pairs_unvisited（-1 表示未知），这里一并兼容。
+    function crossCoverageText(coverage) {
+        if (!coverage) return '';
+        const hasNew = coverage.pairs_reviewed !== undefined || coverage.total_pairs !== undefined;
+        const hasOld = coverage.pairs_visited !== undefined || coverage.pairs_unvisited !== undefined;
+        if (!hasNew && !hasOld) return '';
+        // 只有一批：批内已两两比较，永远不会进入跨批阶段，不显示这一行。
+        if (Number(coverage.batches) === 1) return '';
+        const reviewedRaw = hasNew ? coverage.pairs_reviewed : coverage.pairs_visited;
+        const reviewed = Number.isFinite(Number(reviewedRaw)) ? Number(reviewedRaw) : 0;
+        let total = Number(coverage.total_pairs);
+        if (!(coverage.total_pairs !== null && Number.isFinite(total) && total >= 0)) {
+            const unvisited = Number(coverage.pairs_unvisited);
+            total = coverage.pairs_unvisited !== null && Number.isFinite(unvisited) && unvisited >= 0
+                ? reviewed + unvisited : NaN;
+        }
+        if (total === 0 && reviewed === 0) {
+            // 旧版本落库的多批任务在批内阶段就停下时也写成 0/0：跨批并未开始。
+            if (!hasNew && Number(coverage.batches) > 1) return '未开始';
+            // 只有一批（或没有批次信息）：批内已两两比较，没有跨批对，不显示这一行。
+            return '';
+        }
+        if (!Number.isFinite(total)) {
+            // 批内阶段就停下，跨批比较还没开始，候选对总数未知。
+            return reviewed > 0 ? `${reviewed}/未知` : '未开始';
+        }
+        return `${reviewed}/${total}`;
     }
 
     const STATUS_LABELS = {

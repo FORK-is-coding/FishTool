@@ -753,6 +753,62 @@ def test_budget_exhaustion_publishes_partial():
 
 
 # ==========================================================================
+# 覆盖率键名：所有结束路径都输出同一套（前端只读这一套）
+# ==========================================================================
+_COVERAGE_KEYS = {"total_pairs", "pairs_reviewed", "pairs_unvisited",
+                  "windows_attempted", "windows_reviewed"}
+
+
+def test_coverage_keys_when_phase1_hits_budget():
+    """批内阶段就停下：跨批没开始，总数未知（None），不再输出旧键 pairs_visited/cross_windows。"""
+    store = FakeStore(_snapshot(4), max_attempts=1)
+    service = _service(store, FakeProvider(handler=lambda items, *a: _empty()))
+    _run_with_batch_size(service, store, 2)
+    cov = service.status("t1")["coverage"]
+    assert _COVERAGE_KEYS <= set(cov)
+    assert "pairs_visited" not in cov and "cross_windows" not in cov
+    assert cov["total_pairs"] is None and cov["pairs_unvisited"] is None
+    assert cov["pairs_reviewed"] == 0
+    assert cov["reason"] == "budget"
+
+
+def test_coverage_keys_for_single_batch():
+    """只有一批：没有跨批对，总数为 0，不算未覆盖。"""
+    store = FakeStore(_snapshot(2))
+    service = _service(store, FakeProvider(handler=lambda items, *a: _empty()))
+    _run_with_batch_size(service, store, 30)
+    final = service.status("t1")
+    cov = final["coverage"]
+    assert _COVERAGE_KEYS <= set(cov)
+    assert "pairs_visited" not in cov and "cross_windows" not in cov
+    assert cov["total_pairs"] == 0 and cov["pairs_reviewed"] == 0 and cov["pairs_unvisited"] == 0
+    assert final["status"] == "completed"
+
+
+def test_coverage_single_batch_budget_stop_has_no_cross_pairs():
+    """单批任务在批内阶段就撞预算：没有跨批对，总数为 0 而不是“未知”。"""
+    store = FakeStore(_snapshot(2), max_attempts=0)
+    service = _service(store, FakeProvider(handler=lambda items, *a: _empty()))
+    _run_with_batch_size(service, store, 30)
+    cov = service.status("t1")["coverage"]
+    assert cov["batches"] == 1
+    assert cov["total_pairs"] == 0 and cov["pairs_unvisited"] == 0
+    assert cov["reason"] == "budget"
+
+
+def test_coverage_keys_after_cross_phase():
+    """跑过跨批阶段：同一套键，且 pairs_reviewed + pairs_unvisited == total_pairs。"""
+    store = FakeStore(_snapshot(6), max_attempts=200)
+    service = _service(store, FakeProvider(handler=lambda items, *a: _empty()))
+    _run_with_batch_size(service, store, 2)
+    cov = service.status("t1")["coverage"]
+    assert _COVERAGE_KEYS <= set(cov)
+    assert "pairs_visited" not in cov and "cross_windows" not in cov
+    assert cov["total_pairs"] > 0
+    assert cov["pairs_reviewed"] + cov["pairs_unvisited"] == cov["total_pairs"]
+
+
+# ==========================================================================
 # 多批 -> 跨窗口未访问对如实标 partial（不谎称全量）
 # ==========================================================================
 def test_multiwindow_marks_partial_on_unvisited_pairs():
