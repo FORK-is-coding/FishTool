@@ -11,6 +11,7 @@ from pathlib import Path
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
+from astrbot.api.message_components import Node, Nodes, Plain
 from astrbot.api.star import Context, Star, StarTools
 from astrbot.api.web import error_response, file_response, json_response, request, stream_response
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
@@ -23,10 +24,11 @@ from .fishtool_adapter.errors import CommandError
 from .fishtool_adapter.events import EventRelay
 from .fishtool_adapter.exports import ExportStore, safe_filename
 from .fishtool_adapter.jobs import JobRunner
+from .fishtool_adapter.notifier import SEND_GAP_S, AlertNotifier
 from .fishtool_adapter.paths import DataLayout
 from .fishtool_adapter.proxy import EngineProxy, envelope
 from .fishtool_adapter.runtime_env import EngineEnvError, ensure_engine_env, remove_engine_env
-from .fishtool_adapter.subscriptions import SubscriptionStore
+from .fishtool_adapter.subscriptions import MAX_SUBSCRIPTIONS, SubscriptionStore
 from .fishtool_adapter.supervisor import EngineSupervisor
 
 # 视图资源带 X-Content-Type-Options: nosniff，MIME 由 mimetypes 判断；部分 Windows 注册表把 .js
@@ -68,6 +70,13 @@ class FishToolPlugin(Star):
         self.cmds = FishToolCommands(self.sup, self.client, self.ecfg, logger)
         self.gate = G.Gate(self.chat, is_subscribed=self.subs.contains)
         self.jobs = JobRunner(self._send_text, logger)
+        self.notifier = AlertNotifier(
+            self.chat,
+            sessions=self.subs.list,
+            send_batch=self._send_alert_batch,
+            fetch_unread=self.cmds.unread_alerts,
+            logger=logger,
+        )
 
         p = f"/{PLUGIN_NAME}"  # 路由必须带插件名前缀（plugin-pages.md）
         reg = context.register_web_api
@@ -85,6 +94,9 @@ class FishToolPlugin(Star):
 
     # ------------------------------------------------------------------ lifecycle
     async def initialize(self) -> None:
+        if self.chat["enable"]:
+            self.relay.on_alert.append(self.notifier.on_alert)
+            self.relay.on_connection.append(self.notifier.on_connection)
         self.relay.start()
         if self.ecfg.get("autostart", True):
             self._spawn_boot()
@@ -139,8 +151,9 @@ class FishToolPlugin(Star):
         self._closed = True
         self.proxy.closed = True
         await self._cancel_boot()
-        # 后台指令任务必须在关闭 HTTP client 之前取消，否则还在跑的任务会撞上已关闭的 client
+        # 后台指令任务与告警推送必须在关闭 HTTP client 之前取消，否则还在跑的任务会撞上已关闭的 client
         await self.jobs.close()
+        await self.notifier.close()
         await self.relay.stop()
         await self.sup.stop(final=True)
         await self.client.aclose()
@@ -279,6 +292,27 @@ class FishToolPlugin(Star):
             logger.warning(f"[fishtool] 推送到 {umo} 失败: {exc}")
             return False
 
+    async def _send_alert_batch(self, sessions: list[dict], alerts: list[dict], overflow: int) -> None:
+        """一批告警推给所有订阅会话。1 条发普通文本，多条发合并转发（每条一个节点）。"""
+        head = f"【FishTool 舆情告警】{len(alerts) + overflow} 条"
+        lines = [self.cmds.format_alert(alert) for alert in alerts]
+        if overflow:
+            lines.append(f"……另有 {overflow} 条，用 /fishtool 告警 查看")
+        for index, sub in enumerate(sessions):
+            if index:
+                await asyncio.sleep(SEND_GAP_S)
+            if len(lines) == 1:
+                chain = MessageChain().message(f"{head}\n{lines[0]}")
+            else:
+                uin = sub.get("self_id") or "0"
+                nodes = [Node(content=[Plain(head)], name="FishTool", uin=uin)]
+                nodes += [Node(content=[Plain(line)], name="FishTool", uin=uin) for line in lines]
+                chain = MessageChain([Nodes(nodes)])
+            try:
+                await self.context.send_message(sub["umo"], chain)
+            except Exception as exc:  # noqa: BLE001 - 某个会话失效不影响其他订阅
+                logger.warning(f"[fishtool] 告警推送到 {sub['umo']} 失败: {exc}")
+
     async def _safe(self, coro) -> str:
         """只把 CommandError 转成用户可读文字；其他异常交给调用方或框架兜底。"""
         try:
@@ -364,6 +398,45 @@ class FishToolPlugin(Star):
             yield event.plain_result(str(exc))
             return
         yield event.plain_result(await self._safe(self.cmds.resident_text(action, targets)))
+
+    @fishtool.command("订阅")
+    async def cmd_subscribe(self, event: AstrMessageEvent):
+        """把当前会话加入评论舆情告警推送名单（仅管理员）"""
+        gate = self._gate(event, "subscribe", G.ADMIN)
+        if gate == G.DENIED:
+            yield event.plain_result(self._denied_text(event))
+        if gate != G.OK:
+            return
+        try:
+            result = self.subs.add(event.unified_msg_origin, str(event.get_self_id() or ""))
+        except (OSError, ValueError) as exc:
+            logger.warning(f"[fishtool] 保存推送订阅失败: {exc}")
+            yield event.plain_result(f"订阅失败：{exc}")
+            return
+        if result == "full":
+            yield event.plain_result(f"订阅会话已达上限（{MAX_SUBSCRIPTIONS} 个），请先在其他会话 /fishtool 退订")
+            return
+        level = {"high": "高", "medium": "中及以上", "low": "全部"}[self.chat["notify_min_level"]]
+        verb = "已更新" if result == "updated" else "已订阅"
+        yield event.plain_result(
+            f"{verb}：本会话会收到评论舆情告警（级别：{level}，每 {self.chat['notify_merge_seconds']} 秒合并发送一次）"
+        )
+
+    @fishtool.command("退订")
+    async def cmd_unsubscribe(self, event: AstrMessageEvent):
+        """把当前会话移出告警推送名单（仅管理员）"""
+        gate = self._gate(event, "unsubscribe", G.ADMIN)
+        if gate == G.DENIED:
+            yield event.plain_result(self._denied_text(event))
+        if gate != G.OK:
+            return
+        try:
+            removed = self.subs.remove(event.unified_msg_origin)
+        except OSError as exc:
+            logger.warning(f"[fishtool] 保存推送订阅失败: {exc}")
+            yield event.plain_result(f"退订失败：{exc}")
+            return
+        yield event.plain_result("已退订，本会话不再收到告警推送" if removed else "本会话未订阅告警推送")
 
     async def api_proxy(self, sub: str):
         if self._closed:

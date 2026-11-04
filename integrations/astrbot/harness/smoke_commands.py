@@ -23,6 +23,8 @@ EXPECTED = {
     "告警": {"limit": "5", "level": "all"},
     "舆情": {"bvid": "", "strategy": "normal"},
     "监控": {"action": "状态", "bvids": ""},
+    "订阅": {},
+    "退订": {},
 }
 
 

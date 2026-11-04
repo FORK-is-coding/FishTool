@@ -234,6 +234,12 @@ class FishToolCommands:
             lines.append("本轮没有可展示的热搜词或视频")
         return "\n".join(lines)
 
+    async def unread_alerts(self, limit: int = 50) -> list[dict]:
+        """断线补发用：最近的未读告警（新到旧）。引擎未运行时抛 CommandError。"""
+        body = await self._call("GET", "/api/comment/alerts", query={"is_read": "false", "limit": limit})
+        alerts = body.get("alerts") if isinstance(body, dict) else None
+        return [a for a in (alerts or []) if isinstance(a, dict)]
+
     # ------------------------------------------------------------------ write commands
     async def monitor_video_text(self, bvid: str, strategy: str = "normal") -> str:
         """跑一次单视频评论舆情（/comment/monitor，长请求），返回摘要。"""
