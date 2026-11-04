@@ -42,3 +42,90 @@ def engine_cfg(raw: dict | None) -> dict:
         if value is not None:
             merged[key] = value
     return merged
+
+
+#: 聊天指令与告警推送的默认配置（_conf_schema.json 的 chat 段）。
+DEFAULT_CHAT_CFG = {
+    "enable": True,
+    "restricted_scope": "admin",
+    "cooldown_seconds": 10,
+    "notify_sessions": [],
+    "notify_min_level": "high",
+    "notify_merge_seconds": 120,
+    "report_font_cjk": "",
+    "report_font_latin": "",
+    "report_charts": True,
+}
+
+#: 受限级别指令（告警、监控状态）的可用范围。
+RESTRICTED_SCOPES = ("admin", "subscribed", "everyone")
+
+#: 告警级别，从高到低。
+ALERT_LEVELS = ("high", "medium", "low")
+
+
+def _as_bool(value, default: bool) -> bool:
+    return value if isinstance(value, bool) else default
+
+
+def _as_int(value, default: int, *, minimum: int, maximum: int) -> int:
+    """整数配置：非法或越下限用默认值，越上限截到上限。接受 ``"10"``、``10.0``，不接受 ``"10.5"``。"""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    if number < minimum:
+        return default
+    return min(number, maximum)
+
+
+def _as_str(value) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _sessions(value) -> list[dict]:
+    """只保留 ``{"umo": 非空字符串, "self_id": 字符串}`` 形式的订阅，按 umo 去重。"""
+    result: list[dict] = []
+    seen: set[str] = set()
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        umo = _as_str(item.get("umo"))
+        if not umo or umo in seen:
+            continue
+        seen.add(umo)
+        result.append({"umo": umo, "self_id": _as_str(item.get("self_id"))})
+    return result
+
+
+def chat_cfg(raw: dict | None) -> dict:
+    """把插件配置里的 chat 段与默认值合并，并把非法值收敛为默认值。
+
+    面板保存时 AstrBot 会做类型校验，但手改配置文件或旧版本残留的值不会经过校验，
+    所以这里再兜一层，保证后续代码可以直接按类型使用。
+
+    Args:
+        raw: 插件配置中的 ``chat`` 对象，可为空。
+
+    Returns:
+        dict: 补齐默认值、收敛非法值后的新字典。
+    """
+    raw = raw if isinstance(raw, dict) else {}
+    d = DEFAULT_CHAT_CFG
+    scope = _as_str(raw.get("restricted_scope"))
+    level = _as_str(raw.get("notify_min_level"))
+    return {
+        "enable": _as_bool(raw.get("enable"), d["enable"]),
+        "restricted_scope": scope if scope in RESTRICTED_SCOPES else d["restricted_scope"],
+        "cooldown_seconds": _as_int(raw.get("cooldown_seconds"), d["cooldown_seconds"], minimum=0, maximum=3600),
+        "notify_sessions": _sessions(raw.get("notify_sessions")),
+        "notify_min_level": level if level in ALERT_LEVELS else d["notify_min_level"],
+        "notify_merge_seconds": _as_int(raw.get("notify_merge_seconds"), d["notify_merge_seconds"], minimum=1, maximum=3600),
+        "report_font_cjk": _as_str(raw.get("report_font_cjk")),
+        "report_font_latin": _as_str(raw.get("report_font_latin")),
+        "report_charts": _as_bool(raw.get("report_charts"), d["report_charts"]),
+    }

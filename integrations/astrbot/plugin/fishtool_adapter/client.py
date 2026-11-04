@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import httpx
 
+from .errors import EngineUnavailable
+
 LOCAL_TOKEN_HEADER = "X-Local-Token"
 
-
-class EngineUnavailable(RuntimeError):
-    """引擎不可达（未运行、连接失败）。"""
+__all__ = ["EngineClient", "EngineUnavailable", "LOCAL_TOKEN_HEADER", "parse_body"]
 
 
 class EngineClient:
