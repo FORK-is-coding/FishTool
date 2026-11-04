@@ -157,6 +157,15 @@ def test_generate_closes_client_after_success(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def test_token_limit_user_message_names_limit_and_settings_page():
+    """TokenLimitExceededError.user_message：带用量/上限，指出配置页。"""
+    from core.exceptions import TokenLimitExceededError
+
+    msg = TokenLimitExceededError(2_000_001, 2_000_000).user_message
+    assert "2000001/2000000" in msg
+    assert "配置页" in msg and "每日 token 上限" in msg
+
+
 def test_generate_returns_degraded_result_on_llm_error(monkeypatch):
     """LLM 调用失败时返回可展示的降级结构而非抛错。"""
     fake = _FakeLLMClient(chat_error=RuntimeError("no api key"))
@@ -168,6 +177,22 @@ def test_generate_returns_degraded_result_on_llm_error(monkeypatch):
     assert "AI调研暂不可用" in result["message"]
     assert result["error"] == "no api key"
     assert "generated_at" in result
+
+
+def test_generate_daily_token_limit_does_not_blame_model_config(monkeypatch):
+    """每日上限用完时提示调高上限，而不是让用户去“检查大模型配置”。"""
+    from core.exceptions import TokenLimitExceededError
+
+    fake = _FakeLLMClient(chat_error=TokenLimitExceededError(150, 100))
+    _patch_client(monkeypatch, fake)
+
+    result = asyncio.run(AIDiagnosisReporter().generate(SAMPLE_SELF_DATA))
+
+    assert result["success"] is False
+    assert "每日上限" in result["message"]
+    assert "配置页" in result["message"]
+    assert "检查大模型配置" not in result["message"]
+    assert fake.closed == 1  # 仍然关闭客户端
 
 
 def test_generate_returns_degraded_result_on_parse_failure(monkeypatch):

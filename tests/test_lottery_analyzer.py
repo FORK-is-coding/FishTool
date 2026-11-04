@@ -499,6 +499,22 @@ def test_classify_profiles_uses_strict_prompt_contract(contract_llm) -> None:
     assert results[0]["source"] == "llm"
 
 
+def test_classify_profiles_daily_token_limit_marks_fallback_reason(contract_llm) -> None:
+    """每日上限用完：结果与普通 LLM 不可用时相同（规则兜底），但每条带 fallback_reason。"""
+    from core.exceptions import TokenLimitExceededError
+
+    profiles = [_profile(1), _profile(2)]
+    contract_llm.payload = RuntimeError("other failure")
+    baseline = asyncio.run(classify_profiles(profiles))
+
+    contract_llm.payload = TokenLimitExceededError(150, 100)
+    limited = asyncio.run(classify_profiles(profiles))
+
+    assert [item["fallback_reason"] for item in limited] == ["daily_token_limit"] * 2
+    assert [{k: v for k, v in item.items() if k != "fallback_reason"} for item in limited] == baseline
+    assert all("fallback_reason" not in item for item in baseline)
+
+
 def test_classify_profiles_uses_default_focus_when_not_provided(contract_llm) -> None:
     """未传侧重点时使用默认模板。"""
     contract_llm.payload = '{"results": []}'
