@@ -85,6 +85,16 @@ class SemanticRun(Base):
     # in-flight 预约：发请求前持久化，结果写入时核对；崩溃恢复标 outcome_unknown。
     in_flight = Column(JSON, comment='{attempt_id, estimated_tokens, usage_estimated} 或 null')
 
+    # 预算模式：default/unlimited 字面量与 modules.comment.semantic.contracts 的
+    # BUDGET_MODE_* 常量保持一致（此处不能 import contracts，会循环导入；有测试断言一致）。
+    budget_mode = Column(String(16), nullable=False, default='default', comment='预算档位')
+    # 进入停止状态（partial/failed）的次数：前端停止报告按 (task_id, stop_reason, stop_seq)
+    # 去重，不能用 revision（每次预约/结算都会变）。
+    stop_seq = Column(Integer, nullable=False, default=0, comment='累计进入停止状态次数')
+    # 实测耗时累计（供预估时间）：每次 settle 累加本次调用毫秒数与计数；void/取消不计。
+    elapsed_call_ms = Column(Integer, nullable=False, default=0, comment='已计时调用累计毫秒')
+    timed_calls = Column(Integer, nullable=False, default=0, comment='已计时的调用次数')
+
     # 覆盖度计数（跨批复核）
     coverage = Column(JSON, comment='{batch_reviewed, cross_batch_reviewed, remaining_candidates, excluded, uncertain, unprocessed}')
 

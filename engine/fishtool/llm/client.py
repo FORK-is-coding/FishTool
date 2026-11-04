@@ -48,11 +48,33 @@ from core.exceptions import LLMError, LLMNotConfiguredError, LLMAPIError, TokenL
 # 从 core.logger 导入符号
 from core.logger import get_logger
 # 从 core.config 导入符号
-from core.config import config
+from core.config import config, LLM_DAILY_TOKEN_LIMIT_DEFAULT
 # 从 core.database 导入符号
 from core.database import get_session, LLMUsage
 
 logger = get_logger(__name__)
+
+
+def _coerce_daily_limit(value: Any) -> int:
+    """把配置里的每日上限规整为非负整数；非法值回退到默认值。
+
+    0 表示不限制。手改 yaml 写出负数、小数、字符串或布尔值时，记一条告警并按
+    默认值处理，避免把限额意外放开或把所有 AI 功能锁死。
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        logger.warning(
+            "llm.daily_token_limit 配置非法(%r)，按默认值 %s 处理",
+            value, LLM_DAILY_TOKEN_LIMIT_DEFAULT,
+        )
+        return LLM_DAILY_TOKEN_LIMIT_DEFAULT
+    return value
+
+
+def _remaining(limit: int, used: int) -> Optional[int]:
+    """当日剩余额度；上限为 0（不限制）时返回 None。"""
+    if limit <= 0:
+        return None
+    return max(0, limit - used)
 
 
 def _usage_records_on(db, day: date) -> list:
@@ -136,8 +158,9 @@ class LLMClient:
         )
         
         # Token统计
-        # 每日限额从配置读取，默认10万
-        self.daily_token_limit = config.get('llm.daily_token_limit', 100000)
+        # 每日限额从配置读取（所有 AI 功能共用）；0 表示不限制
+        self.daily_token_limit = _coerce_daily_limit(
+            config.get('llm.daily_token_limit', LLM_DAILY_TOKEN_LIMIT_DEFAULT))
         # 记录当前日期，跨天自动重置计数
         self.current_date = date.today()
         self.daily_tokens_used = 0
@@ -183,6 +206,9 @@ class LLMClient:
         used = self.daily_tokens_used if db_used is None else max(db_used, self.daily_tokens_used)
 
         # 检查限额
+        # 0 表示不限制：用量照常记账，但不拦截请求。
+        if self.daily_token_limit <= 0:
+            return
         # 预检（估算+已用）超过限额则拒绝本次调用
         if used + estimated_tokens > self.daily_token_limit:
             # 抛出异常中断流程
@@ -276,7 +302,12 @@ class LLMClient:
         # 检查Token限制
         # 按字符数/4 粗略估算输入 token
         estimated_tokens = sum(len(m['content']) // 4 for m in messages)
-        self._check_token_limit(estimated_tokens)
+        # 内部专用 kwarg：只用于本地限额控制，必须在 _check_token_limit 之前 pop，
+        # 绝不能混进发往服务端的 payload。False 表示调用方（语义无限制档）自带预算闸门，
+        # 跳过全局日上限检查；用量照常写入 llm_usage。
+        enforce_daily_limit = kwargs.pop('enforce_daily_limit', True)
+        if enforce_daily_limit:
+            self._check_token_limit(estimated_tokens)
 
         # 内部专用 kwarg：只用于本地记账/参数控制，绝不混入发往服务端的 payload。
         # - module: 用量归属标签（记录 LLMUsage 用）
@@ -367,7 +398,10 @@ class LLMClient:
         """
         # 检查Token限制
         estimated_tokens = sum(len(m['content']) // 4 for m in messages)
-        self._check_token_limit(estimated_tokens)
+        # 同 chat_completion：enforce_daily_limit 在限额检查前 pop，不进请求体。
+        enforce_daily_limit = kwargs.pop('enforce_daily_limit', True)
+        if enforce_daily_limit:
+            self._check_token_limit(estimated_tokens)
 
         # 内部专用 kwarg 不入 payload（与 chat_completion 对齐）
         kwargs.pop('module', None)
@@ -550,7 +584,8 @@ class LLMClient:
                     'total_tokens': total_tokens,
                     'total_requests': total_requests,
                     'limit': self.daily_token_limit,
-                    'remaining': max(0, self.daily_token_limit - total_tokens),
+                    # 上限为 0 表示不限制，没有“剩余额度”的概念
+                    'remaining': _remaining(self.daily_token_limit, total_tokens),
                     'usage_percent': (total_tokens / self.daily_token_limit * 100) if self.daily_token_limit > 0 else 0
                 }
             # 异常处理
@@ -566,7 +601,7 @@ class LLMClient:
             'date': date.today().isoformat(),
             'total_tokens': self.daily_tokens_used,
             'limit': self.daily_token_limit,
-            'remaining': max(0, self.daily_token_limit - self.daily_tokens_used)
+            'remaining': _remaining(self.daily_token_limit, self.daily_tokens_used)
         }
     
     def is_configured(self) -> bool:

@@ -43,5 +43,62 @@
         "hint": "默认关闭：API Key 与面板登录同等可用。把 API Key 交给第三方时建议打开。"
       }
     }
+  },
+  "chat": {
+    "type": "object",
+    "description": "聊天指令与告警推送",
+    "items": {
+      "enable": {
+        "type": "bool",
+        "default": true,
+        "description": "启用聊天指令",
+        "hint": "关闭后 /fishtool 的子指令不再回复，告警推送也停止。只发 /fishtool 时 AstrBot 自动生成的帮助仍会显示。"
+      },
+      "restricted_scope": {
+        "type": "string",
+        "default": "admin",
+        "options": ["admin", "subscribed", "everyone"],
+        "labels": ["仅管理员", "管理员 + 已订阅推送的会话", "所有人"],
+        "description": "告警查询可用范围",
+        "hint": "控制 /fishtool 告警、/fishtool 监控 状态 谁能用。舆情、监控开关、订阅、自诊始终仅管理员（AstrBot 的 admins_id）。"
+      },
+      "cooldown_seconds": {
+        "type": "int",
+        "default": 10,
+        "description": "公开指令冷却（秒）",
+        "hint": "同一会话同一指令的最短间隔，0 表示不限制。管理员不受限。"
+      },
+      "notify_min_level": {
+        "type": "string",
+        "default": "high",
+        "options": ["high", "medium", "low"],
+        "labels": ["仅高", "中及以上", "全部"],
+        "description": "推送的最低告警级别"
+      },
+      "notify_merge_seconds": {
+        "type": "int",
+        "default": 120,
+        "description": "告警合并窗口（秒）",
+        "hint": "窗口内的告警合成一条合并转发再发送，降低个人 QQ 风控风险。"
+      },
+      "report_font_cjk": {
+        "type": "string",
+        "default": "",
+        "description": "自诊报告字体（中文）",
+        "hint": "填 AstrBot 所在机器/容器内的 .ttf 或 .ttc 绝对路径（TrueType 轮廓）。Noto Sans CJK、思源黑体的 .otf 版无法使用。留空则自动查找系统字体（Windows 微软雅黑、Linux 文泉驿），找不到时 PDF 退回宋体且版式降级。"
+      },
+      "report_font_latin": {
+        "type": "string",
+        "default": "",
+        "description": "自诊报告字体（数字与英文，可选）",
+        "hint": "用于封面英文、页码、UID 等。留空时使用上面的中文字体；Windows 会自动使用 Bahnschrift。"
+      },
+      "report_charts": {
+        "type": "bool",
+        "default": true,
+        "description": "自诊报告包含图表",
+        "hint": "关闭后 PDF 只有文字和表格。"
+      }
+    }
   }
 }

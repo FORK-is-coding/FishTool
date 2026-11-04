@@ -112,6 +112,7 @@ class DatabaseManager:
         self._migrate_video_stats_columns()
         self._migrate_hotspot_watch_event_columns()
         self._migrate_cookie_pool_plaintext_credentials()
+        self._migrate_semantic_run_budget_columns()
         logger.info(f"数据库表创建完成: {self.db_path}")
 
     def _migrate_task_key_column(self) -> None:
@@ -302,6 +303,39 @@ class DatabaseManager:
                         logger.info("数据库迁移完成: hotspot_watch.%s", column_name)
         except Exception:
             logger.exception("hotspot_watch 事件字段迁移失败")
+            raise
+
+    def _migrate_semantic_run_budget_columns(self) -> None:
+        """为旧数据库幂等补充 ``semantic_runs`` 的预算模式与耗时统计四列。
+
+        新增 ``budget_mode`` / ``stop_seq`` / ``elapsed_call_ms`` / ``timed_calls``，
+        全部可原位 ALTER ADD COLUMN；旧行取列默认值（budget_mode='default'，
+        其余为 0），与旧任务的实际行为一致（旧任务都在默认档预算下运行）。
+
+        Args:
+            无。
+
+        Returns:
+            无；不存在的列逐个补齐，已存在则跳过，可重复执行。
+        """
+        try:
+            inspector = inspect(self.engine)
+            if not inspector.has_table("semantic_runs"):
+                return
+            existing = {column["name"] for column in inspector.get_columns("semantic_runs")}
+            statements = {
+                "budget_mode": "ALTER TABLE semantic_runs ADD COLUMN budget_mode VARCHAR(16) NOT NULL DEFAULT 'default'",
+                "stop_seq": "ALTER TABLE semantic_runs ADD COLUMN stop_seq INTEGER NOT NULL DEFAULT 0",
+                "elapsed_call_ms": "ALTER TABLE semantic_runs ADD COLUMN elapsed_call_ms INTEGER NOT NULL DEFAULT 0",
+                "timed_calls": "ALTER TABLE semantic_runs ADD COLUMN timed_calls INTEGER NOT NULL DEFAULT 0",
+            }
+            with self.engine.begin() as connection:
+                for column_name, statement in statements.items():
+                    if column_name not in existing:
+                        connection.execute(text(statement))
+                        logger.info("数据库迁移完成: semantic_runs.%s", column_name)
+        except Exception:
+            logger.exception("语义任务预算列迁移失败")
             raise
 
     def _migrate_cookie_pool_plaintext_credentials(self) -> None:

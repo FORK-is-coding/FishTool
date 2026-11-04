@@ -63,6 +63,46 @@ DEFAULT_LIMITS: Dict[str, int] = {
 }
 
 # --------------------------------------------------------------------------
+# 预算模式（服务端唯一定义两档；前端只传模式名，不接受任意数值）
+# --------------------------------------------------------------------------
+BUDGET_MODE_DEFAULT = "default"
+BUDGET_MODE_UNLIMITED = "unlimited"
+
+#: 无限制档的上限数值：任务 token 给足 8000 万（约为 500 条评论估算用量的百倍余量）、
+#: 调用次数 3000（硬上限，防失控循环）；日预算不适用（不检查、不计入 semantic_daily_usage，
+#: 用量照常记进全局 llm_usage）。数值本身仍是上限，不是"真的无限"。
+UNLIMITED_MAX_ATTEMPTS = 3000
+UNLIMITED_TASK_TOKEN_BUDGET = 80_000_000
+UNLIMITED_DAILY_TOKEN_BUDGET = 0  # 占位：无限制档不做日预算检查，此值不参与判断
+
+BUDGET_PROFILES: Dict[str, Dict[str, int]] = {
+    BUDGET_MODE_DEFAULT: {
+        "max_attempts": MAX_ATTEMPTS,
+        "task_token_budget": TASK_TOKEN_BUDGET,
+        "daily_token_budget": DAILY_TOKEN_BUDGET,
+    },
+    BUDGET_MODE_UNLIMITED: {
+        "max_attempts": UNLIMITED_MAX_ATTEMPTS,
+        "task_token_budget": UNLIMITED_TASK_TOKEN_BUDGET,
+        "daily_token_budget": UNLIMITED_DAILY_TOKEN_BUDGET,
+    },
+}
+
+
+def resolve_budget_mode(value: Optional[str]) -> str:
+    """把请求里的预算模式规整为已知档位；None 回落默认档，未知值抛参数错误。"""
+    if value is None:
+        return BUDGET_MODE_DEFAULT
+    if value in BUDGET_PROFILES:
+        return value
+    raise SemanticValidationError(f"未知预算模式: {value!r}", reason="bad_budget_mode")
+
+
+def budget_profile(mode: str) -> Dict[str, int]:
+    """取某档位的三项上限（调用方必须先 resolve_budget_mode）。"""
+    return dict(BUDGET_PROFILES[resolve_budget_mode(mode)])
+
+# --------------------------------------------------------------------------
 # 类型化异常（单一事实源；A/C 从这里导入，勿重定义）
 # --------------------------------------------------------------------------
 class SemanticError(Exception):
@@ -104,6 +144,16 @@ class SemanticBudgetExceeded(SemanticError):
         self.limit = limit
 
 
+class SemanticResumableStop(SemanticBudgetExceeded):
+    """服务商侧的可续跑停止（全局每日上限 / 429 / 5xx 重试后 / 余额不足）。
+
+    继承 SemanticBudgetExceeded：phase1 与跨批阶段原有的预算异常分支会照常接住，
+    保存 checkpoint（含跨批窗口计划与复核进度）后以 partial 停下；scope 决定 stop_reason。
+    """
+
+    code = "SEMANTIC_RESUMABLE_STOP"
+
+
 class SemanticValidationError(SemanticError):
     """模型响应 / 分组结构非法：截断 / 拒答 / 非单一 JSON / 未知或重复 id /
     组间相交 / 代表非成员 / 成员数越界 / 字段类型错误。路由映射 HTTP 400。"""
@@ -122,6 +172,8 @@ class ProviderErrorCategory:
 
     UNSUPPORTED_TEMPERATURE = "unsupported_temperature"
     RATE_LIMIT = "rate_limit"
+    #: 服务商余额 / 配额用尽（402，或 429 带 insufficient_quota 等）。等待不会恢复，要充值。
+    QUOTA = "quota"
     AUTH = "auth"
     MODEL_NOT_FOUND = "model_not_found"
     SERVER = "server"
@@ -129,6 +181,44 @@ class ProviderErrorCategory:
     NOT_CONFIGURED = "not_configured"
     NETWORK = "network"
     UNKNOWN = "unknown"
+
+
+# --------------------------------------------------------------------------
+# 停止原因（coverage.stop_reason 的唯一取值来源；前端只读这个字段）
+# --------------------------------------------------------------------------
+#: 可续跑的停止：任务停在 partial，checkpoint 保留，用户可点“继续执行”。
+STOP_TASK_BUDGET = "task_budget"            # 任务 token 预算用完
+STOP_ATTEMPT_BUDGET = "attempt_budget"      # 任务调用次数用完
+STOP_DAILY_BUDGET = "daily_budget"          # 语义每日预算用完（次日或调高后可续）
+STOP_GLOBAL_DAILY_LIMIT = "global_daily_limit"  # 全局 llm.daily_token_limit 用完
+STOP_RATE_LIMITED = "rate_limited"          # 服务商 429 限频
+STOP_PROVIDER_UNAVAILABLE = "provider_unavailable"  # 5xx 重试后仍失败
+STOP_PROVIDER_QUOTA = "provider_quota"      # 服务商余额 / 配额用尽
+#: 不可续跑的部分完成：继续执行也不会有新调用。
+STOP_ROUNDS_EXHAUSTED = "rounds_exhausted"  # 预算充足，但跨批比对轮数已跑完
+STOP_DEGRADED = "degraded"                  # 有批次 / 窗口因内容校验失败、超大组、复核无结果而降级
+
+RESUMABLE_STOP_REASONS = (
+    STOP_TASK_BUDGET, STOP_ATTEMPT_BUDGET, STOP_DAILY_BUDGET, STOP_GLOBAL_DAILY_LIMIT,
+    STOP_RATE_LIMITED, STOP_PROVIDER_UNAVAILABLE, STOP_PROVIDER_QUOTA,
+)
+STOP_REASONS = RESUMABLE_STOP_REASONS + (STOP_ROUNDS_EXHAUSTED, STOP_DEGRADED)
+
+#: SemanticBudgetExceeded.scope -> stop_reason。
+STOP_REASON_BY_SCOPE = {
+    "task": STOP_TASK_BUDGET,
+    "attempts": STOP_ATTEMPT_BUDGET,
+    "daily": STOP_DAILY_BUDGET,
+    "global_daily": STOP_GLOBAL_DAILY_LIMIT,
+    "rate_limited": STOP_RATE_LIMITED,
+    "provider_unavailable": STOP_PROVIDER_UNAVAILABLE,
+    "provider_quota": STOP_PROVIDER_QUOTA,
+}
+
+
+def stop_reason_for_scope(scope: Optional[str]) -> str:
+    """把预算 / 可续跑停止异常的 scope 映射成 stop_reason；未知 scope 归为任务预算。"""
+    return STOP_REASON_BY_SCOPE.get(scope or "", STOP_TASK_BUDGET)
 
 
 class SemanticProviderError(SemanticError):
@@ -189,6 +279,8 @@ __all__ = [
     "CONSENT_VERSION", "RULE_VERSION", "DEFAULT_LIMIT", "MAX_LIMIT",
     "MAX_ATTEMPTS", "BATCH_ATTEMPTS", "BATCH_SIZE", "INPUT_BYTES",
     "OUTPUT_TOKENS", "TASK_TOKEN_BUDGET", "DAILY_TOKEN_BUDGET",
+    "BUDGET_MODE_DEFAULT", "BUDGET_MODE_UNLIMITED", "BUDGET_PROFILES",
+    "resolve_budget_mode", "budget_profile",
     "CONTENT_BYTES_CAP", "MAX_GROUP_SIZE",
     "PHASE_BATCH", "PHASE_CROSS", "VALID_PHASES", "MEMBERSHIP_KEY",
     "ALLOWED_ITEM_KEYS", "FORBIDDEN_ITEM_KEYS", "DEFAULT_LIMITS",

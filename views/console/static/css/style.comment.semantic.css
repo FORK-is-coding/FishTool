@@ -258,3 +258,55 @@
     margin: 6px 0 12px;
     font-size: 14px;
 }
+
+/* 预算模式选择（PR 3） */
+.semantic-budget-mode {
+    display: inline-flex;
+    gap: 14px;
+    margin-right: 12px;
+    font-size: 13px;
+    vertical-align: middle;
+}
+
+.semantic-budget-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+}
+
+.semantic-budget-option input {
+    margin: 0;
+}
+
+.semantic-quota-hint {
+    margin: 8px 0;
+    font-size: 13px;
+}
+
+/* 停止报告弹窗（PR 4）：与同意模态同一外观与排版，只复用、不另造风格 */
+.semantic-stop-report {
+    max-width: 520px;
+    text-align: left;
+}
+
+.semantic-stop-report .semantic-consent-list {
+    margin: 12px 0 16px;
+}
+
+.semantic-stop-report .semantic-consent-list strong {
+    font-weight: 600;
+}
+
+/* 预估时间（PR 5） */
+.semantic-estimate {
+    margin: 6px 0;
+    font-size: 13px;
+    color: var(--ink-3, #6b7280);
+}
+
+.semantic-eta {
+    margin: 6px 0;
+    font-size: 13px;
+    color: var(--ink-3, #6b7280);
+}

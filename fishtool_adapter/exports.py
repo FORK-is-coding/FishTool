@@ -13,6 +13,12 @@ from pathlib import Path
 
 MAX_BYTES = 32 * 1024 * 1024
 TTL_S = 24 * 3600
+#: 允许的导出类型与下载时的 Content-Type。新增类型只改这里。
+CONTENT_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+    ".pdf": "application/pdf",
+}
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 _NAME_SAFE = re.compile(r"[^\w.\-()一-鿿]+")
 
@@ -43,25 +49,38 @@ class ExportStore:
             (file_id, filename)
 
         Raises:
-            ValueError: 内容超过上限。
+            ValueError: 内容超过上限或类型不受支持。
         """
+        file_id, _ = self.save_and_path(data, filename, ext)
+        return file_id, filename
+
+    def save_and_path(self, data: bytes, filename: str, ext: str) -> tuple[str, Path]:
+        """同 ``save``，但返回文件的绝对路径（聊天里发文件要用本地路径）。"""
+        if ext not in CONTENT_TYPES:
+            raise ValueError(f"不支持的导出类型：{ext}")
         if len(data) > MAX_BYTES:
             raise ValueError(f"导出内容过大（{len(data) // 1024 // 1024} MB）")
         self.root.mkdir(parents=True, exist_ok=True)
         self._cleanup()
         file_id = secrets.token_urlsafe(18)
-        (self.root / f"{file_id}{ext}").write_bytes(data)
+        path = (self.root / f"{file_id}{ext}").resolve()
+        path.write_bytes(data)
         (self.root / f"{file_id}.name").write_text(filename, "utf-8")
-        return file_id, filename
+        return file_id, path
 
     def resolve(self, file_id: str) -> tuple[Path, str] | None:
         """按 id 找到导出文件与下载文件名；不存在返回 None。"""
         if not _ID_RE.fullmatch(file_id or ""):
             return None
-        for ext in (".html", ".txt"):
+        for ext in CONTENT_TYPES:
             path = self.root / f"{file_id}{ext}"
             if path.is_file():
                 name_file = self.root / f"{file_id}.name"
                 name = name_file.read_text("utf-8") if name_file.is_file() else path.name
                 return path, name
         return None
+
+
+def content_type_for(path: Path) -> str:
+    """下载时的 Content-Type；未知后缀按二进制流处理。"""
+    return CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")

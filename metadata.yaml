@@ -5,11 +5,19 @@ desc: |
   想要虚拟秘书吗？让你的bot成为生产力！为B站视频创作而生，让你一人拥有企业级新媒体运营工作流。 覆盖【选题 → 热点追踪 → 舆情监控 → 竞品调研 → 账号自诊 → 真人筛选】的完整运营链路。 
   让运营不再成为企业特权，让工具回归普惠本真。 适用于新媒体|社区|内容|用户|产品|直播|营销策划等多种运营场景。 
   控制台在 AstrBot 面板 → 插件 → FishTool → 视图中使用。
-version: 0.1.3
+version: 0.2.0
 author: FORK-is-coding
 repo: https://github.com/FORK-is-coding/astrbot_plugin_FishTool
 astrbot_version: ">=4.29,<5"
 tags:
   - bilibili
   - 运营
-  - 舆情
+  - 评论
+  - 视频
+  - 工具
+  - 监控
+  - 自动化
+  - AI增强
+  - dsh
+  - api
+  - 功能拓展

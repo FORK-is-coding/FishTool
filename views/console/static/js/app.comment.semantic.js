@@ -6,8 +6,8 @@
 // - 实验性可选功能：首次使用弹模态，披露 provider/费用/外发范围与「准确性未经验证」，
 //   征得同意后才允许发起；同意绑定 model identity + CONSENT_VERSION，经 API 持久化。
 // - 不随页面加载自动计费：只有用户显式点「开始分析」才创建任务并发起模型请求。
-// - 任务进度支持取消/继续（继续需显式确认未知结果）；轮询定时器有界，
-//   页面隐藏 / 任务终态即停；切换 BV 时作废旧响应，避免陈旧结果串台。
+// - 任务进度支持取消/继续（继续需显式确认未知结果）；轮询不设总次数上限（长任务可达数小时），
+//   页面隐藏 / 任务终态即停，回到前台且任务仍在进行时恢复；切换 BV 时作废旧响应，避免陈旧结果串台。
 // - auto_fold 开关只改展示视图、经 API 持久化偏好，绝不触发任何模型请求。
 // - 分组展示代表项 + 归并理由 + 全部成员详情；未分组/被排除/不确定分别分页列全量原文。
 // - 撤销整组 / 拆分单条 / 显式允许（恢复）；不删除任何原始评论、不改旧大屏统计。
@@ -22,9 +22,16 @@
     const API_PREFIX = '/comment/semantic';
     const DEFAULT_LIMIT = 200;
     const MAX_LIMIT = 500;
+    // 轮询节奏：每次开始轮询（发起、接管、回到前台）后的前 2 分钟每 1.5 秒一次，之后每 5 秒一次。
+    // 状态 DTO 没有任务开始时间，按本轮轮询计；“无进展”计时同样随每轮轮询重新开始。
+    // 语义任务可能跑几十分钟到几小时，不设总次数上限：只要任务仍在进行就一直跟进，
+    // 由代际令牌 / BV 切换 / 页面隐藏 / 终态负责停止。
     const POLL_INTERVAL_MS = 1500;
-    // 轮询上限：约 20 分钟（后台仍可能继续，达上限后提示而不误判失败）。
-    const POLL_MAX_ATTEMPTS = 800;
+    const POLL_SLOW_INTERVAL_MS = 5000;
+    const POLL_FAST_WINDOW_MS = 2 * 60 * 1000;
+    // running 状态下这么久 revision 没变就提示“长时间无进展”（不停止轮询）。
+    // queued 不提示：语义任务全局串行，排队时 revision 本来就不会变。
+    const POLL_STALL_WARN_MS = 10 * 60 * 1000;
 
     // 面板运行态：单例，随 BV 切换重置。
     const state = {
@@ -39,12 +46,14 @@
         resultRequest: 0,          // 同视频/任务的分页和决策刷新也须按请求代际防旧回写。
         polling: false,
         pollToken: 0,             // 轮询代际：停止时 +1，使在途轮询循环自行退出
+        pollStalled: false,       // running 且长时间 revision 未变：任务区显示提示
         localToken: null,
         limit: DEFAULT_LIMIT,
         starting: false,          // 发起任务进行中（防双击双计费）
         decisionBusy: false,      // 决策请求进行中（防双击重复 POST）
         requestKey: null,         // 当前 BV 的稳定发起 key（终态/切 BV 才换新）
         requestKeyBvid: '',       // requestKey 绑定的 BV
+        budgetMode: 'default',    // 预算档位（init 时从 localStorage 读）
     };
 
     // ---- 本机 session token（写请求必带；token 不进 URL / 日志）----
@@ -190,6 +199,7 @@
         const normalized = String(bvid || '').trim();
         if (!normalized) return;
         stopPolling();
+        stopEtaTicker();  // 切 BV：旧任务的剩余时间不能继续倒数
         state.bvid = normalized;
         state.task = null;
         state.result = null;
@@ -228,6 +238,16 @@
         state.preflight = preflight;
         state.preference = preference || null;
         state.task = latest || null;
+        // 任务在我们没轮询它的时候进入终态（切去别的 BV 再切回来、或他人取消）：
+        // 旧 request_key 已随终态失效，不重置的话“重新分析”会复用旧 key，
+        // 后端幂等返回旧任务，看起来像按钮没反应。进行中任务的 key 保持不动。
+        if (state.task && !isActiveStatus(state.task.status)) resetRequestKey();
+        // 刷新 / 切回 BV 时任务已停下（含 interrupted）：visibilitychange 的补弹路径
+        // 不走这里，必须单独补。要在 loadResult 之前：loadResult 会用结果接口的
+        // 简化 task（没有 coverage/budget）覆盖 state.task，弹窗就拿不到原因和用量了。
+        if (state.task && !isActiveStatus(state.task.status)) {
+            maybeShowStopReport(state.task);
+        }
         renderOverview();
         // 有最近任务且处于进行中：接管轮询（不重复发起模型请求）。
         if (state.task && isActiveStatus(state.task.status)) {
@@ -253,6 +273,32 @@
         if (input && state.bvid && input.value.trim() !== state.bvid) input.value = state.bvid;
     }
 
+    // 开始前粗估：预计调用次数与耗时区间，只有存在估算数据时才显示。
+    function startEstimateText() {
+        const est = (state.preflight || {}).estimate || null;
+        if (!est || !est.eligible) return '';
+        const minutes = s => Math.max(1, Math.round((Number(s) || 0) / 60));
+        const measured = est.median_call_ms ? '，按最近任务的实测耗时' : '，耗时为粗估区间';
+        return `预计约 ${est.calls_min}～${est.calls_max} 次调用，`
+            + `约 ${minutes(est.seconds_min)}～${minutes(est.seconds_max)} 分钟`
+            + `（粗估${measured}，取决于模型响应速度）`;
+    }
+
+    // 运行中：已用时间 + 预计还需 + 进度；按秒倒数，轮询时校准。
+    function etaLine(task) {
+        const eta = task && task.eta;
+        if (!eta) return '';
+        if (eta.queued_note) return eta.queued_note;
+        const remain = Number(eta.remaining_ms);
+        if (!Number.isFinite(remain)) return '';
+        const secs = Math.max(0, Math.round((remain - (Date.now() - (eta._localAt || 0)) / 1000)));
+        const mins = Math.max(1, Math.round(secs / 60));  // 还有剩余调用时不显示 0 分钟
+        const used = Math.round((Number(eta.elapsed_ms) || 0) / 60000);
+        const progress = eta.total ? `（${eta.done}/${eta.total}）` : '';
+        const atLeast = eta.at_least ? '至少 ' : '';
+        return `已用约 ${used} 分钟 · 预计还需约 ${atLeast}${mins} 分钟 ${progress}（按实测耗时）`;
+    }
+
     // 渲染面板概览：选中范围、provider、同意/未配置状态、开始按钮、auto_fold 开关。
     function renderOverview() {
         const pf = state.preflight || {};
@@ -268,6 +314,7 @@
             : '<span class="semantic-warn">未配置大模型，请先到配置页填写后再使用</span>';
 
         // 概览统计只做展示，取 preflight 的 counts；不改动旧大屏统计。
+        const estimateText = startEstimateText();
         const html = `
             <div class="semantic-overview">
                 <p class="semantic-provider">${providerLine}</p>
@@ -276,6 +323,7 @@
                     <span>本次范围 <strong>${text(counts.selected, 0)}</strong>/${escapeHtml(String(scopeLimit))}</span>
                     <span>可参与 <strong>${text(counts.eligible, 0)}</strong></span>
                 </div>
+                ${estimateText ? `<p class="semantic-estimate">${escapeHtml(estimateText)}</p>` : ''}
                 <label class="semantic-autofold">
                     <input type="checkbox" id="semantic-autofold-toggle" ${autoFold ? 'checked' : ''}>
                     自动折叠等价评论（仅改展示，不触发模型调用）
@@ -310,16 +358,123 @@
         };
         if (!task || isTerminalWithResult(task.status) || task.status === 'failed'
             || task.status === 'cancelled') {
+            // 预算档位单选（开始/重新分析时才可选择；任务进行中禁用）。
+            area.append(buildBudgetModePicker(task));
+            const hint = globalQuotaHint();
+            if (hint) {
+                const p = document.createElement('p');
+                p.className = 'semantic-hint semantic-quota-hint';
+                p.textContent = hint;
+                area.append(p);
+            }
             const label = task ? '重新分析' : '开始分析';
             area.append(makeBtn(label, 'btn-primary', onStart, !configured));
         }
         if (task && isActiveStatus(task.status)) {
             area.append(makeBtn('取消', 'btn-secondary', onCancel));
         }
-        if (task && (task.status === 'interrupted' || task.status === 'partial'
-            || task.status === 'failed')) {
+        if (task && canResume(task)) {
             area.append(makeBtn('继续执行', 'btn-primary', onResume, !configured));
         }
+    }
+
+    // ---- 预算模式（default/unlimited，两档数值由服务端定义）----
+    const BUDGET_MODE_KEY = 'fishtool.semantic.budgetMode';
+
+    function loadBudgetMode() {
+        // localStorage 可能不可用（隐私模式 / AstrBot 内存 storage）：回落默认档。
+        try {
+            const v = window.localStorage && window.localStorage.getItem(BUDGET_MODE_KEY);
+            return v === 'unlimited' ? 'unlimited' : 'default';
+        } catch (e) { return 'default'; }
+    }
+
+    function saveBudgetMode(v) {
+        try {
+            if (window.localStorage) window.localStorage.setItem(BUDGET_MODE_KEY, v);
+        } catch (e) { /* 存储不可用时只是不记住选择 */ }
+    }
+
+    function applyBudgetMode(value) {
+        state.budgetMode = value === 'unlimited' ? 'unlimited' : 'default';
+        saveBudgetMode(state.budgetMode);
+        // 换档等于换一种任务意图：重置幂等键，避免同 key 不同模式被后端 409。
+        resetRequestKey();
+    }
+
+    function buildBudgetModePicker(task) {
+        const wrap = document.createElement('span');
+        wrap.className = 'semantic-budget-mode';
+        const active = !!(task && isActiveStatus(task.status));
+        const options = [
+            ['default', '默认档（每日限额）'],
+            ['unlimited', '无限制（不计入每日语义预算）'],
+        ];
+        options.forEach((pair) => {
+            const value = pair[0];
+            const text = pair[1];
+            const label = document.createElement('label');
+            label.className = 'semantic-budget-option';
+            const radio = document.createElement('input');
+            radio.type = 'radio';
+            radio.name = 'semantic-budget-mode';
+            radio.value = value;
+            radio.checked = state.budgetMode === value;
+            if (active) radio.disabled = true;
+            radio.addEventListener('change', () => {
+                applyBudgetMode(value);
+                renderActions(!!(state.preflight && state.preflight.model_configured));
+            });
+            const span = document.createElement('span');
+            span.textContent = text;
+            label.append(radio, span);
+            wrap.append(label);
+        });
+        return wrap;
+    }
+
+    function fmtTokens(v) {
+        const n = Number(v) || 0;
+        if (n >= 10000) return `${(n / 10000).toFixed(1)} 万`;
+        return String(n);
+    }
+
+    // 默认档开始前：本次粗估已可能超出全局日额度时给出提示（无限制档跳过全局检查）。
+    function globalQuotaHint() {
+        const pf = state.preflight || {};
+        const gd = pf.global_daily || {};
+        const est = pf.estimate || {};
+        if (state.budgetMode !== 'default') return '';
+        if (gd.remaining === null || gd.remaining === undefined || !est.tokens_min) return '';
+        if (est.tokens_min <= gd.remaining) return '';
+        return `提示：今天全局 AI 额度约剩 ${fmtTokens(gd.remaining)} token，本次分析预计至少消耗 `
+            + `${fmtTokens(est.tokens_min)}，可能中途因额度不足停下（可续跑）；可到设置页调高`
+            + `“每日 token 上限”，或改用“无限制”档。`;
+    }
+
+    // 选“无限制”开始前的二次确认：写明条数、粗估消耗/耗时、全局额度占用、可取消、费用不退。
+    async function confirmUnlimited(pf) {
+        const est = (pf && pf.estimate) || null;
+        const gd = (pf && pf.global_daily) || {};
+        const minutes = (s) => Math.max(1, Math.round((Number(s) || 0) / 60));
+        const parts = [];
+        // 预检没给出估算（旧后端 / 预检失败）时不能拼出“0 条、1～1 分钟”这类假数字。
+        if (est && est.eligible) {
+            parts.push(`当前视频待分析评论约 ${est.eligible} 条。`);
+            parts.push(`预计调用模型约 ${est.calls_min || 0}～${est.calls_max || 0} 次，`
+                + `消耗约 ${fmtTokens(est.tokens_min)}～${fmtTokens(est.tokens_max)} token，`
+                + `耗时约 ${minutes(est.seconds_min)}～${minutes(est.seconds_max)} 分钟（粗估）。`);
+        } else {
+            parts.push('暂时无法预估本次的消耗和耗时。');
+        }
+        if (gd.remaining !== null && gd.remaining !== undefined) {
+            parts.push(`今天全局 AI 额度还剩约 ${fmtTokens(gd.remaining)} token`
+                + '（无限制档不占用语义每日预算，但仍占用全局额度）。');
+        }
+        parts.push('任务可以随时取消；已产生的用量费用不退。');
+        return await showAppConfirm(parts.join('\n'), {
+            title: '以无限制模式开始分析', confirmText: '开始分析', cancelText: '再想想',
+        });
     }
 
     // auto_fold 开关：仅经 API 持久化偏好 + 本地重渲染展示，绝不发起模型请求。
@@ -388,6 +543,12 @@
                 }
             }
             if (seq !== state.fetchSeq || bvid !== state.bvid) return;
+            // 无限制档：开始前二次确认（估算消耗/耗时、全局额度占用、费用不退）。
+            if (state.budgetMode === 'unlimited') {
+                const confirmed = await confirmUnlimited(pf);
+                if (seq !== state.fetchSeq || bvid !== state.bvid) return;
+                if (!confirmed) return;
+            }
             await createTask(bvid, seq);
         } finally {
             state.starting = false;
@@ -395,14 +556,64 @@
         }
     }
 
+    // 停止原因（后端 coverage.stop_reason）→ 任务区说明。可续跑的原因才显示“继续执行”。
+    const STOP_REASON_NOTES = {
+        task_budget: '部分完成：本次任务的 token 预算已用完，可点“继续执行”。',
+        attempt_budget: '部分完成：本次任务的模型调用次数已用完，可点“继续执行”。',
+        daily_budget: '部分完成：今日语义折叠预算已用完，明天可点“继续执行”。',
+        global_daily_limit: '部分完成：今日 AI 用量已达每日上限，可在配置页调高“每日 token 上限”后点“继续执行”，或明天再继续。',
+        rate_limited: '部分完成：模型服务限频，稍后可点“继续执行”。',
+        provider_unavailable: '部分完成：模型服务暂时不可用，稍后可点“继续执行”。',
+        provider_quota: '部分完成：模型服务的账户余额或配额不足，充值后可点“继续执行”。',
+        rounds_exhausted: '部分完成：跨批比较已跑完设定的轮数，仍有少量候选对未比较，结果可能漏并。继续执行不会有新的比较。',
+        degraded: '部分完成：有批次因模型返回内容无法使用而按各自独立处理，结果可能漏并。继续执行不会重做这些批次。',
+    };
+    const RESUMABLE_STOP_REASONS = ['task_budget', 'attempt_budget', 'daily_budget',
+        'global_daily_limit', 'rate_limited', 'provider_unavailable', 'provider_quota'];
+
+    function stopReasonNote(task) {
+        if (!task || task.status !== 'partial') return '';
+        const reason = (task.coverage || {}).stop_reason;
+        // 旧版本落库的任务没有 stop_reason：沿用原来的笼统说明。
+        return STOP_REASON_NOTES[reason] || '部分完成：受预算 / 组大小限制，仍有候选对未比较，结果可能漏并。';
+    }
+
+    // “继续执行”只对能产生新进度的任务显示：中断、失败，或因可续跑原因停下的部分完成。
+    // 旧版本落库、没有 stop_reason 的 partial 任务保持原行为（显示）。
+    // 这些失败原因续跑也不会好：先去配置页改，再重新分析。
+    const NON_RESUMABLE_FAILURES = ['failed:auth', 'failed:model_not_found', 'failed:not_configured',
+        'failed:identity_changed'];
+
+    function canResume(task) {
+        if (task.status === 'interrupted') return true;
+        if (task.status === 'failed') {
+            const failure = (task.coverage || {}).stop_reason;
+            return NON_RESUMABLE_FAILURES.indexOf(failure) === -1;
+        }
+        if (task.status !== 'partial') return false;
+        const reason = (task.coverage || {}).stop_reason;
+        return !reason || RESUMABLE_STOP_REASONS.indexOf(reason) !== -1;
+    }
+
     // 同一 BV 的发起 request_key 稳定复用：双击/重试不产生第二个计费任务；
-    // 仅当任务进入终态（失败/取消）或切换 BV 时才换新 key 允许明确重试。
+    // 任务进入终态（完成/部分完成/失败/取消）或切换 BV 时换新 key，允许明确重新发起。
+    let requestKeySeq = 0;
+
     function stableRequestKey(bvid) {
         if (!state.requestKey || state.requestKeyBvid !== bvid) {
-            state.requestKey = `${bvid}-${Date.now()}`;
+            // 递增序号兜底：同一毫秒内重建 key 也不会撞（测试假时钟下 Date.now 可能不变）。
+            requestKeySeq += 1;
+            state.requestKey = `${bvid}-${Date.now()}-${requestKeySeq}`;
             state.requestKeyBvid = bvid;
         }
         return state.requestKey;
+    }
+
+    // 任务结束后释放 request_key：否则完成或部分完成后点“重新分析”会复用同一个 key，
+    // 快照没变时 store 按幂等直接返回旧任务，看起来像按钮没反应。
+    function resetRequestKey() {
+        state.requestKey = null;
+        state.requestKeyBvid = '';
     }
 
     async function createTask(bvid, seq) {
@@ -413,6 +624,7 @@
                 limit: state.limit,
                 consent_version: CONSENT_VERSION,
                 request_key: requestKey,
+                budget_mode: state.budgetMode,
             });
             if (seq !== state.fetchSeq || bvid !== state.bvid) return;
             state.task = (resp && resp.data) || null;
@@ -490,17 +702,26 @@
         }
     }
 
-    // ---- 轮询：有界、代际令牌防重入；BV 切换 / 页面隐藏 / 终态即停 ----
+    // ---- 轮询：代际令牌防重入；BV 切换 / 页面隐藏 / 终态即停，回到前台时恢复 ----
     function stopPolling() {
         state.polling = false;
+        state.pollStalled = false;  // 不把“无进展”提示带到下一个 BV / 下一轮轮询
         state.pollToken += 1;
+    }
+
+    function pollInterval(startedAt) {
+        return Date.now() - startedAt < POLL_FAST_WINDOW_MS ? POLL_INTERVAL_MS : POLL_SLOW_INTERVAL_MS;
     }
 
     async function startPolling(taskId, seq) {
         stopPolling();
         const token = state.pollToken;
         state.polling = true;
-        for (let attempt = 0; attempt < POLL_MAX_ATTEMPTS; attempt += 1) {
+        state.pollStalled = false;
+        const startedAt = Date.now();
+        let lastRevision = null;
+        let lastChangeAt = startedAt;
+        for (;;) {
             // 任一失效条件成立即退出：代际变更 / BV 切换 / 页面隐藏。
             if (token !== state.pollToken || seq !== state.fetchSeq) return;
             if (typeof document !== 'undefined' && document.hidden) { state.polling = false; return; }
@@ -508,35 +729,246 @@
             try {
                 resp = await fetchTaskStatus(taskId);
             } catch (error) {
-                await sleep(POLL_INTERVAL_MS);
+                await sleep(pollInterval(startedAt));
                 continue;
             }
             if (token !== state.pollToken || seq !== state.fetchSeq) return;
             const task = (resp && resp.data) || null;
-            if (!task) { await sleep(POLL_INTERVAL_MS); continue; }
+            if (!task) { await sleep(pollInterval(startedAt)); continue; }
+            const now = Date.now();
+            if (task.revision !== lastRevision || task.status !== 'running') {
+                lastRevision = task.revision;
+                lastChangeAt = now;
+            }
+            state.pollStalled = task.status === 'running' && now - lastChangeAt >= POLL_STALL_WARN_MS;
             state.task = task;
             renderOverview();
             if (isTerminalWithResult(task.status)) {
                 state.polling = false;
+                state.pollStalled = false;
+                resetRequestKey();
+                if (task.status === 'partial') maybeShowStopReport(task);
                 loadResult(taskId, 1, seq);
                 return;
             }
             if (task.status === 'failed' || task.status === 'cancelled'
                 || task.status === 'interrupted') {
                 state.polling = false;
+                state.pollStalled = false;
+                resetRequestKey();
+                if (task.status === 'failed') maybeShowStopReport(task);
                 return;
             }
-            await sleep(POLL_INTERVAL_MS);
+            await sleep(pollInterval(startedAt));
         }
-        state.polling = false;
+    }
+
+    // 页面回到前台：当前 BV 的任务若仍在进行，就重新接管轮询（隐藏时已停）。
+    function resumePollingIfActive() {
+        if (state.polling || !state.task || !state.task.task_id) return;
+        // 页面在后台时停下的弹窗延后到回前台再弹（partial/failed 的停止报告）。
+        if (state.task.status === 'partial' || state.task.status === 'failed'
+            || state.task.status === 'interrupted') {
+            maybeShowStopReport(state.task);
+        }
+        if (!isActiveStatus(state.task.status)) return;
+        startPolling(state.task.task_id, state.fetchSeq);
+    }
+
+    // ---- 停止报告：原因 + 进度 + 用量 + 建议动作，每次停止只弹一次 ----
+    const STOP_REPORT_STORAGE_KEY = 'fishtool.semantic.stopReport';
+    // sessionStorage 被禁用（隐私模式 / AstrBot 内存 storage）时用内存兜底：
+    // 刷新后内存丢失会再弹一次，属已知限制，不能让 storage 异常打断展示。
+    let stopReportMemory = null;
+
+    // 读回的是已存的 JSON 原始字符串；存的时候也是 JSON，必须比较同一种表示，
+    // 不能把存的解析成对象再和原始字符串比较（那样永远不相等，去重失效）。
+    function readLastStopReport() {
+        if (stopReportMemory) return stopReportMemory;
+        try {
+            if (!window.sessionStorage) return null;
+            return window.sessionStorage.getItem(STOP_REPORT_STORAGE_KEY) || null;
+        } catch (e) { return null; }
+    }
+
+    function rememberStopReport(key) {
+        const value = JSON.stringify(key);
+        stopReportMemory = value;
+        try {
+            if (window.sessionStorage) window.sessionStorage.setItem(STOP_REPORT_STORAGE_KEY, value);
+        } catch (e) { /* 存储不可用时仅靠内存去重 */ }
+    }
+
+    // 去重键：(task_id, stop_reason, stop_seq)。不能用 revision：预约/结算都会推进它。
+    function stopReportKey(task) {
+        const budget = task.budget || {};
+        const coverage = task.coverage || {};
+        return { task_id: task.task_id, stop_reason: coverage.stop_reason || '',
+                 stop_seq: budget.stop_seq || 0 };
+    }
+
+    function stopReportAdvice(task) {
+        const reason = (task.coverage || {}).stop_reason;
+        if (reason === 'task_budget' || reason === 'attempt_budget') {
+            return '本次任务的预算已用完。可以切换为无限制档并继续，或保持默认档继续。';
+        }
+        if (reason === 'daily_budget') {
+            return '今日语义折叠预算已用完。可以明天继续，或切换为无限制档并继续。';
+        }
+        if (reason === 'global_daily_limit') {
+            return '今日全局 AI 用量已达上限。可到设置页调高「每日 token 上限」后继续，或切换为无限制档并继续。';
+        }
+        if (reason === 'rate_limited') return '模型服务限频。稍后点「继续执行」重试。';
+        if (reason === 'provider_unavailable') return '模型服务暂时不可用。检查服务商状态后点「继续执行」。';
+        if (reason === 'provider_quota') return '模型服务账户余额或配额不足。充值后点「继续执行」。';
+        if (task.status === 'failed') return '任务执行失败，详情见任务区错误信息。修正后点「继续执行」。';
+        if (task.status === 'interrupted') {
+            return '工具重启导致分析中断。已成功的批次不会重发；点「继续执行」接着跑。';
+        }
+        return '任务已部分完成，点「继续执行」可补齐未完成的部分。';
+    }
+
+    // 弹窗内容：停止原因、已处理批次/总批次、跨批覆盖、本任务用量、已折叠组数、建议。
+    function stopReportHtml(task) {
+        const coverage = task.coverage || {};
+        const budget = task.budget || {};
+        const groups = task.groups || [];
+        const settled = Number(budget.settled_tokens) || 0;
+        // last_settlement_estimated 表示「最近一次结算是按估算入账」（如中断后的残留
+        // 预约），不代表每次结算都是实测；所以只能说「含估算」，不能说「实测」。
+        const estimated = coverage.last_settlement_estimated
+            ? '（含估算）' : '（以服务商返回用量为准，部分调用可能无用量数据）';
+        const rows = [];
+        const push = (label, value) => rows.push(`<li>${label}：<strong>${value}</strong></li>`);
+        push('停止原因', STOP_REASON_NOTES[coverage.stop_reason] || '任务未能完整完成');
+        const batches = Number(coverage.batches);
+        // coverage 只有总批数，没有已处理批数字段；调用次数（含重试）单列，不混进批次数。
+        if (Number.isFinite(batches) && batches > 0) {
+            push('总批次', text(batches));
+            push('模型调用次数（含重试）', text(budget.attempt_count, 0));
+        } else {
+            push('模型调用次数', text(budget.attempt_count, 0));
+        }
+        const cross = crossCoverageText(coverage);
+        if (cross) push('跨批覆盖', cross);
+        push('本任务已用 token', `${text(settled, 0)}${estimated}`);
+        const foldable = groups.filter(g => (g.member_ids || []).length >= 2).length;
+        push('已产生的折叠组', text(foldable, 0));
+        push('建议', escapeHtml(stopReportAdvice(task)));
+        return `<ul class="semantic-consent-list">${rows.join('')}</ul>`;
+    }
+
+    function maybeShowStopReport(task) {
+        if (!task || !task.task_id) return;
+        // 只在「继续执行还能产生新进度」的停止时弹。completed/cancelled/
+        // rounds_exhausted/degraded/不可续跑的失败只留在任务区，不打扰。
+        // interrupted（进程重启中断）续跑可以继续，也弹：续跑要确认未知在飞结果，
+        // 确认框由 onResume 给出，不在弹窗里重复。
+        if (task.status !== 'partial' && task.status !== 'failed'
+            && task.status !== 'interrupted') return;
+        if (!canResume(task)) return;
+        // 页面在后台时不弹：resumePollingIfActive 回前台后再补。
+        if (typeof document !== 'undefined' && document.hidden) return;
+        const key = stopReportKey(task);
+        const raw = JSON.stringify(key);
+        if (readLastStopReport() === raw) return;
+        rememberStopReport(key);
+        showStopReport(task);
+    }
+
+    function showStopReport(task) {
+        const backdrop = document.createElement('div');
+        backdrop.className = 'app-modal-backdrop';
+        backdrop.setAttribute('role', 'alertdialog');
+        backdrop.setAttribute('aria-modal', 'true');
+        backdrop.setAttribute('aria-label', '语义折叠停止报告');
+
+        const modal = document.createElement('div');
+        modal.className = 'app-modal semantic-stop-report';
+        const reason = (task.coverage || {}).stop_reason;
+        const canUpgrade = task.status === 'partial'
+            && ['task_budget', 'attempt_budget', 'daily_budget', 'global_daily_limit'].indexOf(reason) !== -1;
+        modal.innerHTML = `
+            <h3>语义折叠已停止</h3>
+            ${stopReportHtml(task)}
+            <div class="app-modal-actions">
+                <button type="button" class="btn btn-secondary" data-act="later">稍后再说</button>
+                ${canUpgrade ? '<button type="button" class="btn btn-primary" data-act="upgrade">切换为无限制并继续</button>' : ''}
+                <button type="button" class="btn btn-primary" data-act="resume">继续执行</button>
+            </div>`;
+        backdrop.append(modal);
+        const closeModal = mountAppModal(backdrop, () => {});
+        modal.querySelector('[data-act="later"]').addEventListener('click', () => closeModal());
+        modal.querySelector('[data-act="resume"]').addEventListener('click', () => {
+            closeModal();
+            onResume();
+        });
+        if (canUpgrade) {
+            modal.querySelector('[data-act="upgrade"]').addEventListener('click', () => {
+                closeModal();
+                resumeWithUnlimited(task);
+            });
+        }
+        backdrop.addEventListener('click', event => { if (event.target === backdrop) closeModal(); });
+        const primary = modal.querySelector('[data-act="resume"]');
+        if (primary) primary.focus();
+    }
+
+    // 弹窗里的「切换为无限制并继续」：走与开始时相同的二次确认，再带 upgrade_to 续跑。
+    async function resumeWithUnlimited(task) {
+        const bvid = state.bvid;
+        const seq = state.fetchSeq;
+        const taskId = task.task_id;
+        const revision = task.revision;
+        const ok = await confirmUnlimited(state.preflight);
+        if (!ok || seq !== state.fetchSeq || bvid !== state.bvid) return;
+        try {
+            const resp = await apiWrite(`/tasks/${encodeURIComponent(taskId)}/resume`, 'POST', {
+                expected_revision: revision,
+                acknowledge_unknown: true,
+                upgrade_to: 'unlimited',
+            });
+            if (seq !== state.fetchSeq || bvid !== state.bvid) return;
+            state.task = (resp && resp.data) || state.task;
+            renderOverview();
+            if (state.task && state.task.task_id) startPolling(state.task.task_id, seq);
+        } catch (error) {
+            showAppAlert(`切换档位并继续失败：${error.message}`);
+        }
     }
 
     // 任务进度区：阶段 / 进度 / 覆盖 / 预算 / 错误（只读展示）。
+    // ETA 按秒倒数：只更新那一行文字，不重渲染整个任务区（避免把按钮状态/焦点打乱）。
+    let etaTimer = null;
+
+    function startEtaTicker() {
+        if (etaTimer) return;
+        etaTimer = setInterval(() => {
+            const task = state.task;
+            if (!task || !task.eta || task.eta.remaining_ms === undefined) { stopEtaTicker(); return; }
+            const area = el('semantic-task-area');
+            if (!area) return;
+            const node = area.querySelector('.semantic-eta');
+            if (node) node.textContent = etaLine(task);
+        }, 1000);
+    }
+
+    function stopEtaTicker() {
+        if (etaTimer) { clearInterval(etaTimer); etaTimer = null; }
+    }
+
     function renderTaskArea() {
         const area = el('semantic-task-area');
         if (!area) return;
         const task = state.task;
         if (!task) { area.innerHTML = ''; return; }
+        // ETA 的本地时间戳：按秒倒数用，每次拿到新任务态就校准一次，不额外请求后端。
+        if (task.eta && task.eta.remaining_ms !== undefined) {
+            task.eta._localAt = Date.now();
+            startEtaTicker();
+        } else {
+            stopEtaTicker();
+        }
         const coverage = task.coverage || {};
         const budget = task.budget || {};
         // progress 是 0..1 的标量（store._state_dto: float(task.progress)），不是对象。
@@ -548,31 +980,63 @@
             html += ` · ${escapeHtml(String(Math.round(Math.min(1, ratio) * 100)))}%`;
         }
         html += '</div>';
-        // 跨批覆盖：service 输出 pairs_visited / pairs_unvisited（-1 表示未知）。
-        if (coverage.pairs_visited !== undefined || coverage.pairs_unvisited !== undefined) {
-            const visited = Number(coverage.pairs_visited) || 0;
-            const unvisited = Number(coverage.pairs_unvisited);
-            const totalText = Number.isFinite(unvisited) && unvisited >= 0
-                ? String(visited + unvisited) : '未知';
-            html += `<p class="semantic-coverage">跨批覆盖：${escapeHtml(String(visited))}/${escapeHtml(totalText)}`;
+        const etaText = etaLine(task);
+        if (etaText) html += `<p class="semantic-eta">${escapeHtml(etaText)}</p>`;
+        const coverageText = crossCoverageText(coverage);
+        if (coverageText) {
+            html += `<p class="semantic-coverage">跨批覆盖：${escapeHtml(coverageText)}`;
             if (coverage.oversize_skipped) html += ` · 超限跳过 ${escapeHtml(String(coverage.oversize_skipped))}`;
             if (coverage.partial) html += ' · 未完全覆盖';
             html += '</p>';
         }
         // 预算：已结算 / 预约 token（store budget DTO）。
         if (budget.settled_tokens !== undefined || budget.reserved_tokens !== undefined) {
-            html += `<p class="semantic-coverage">本次用量：已结算 ${text(budget.settled_tokens, 0)} · 预约 ${text(budget.reserved_tokens, 0)} tokens`;
-            if (budget.daily_settled !== undefined) html += ` · 今日累计 ${text(budget.daily_settled, 0)}`;
+            const modeLabel = budget.budget_mode === 'unlimited' ? '无限制' : '默认档';
+            html += `<p class="semantic-coverage">本次用量：已结算 ${text(budget.settled_tokens, 0)} · 预约 ${text(budget.reserved_tokens, 0)} tokens · 预算模式 ${modeLabel}`;
+            if (budget.daily_settled !== undefined) html += ` · 今日累计 ${text(budget.daily_settled, 0)}（仅默认档）`;
             html += '</p>';
         }
-        if (task.status === 'partial') {
-            html += '<p class="semantic-hint">部分完成：受预算 / 组大小限制，仍有候选对未比较，结果可能漏并。</p>';
+        const stopNote = stopReasonNote(task);
+        if (stopNote) html += `<p class="semantic-hint">${escapeHtml(stopNote)}</p>`;
+        if (state.pollStalled && task.status === 'running') {
+            html += '<p class="semantic-warn">任务已超过 10 分钟没有新进展，可能卡在模型请求上；页面会继续跟进，也可以取消后重试。</p>';
         }
         if (task.error) {
             const errMsg = (task.error && (task.error.message || task.error.reason)) || task.error;
             html += `<p class="semantic-warn">错误：${text(errMsg)}</p>`;
         }
         area.innerHTML = html;
+    }
+
+    // 跨批覆盖的展示文本；没有可展示的内容时返回空串。
+    // 后端统一输出 total_pairs / pairs_reviewed / pairs_unvisited；旧版本落库的任务可能只有
+    // pairs_visited / pairs_unvisited（-1 表示未知），这里一并兼容。
+    function crossCoverageText(coverage) {
+        if (!coverage) return '';
+        const hasNew = coverage.pairs_reviewed !== undefined || coverage.total_pairs !== undefined;
+        const hasOld = coverage.pairs_visited !== undefined || coverage.pairs_unvisited !== undefined;
+        if (!hasNew && !hasOld) return '';
+        // 只有一批：批内已两两比较，永远不会进入跨批阶段，不显示这一行。
+        if (Number(coverage.batches) === 1) return '';
+        const reviewedRaw = hasNew ? coverage.pairs_reviewed : coverage.pairs_visited;
+        const reviewed = Number.isFinite(Number(reviewedRaw)) ? Number(reviewedRaw) : 0;
+        let total = Number(coverage.total_pairs);
+        if (!(coverage.total_pairs !== null && Number.isFinite(total) && total >= 0)) {
+            const unvisited = Number(coverage.pairs_unvisited);
+            total = coverage.pairs_unvisited !== null && Number.isFinite(unvisited) && unvisited >= 0
+                ? reviewed + unvisited : NaN;
+        }
+        if (total === 0 && reviewed === 0) {
+            // 旧版本落库的多批任务在批内阶段就停下时也写成 0/0：跨批并未开始。
+            if (!hasNew && Number(coverage.batches) > 1) return '未开始';
+            // 只有一批（或没有批次信息）：批内已两两比较，没有跨批对，不显示这一行。
+            return '';
+        }
+        if (!Number.isFinite(total)) {
+            // 批内阶段就停下，跨批比较还没开始，候选对总数未知。
+            return reviewed > 0 ? `${reviewed}/未知` : '未开始';
+        }
+        return `${reviewed}/${total}`;
     }
 
     const STATUS_LABELS = {
@@ -812,10 +1276,11 @@
         }
     }
 
-    // 页面隐藏时停止轮询（可见时若任务仍进行中由下次 selectBvid / 用户操作恢复）。
+    // 页面隐藏时停止轮询，回到前台时若任务仍在进行就恢复轮询。
     if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
         document.addEventListener('visibilitychange', () => {
             if (document.hidden) stopPolling();
+            else resumePollingIfActive();
         });
     }
 
@@ -831,6 +1296,7 @@
     }
 
     function init() {
+        state.budgetMode = loadBudgetMode();
         const btn = el('semantic-load-btn');
         if (btn) btn.addEventListener('click', onLoadClick);
         const input = el('semantic-bvid');
@@ -855,6 +1321,7 @@
         // 测试 / 调试入口：暴露内部状态与关键函数（不改变运行行为）。
         window.__semanticPanel = {
             state, selectBvid, renderResult, stopPolling, init, onLoadClick, submitDecision,
+            resumePollingIfActive, onStart, setBudgetMode: applyBudgetMode, resumeWithUnlimited,
         };
     }
 })();

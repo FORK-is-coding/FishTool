@@ -29,11 +29,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from core.config import config
 
 from .contracts import (
     BATCH_ATTEMPTS,
     BATCH_SIZE,
+    BUDGET_MODE_DEFAULT,
+    BUDGET_MODE_UNLIMITED,
+    BUDGET_PROFILES,
     CONSENT_VERSION,
     DEFAULT_LIMIT,
     DEFAULT_LIMITS,
@@ -41,6 +47,7 @@ from .contracts import (
     MAX_GROUP_SIZE,
     MAX_LIMIT,
     MEMBERSHIP_KEY,
+    OUTPUT_TOKENS,
     PHASE_BATCH,
     PHASE_CROSS,
     RULE_VERSION,
@@ -49,11 +56,44 @@ from .contracts import (
     SemanticConflict,
     SemanticError,
     SemanticProviderError,
+    SemanticResumableStop,
     SemanticValidationError,
+    STOP_DEGRADED,
+    STOP_ROUNDS_EXHAUSTED,
+    SYSTEM_PROMPT,
+    budget_profile,
     estimate_request_tokens,
+    resolve_budget_mode,
+    stop_reason_for_scope,
 )
 
 logger = logging.getLogger(__name__)
+
+#: 重试与续跑都无益的服务商错误：任务直接 failed 并写明原因。
+_FATAL_PROVIDER_CATEGORIES = (
+    ProviderErrorCategory.AUTH,
+    ProviderErrorCategory.MODEL_NOT_FOUND,
+    ProviderErrorCategory.NOT_CONFIGURED,
+)
+
+
+_FATAL_MESSAGES = {
+    ProviderErrorCategory.AUTH: "API Key 无效或无权限，请到配置页检查",
+    ProviderErrorCategory.MODEL_NOT_FOUND: "模型不存在，请到配置页检查模型名",
+    ProviderErrorCategory.NOT_CONFIGURED: "模型未配置",
+}
+
+
+class _TaskFatal(SemanticError):
+    """内部信号：服务商错误不可恢复，_run 据 category 把任务标 failed。"""
+
+    def __init__(self, category: str) -> None:
+        super().__init__(f"模型调用不可恢复: {category}")
+        self.category = category
+
+
+#: 跨批阶段写进 coverage.reason 的降级原因（先写先得）。用于从旧 checkpoint 推断 degraded。
+_CROSS_DEGRADED_REASONS = ("cross_degraded", "oversize", "verify_unverified")
 
 #: crossphase 有界轮数上界(最小实现:1 个基础窗 + 1 次环移轮,给跨窗口代表候选
 #: 一次同窗机会;不追求组合全覆盖,未复核对仍如实标 partial)。
@@ -62,6 +102,22 @@ MAX_CROSS_ROUNDS = 2
 # --------------------------------------------------------------------------
 # 纯函数辅助
 # --------------------------------------------------------------------------
+
+def _stop_reason(scope: Optional[str], *, degraded: bool, partial: bool) -> Optional[str]:
+    """按优先级给出任务结束时的 stop_reason（coverage.stop_reason）。
+
+    预算类与服务商类停止（有 scope）> 降级（degraded）> 轮数用完（partial 但都不是）。
+    不能沿用 coverage.reason：它是先写先得，phase1 一旦写了 phase1_degraded，
+    后面的预算停止就被盖住了。正常完成返回 None。
+    """
+    if scope:
+        return stop_reason_for_scope(scope)
+    if degraded:
+        return STOP_DEGRADED
+    if partial:
+        return STOP_ROUNDS_EXHAUSTED
+    return None
+
 
 def _clamp_limit(limit: Optional[int]) -> int:
     """把请求 limit 收敛到 [1, MAX_LIMIT]，缺省回落 DEFAULT_LIMIT。"""
@@ -131,6 +187,131 @@ def _content_by_id(snapshot: Dict[str, Any]) -> Dict[str, str]:
     """快照内全部 id -> 原文映射（跨批次全量成员校验时取原文用）。"""
     return {raw.get("id"): (raw.get("content") or "")
             for raw in (snapshot.get("items") or []) if raw.get("id")}
+
+
+#: 开始前粗估的单次调用耗时区间（秒）。没有历史实测数据时的固定区间；
+#: PR:预估时间 会用最近任务的实测中位数替换。
+_ESTIMATE_SECONDS_PER_CALL = (10, 30)
+
+
+def _start_estimate(snapshot: Dict[str, Any],
+                    median_call_ms: Optional[int] = None) -> Dict[str, Any]:
+    """开始前粗估：按当前快照的合格条数推算调用次数、token 与耗时区间。
+
+    跨批候选数要等 phase1 分组后才知道，所以只给区间：下限为只跑批内（无跨批
+    可合并），上限按两轮跨批、每轮每批一个窗口的分组调用估算；合并复核的调用数
+    事先不可知，实际可能超过上限，前端文案必须写明“粗估”。token 按字节数保守
+    估算（字节恒 >= token，与 estimate_request_tokens 同口径）。
+    """
+    eligible = _eligible_items_in_order(snapshot)
+    n = len(eligible)
+    if not n:
+        return {"eligible": 0, "calls_min": 0, "calls_max": 0,
+                "tokens_min": 0, "tokens_max": 0, "seconds_min": 0, "seconds_max": 0,
+                "estimated": True}
+    batches = -(-n // BATCH_SIZE)
+    calls_min = batches
+    calls_max = batches * (1 + MAX_CROSS_ROUNDS)
+    content_bytes = sum(len((it.get("content") or "").encode("utf-8")) for it in eligible)
+    system_bytes = len(SYSTEM_PROMPT.encode("utf-8"))
+    per_round_tokens = content_bytes + batches * (system_bytes + OUTPUT_TOKENS)
+    # 单次耗时：有历史实测就用最近任务的中位数，没有则用固定 10~30 秒区间。
+    if median_call_ms is not None and median_call_ms > 0:
+        per_call = (median_call_ms / 1000.0, median_call_ms / 1000.0)
+    else:
+        per_call = _ESTIMATE_SECONDS_PER_CALL
+    return {
+        "eligible": n,
+        "calls_min": calls_min,
+        "calls_max": calls_max,
+        "tokens_min": per_round_tokens,
+        "tokens_max": per_round_tokens * (1 + MAX_CROSS_ROUNDS),
+        "seconds_min": int(calls_min * per_call[0]),
+        "seconds_max": int(calls_max * per_call[1]),
+        "estimated": True,
+        "median_call_ms": median_call_ms,
+    }
+
+
+#: 前几次调用之前不显示剩余时间：样本太少，剩余时间会乱跳。
+_MIN_TIMED_CALLS_FOR_ETA = 3
+
+
+def _eta_for_task(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """运行中的剩余时间估计：剩余调用数下限 × 本任务实测平均耗时。
+
+    剩余调用数只算**确定还要发生**的分组调用（批内剩余批、跨批剩余窗口），
+    合并复核的调用数事先不知道，所以 calls_left 是下限，前端显示「至少」。
+    排队（queued）不显示剩余时间；前 _MIN_TIMED_CALLS_FOR_ETA 次调用前不显示。
+    正常完成/停止（非 running）不显示。
+    """
+    budget = state.get("budget") or {}
+    status = state.get("status")
+    if status == "queued":
+        return {"phase": "queued", "queued_note": "排队中，前面还有其他语义任务"}
+    if status != "running":
+        return None
+    timed_calls = int(budget.get("timed_calls") or 0)
+    if timed_calls < _MIN_TIMED_CALLS_FOR_ETA:
+        return None
+    avg_ms = int(budget.get("elapsed_call_ms") or 0) / timed_calls
+    phase = state.get("phase") or PHASE_BATCH
+    checkpoint = state.get("checkpoint") or {}
+    phase1 = checkpoint.get("phase1") or {}
+    calls_left = 0
+    done = 0
+    total = 0
+    if phase == PHASE_BATCH:
+        total = int(phase1.get("total") or 0)
+        marks = phase1.get("batches") or {}
+        done = sum(1 for m in marks.values() if m.get("status") == "done")
+        calls_left = max(0, total - done)
+        if total > 1:
+            # 多批任务批内结束后还有跨批阶段（至少一次分组调用）；
+            # 只有一批时没有跨批阶段，剩余就是 0，不能虚报还有一次。
+            calls_left = max(1, calls_left)
+        total = max(total, done + calls_left)
+    else:
+        cross = checkpoint.get("cross") or {}
+        plan = cross.get("plan") or []
+        windows_done = set(cross.get("windows_done") or [])
+        total = len(plan)
+        done = len(windows_done)
+        calls_left = max(0, total - done)
+    remaining_ms = int(calls_left * avg_ms)
+    return {
+        "phase": phase,
+        "done": done,
+        "total": total,
+        "calls_left": calls_left,
+        "avg_call_ms": int(avg_ms),
+        "remaining_ms": remaining_ms,
+        "elapsed_ms": int(budget.get("elapsed_call_ms") or 0),
+        "at_least": True,
+    }
+
+
+def _global_daily_remaining() -> Dict[str, Any]:
+    """全局 AI 日上限的当日剩余（默认档开始前提示用）；读取失败按未知返回。
+
+    与 llm.client._check_token_limit 同一口径：0 表示不限制（remaining=None）。
+    """
+    try:
+        from datetime import date as _date
+
+        from core.config import LLM_DAILY_TOKEN_LIMIT_DEFAULT
+        from llm.client import _coerce_daily_limit, _db_tokens_used_on
+        # 与 LLMClient.__init__ 同口径：缺配置用默认值，非法值按默认值处理。
+        # 不能用 `or 0`：缺配置会被当成 0（不限制），提示就不出现了。
+        limit = _coerce_daily_limit(
+            config.get("llm.daily_token_limit", LLM_DAILY_TOKEN_LIMIT_DEFAULT))
+        used = _db_tokens_used_on(_date.today())
+        used = int(used) if used is not None else 0
+        return {"limit": limit, "used": used,
+                "remaining": None if limit <= 0 else max(0, limit - used)}
+    except Exception:  # noqa: BLE001 - 预检提示信息缺失不应打断预检本身
+        logger.debug("读取全局日用量失败", exc_info=True)
+        return {"limit": None, "used": None, "remaining": None}
 
 
 def _chunk_items(items: List[Dict[str, Any]], video_title: str,
@@ -244,6 +425,11 @@ class SemanticService:
             "consent_version": CONSENT_VERSION,
             "rule_version": RULE_VERSION,
             "limits": dict(DEFAULT_LIMITS),
+            # 预算模式：两档数值（选择“无限制”时的确认弹窗用）+ 按当前快照的开始前
+            # 粗估（调用次数/token/耗时区间）+ 全局 AI 日上限当日剩余（默认档提示用）。
+            "budget_profiles": {mode: dict(p) for mode, p in BUDGET_PROFILES.items()},
+            "estimate": _start_estimate(snapshot, self.store.recent_call_ms_median()),
+            "global_daily": _global_daily_remaining(),
             "preference": {
                 "auto_fold": pref.get("auto_fold"),
                 "revision": pref.get("revision"),
@@ -253,13 +439,15 @@ class SemanticService:
         }
 
     async def start(self, bvid: str, limit: int, consent_version: str,
-                    request_key: str) -> Dict[str, Any]:
+                    request_key: str, budget_mode: Optional[str] = None) -> Dict[str, Any]:
         """校验「持久化的、与模型身份绑定的同意」后创建任务，快速返回公开态。
 
         不在 durable create 之前发任何模型请求；创建成功且是新 queued 任务才入队
         后台 worker（全局串行）。幂等 request_key 由 store 保证。
+        budget_mode 只接受服务端定义的两档（contracts.BUDGET_PROFILES），随任务钉死。
         """
         limit = _clamp_limit(limit)
+        mode = resolve_budget_mode(budget_mode)
         # 资源存在性是最基本的前提，必须先于 consent / 模型配置校验（issue #47）：
         # 否则 BV 号打错时用户只会看到 503「模型未配置」或 400「未同意」，排查方向被带偏。
         # store.preference 在视频不存在时抛 SemanticNotFound（-> 404），且只是一次轻量
@@ -284,14 +472,27 @@ class SemanticService:
                 "尚未对当前模型身份授予语义折叠同意", reason="consent_required")
 
         snapshot = self.store.snapshot(bvid, limit=limit)
-        state = self.store.create_task(snapshot, identity, dict(DEFAULT_LIMITS), request_key)
+        # 默认档沿用 DEFAULT_LIMITS（与既有行为/测试口径一致）；无限制档用档位上限覆盖。
+        limits = dict(DEFAULT_LIMITS)
+        if mode == BUDGET_MODE_UNLIMITED:
+            limits.update(budget_profile(mode))
+        state = self.store.create_task(snapshot, identity, limits, request_key,
+                                       budget_mode=mode)
         if state.get("status") == "queued":
             self._schedule(state["task_id"])
         return _public_state(state)
 
     def status(self, task_id: str) -> Dict[str, Any]:
-        """返回任务公开态（同步；store 读取短事务）。"""
-        return _public_state(self.store.get_task(task_id))
+        """返回任务公开态（同步；store 读取短事务）。
+
+        eta 在剔除 checkpoint 之前计算：剩余批数/窗口数只能从 checkpoint 得到。
+        """
+        raw = self.store.get_task(task_id)
+        eta = _eta_for_task(raw)
+        state = _public_state(raw)
+        if eta is not None:
+            state["eta"] = eta
+        return state
 
     def results(self, task_id: str, page: int = 1,
                 page_size: int = 50) -> Dict[str, Any]:
@@ -305,13 +506,19 @@ class SemanticService:
         settle 记账(不发布)。store 负责终态幂等与不自动退款。
         """
         state = self.store.cancel_task(task_id, expected_revision)
-        return _public_state(state)
+        eta = _eta_for_task(state)
+        public = _public_state(state)
+        if eta is not None:
+            public["eta"] = eta
+        return public
 
     async def resume(self, task_id: str, expected_revision: int,
-                     acknowledge_unknown: bool = False) -> Dict[str, Any]:
+                     acknowledge_unknown: bool = False,
+                     upgrade_to: Optional[str] = None) -> Dict[str, Any]:
         """续跑：要求 interrupted/partial/failed + 对未知在飞的 ack；模型身份变更则拒。
 
         不重发已成功的 checkpoint 单元;保留既往计费;在剩余预算内继续。
+        upgrade_to="unlimited" 时把默认档任务升级为无限制档（只允许单向升级）。
         """
         state = self.store.get_task(task_id)
         configured, identity = self._provider_identity()
@@ -324,10 +531,15 @@ class SemanticService:
                 "模型身份已变更，拒绝在不同身份下续跑；请新建任务")
 
         resumed = self.store.resume_task(
-            task_id, expected_revision, acknowledge_unknown=acknowledge_unknown)
+            task_id, expected_revision, acknowledge_unknown=acknowledge_unknown,
+            upgrade_to=upgrade_to)
+        eta = _eta_for_task(resumed)
+        public = _public_state(resumed)
+        if eta is not None:
+            public["eta"] = eta
         if resumed.get("status") == "queued":
             self._schedule(resumed["task_id"])
-        return _public_state(resumed)
+        return public
 
     async def shutdown(self) -> None:
         """停机：取消本实例所有后台句柄，不发任何自动请求、不改 store 状态。
@@ -380,6 +592,10 @@ class SemanticService:
                 # 并发取消/版本栅栏/身份变更:任务已被 cancel_task 等旁路处置为终态,
                 # 不可再覆写(cancelled 不可被 worker 改写),静默收尾。
                 logger.info("语义任务 %s 被并发处置而停止: %s", task_id, exc)
+            except _TaskFatal as exc:
+                logger.warning("语义任务 %s 因不可恢复的模型错误失败: %s", task_id, exc.category)
+                self._mark_failed_safe(task_id, exc.category, _FATAL_MESSAGES.get(
+                    exc.category, "模型调用失败"))
             except SemanticError as exc:
                 logger.warning("语义任务 %s 结束于语义错误: %r", task_id, exc)
                 self._mark_failed_safe(task_id, "semantic_error", "语义折叠失败")
@@ -414,26 +630,36 @@ class SemanticService:
         return state["revision"], state
 
     def _settle(self, task_id: str, revision: int,
-                usage_tokens: Optional[int]) -> Dict[str, Any]:
+                usage_tokens: Optional[int], call_ms: Optional[int] = None) -> Dict[str, Any]:
         """结算当前在飞 attempt（模型调用后）。返回结算后的 state。
 
         若并发取消导致 CAS 冲突:按**最新** revision 再结算一次(仅记账,不复位
         cancelled 状态);store 允许 cancelled 下"只记账不发布"。
         返回 state 让调用方据 status 判断是否应停止(绝不在非 running 下继续发布)。
+        call_ms 只在真实发起过模型调用时传入（取消/未知异常走 _settle_quiet 不传）。
         """
         try:
-            return self.store.settle_attempt(task_id, revision, usage_tokens)
+            return self.store.settle_attempt(task_id, revision, usage_tokens, call_ms=call_ms)
         except SemanticConflict:
             latest = self.store.get_task(task_id)
-            return self.store.settle_attempt(task_id, latest["revision"], usage_tokens)
+            return self.store.settle_attempt(task_id, latest["revision"], usage_tokens,
+                                             call_ms=call_ms)
+
+    def _void(self, task_id: str, revision: int) -> Dict[str, Any]:
+        """撤销当前在飞预约(请求确定未发出)。并发冲突时按最新 revision 再撤销一次。"""
+        try:
+            return self.store.void_attempt(task_id, revision)
+        except SemanticConflict:
+            latest = self.store.get_task(task_id)
+            return self.store.void_attempt(task_id, latest["revision"])
 
     def _settle_quiet(self, task_id: str, revision: int,
                       usage_tokens: Optional[int]) -> None:
-        """取消路径下的尽力结算:仅记账,吞异常(debug 留痕),绝不改变取消语义。"""
+        """尽力结算(取消、契约外异常路径):仅记账,吞异常(debug 留痕),不改变调用方语义。"""
         try:
             self._settle(task_id, revision, usage_tokens)
         except SemanticError as exc:
-            logger.debug("取消路径结算任务 %s 记账失败(可接受): %r", task_id, exc)
+            logger.debug("尽力结算任务 %s 记账失败(可接受): %r", task_id, exc)
 
     async def _grouped_call(self, task_id: str, revision: int, provider: Any,
                             items: List[Dict[str, Any]], video_title: str,
@@ -457,39 +683,74 @@ class SemanticService:
         for _try in range(BATCH_ATTEMPTS):
             revision, _ = self._reserve(task_id, revision, est.total_tokens)
             usage_tokens: Optional[int] = None
+            call_ms: Optional[int] = None  # 只有真实发起过模型调用才计时
+            started_ms = time.monotonic()
             try:
                 result = await provider.group(
                     items, video_title, phase=phase, omit_temperature=omit_temperature)
+                call_ms = int((time.monotonic() - started_ms) * 1000)
             except asyncio.CancelledError:
                 # 硬取消发生在模型调用中:仍结算在飞记账(不退款),再原样上抛;
-                # 绝不返回数据 => 绝不发布。
+                # 绝不返回数据 => 绝不发布。取消路径不计耗时（_settle_quiet 不传 call_ms）。
                 self._settle_quiet(task_id, revision, None)
                 raise
             except SemanticProviderError as exc:
-                # 传输/参数层失败:已记账(settle),按分类决定是否有界重试。
-                state = self._settle(task_id, revision, None)
+                # 请求已发出（非 TOKEN_LIMIT 的预检拒绝），按实测耗时结算。
+                call_ms = int((time.monotonic() - started_ms) * 1000)
+                category = exc.category
+                if category == ProviderErrorCategory.TOKEN_LIMIT:
+                    # 全局每日上限在发请求之前拦下(LLMClient._check_token_limit 在 post 之前):
+                    # 撤销预约,不计费不计次,当前单元保持未完成,任务以可续跑的 partial 停下。
+                    state = self._void(task_id, revision)
+                    self._stop_if_not_running(state)
+                    raise SemanticResumableStop(
+                        "全局每日 AI 用量已达上限", scope="global_daily") from exc
+                # 其余传输/参数层失败:请求可能已发出,已记账(settle)。
+                state = self._settle(task_id, revision, None, call_ms=call_ms)
                 revision = state["revision"]
                 self._stop_if_not_running(state)  # 并发取消 => 抛 Conflict,不再续发
                 last_exc = exc
-                if exc.category == ProviderErrorCategory.UNSUPPORTED_TEMPERATURE and not omit_temperature:
+                if category == ProviderErrorCategory.UNSUPPORTED_TEMPERATURE and not omit_temperature:
                     omit_temperature = True  # 下一轮省略 temperature 重试
                     continue
-                if exc.category == ProviderErrorCategory.NETWORK:
-                    continue  # 未知网络:在剩余 BATCH_ATTEMPTS 内有界重试
-                break  # auth/model_not_found/token_limit 等:重试无益,停
+                if category in (ProviderErrorCategory.NETWORK, ProviderErrorCategory.SERVER):
+                    # 未知网络 / 5xx:在剩余 BATCH_ATTEMPTS 内有界重试;最后一次仍是 5xx 时
+                    # 停下等用户续跑,不把整个单元永久降级为“各自独立”。
+                    if _try + 1 < BATCH_ATTEMPTS:
+                        continue
+                    if category == ProviderErrorCategory.SERVER:
+                        raise SemanticResumableStop(
+                            "模型服务暂时不可用", scope="provider_unavailable") from exc
+                    break
+                if category == ProviderErrorCategory.RATE_LIMIT:
+                    raise SemanticResumableStop("模型服务限频", scope="rate_limited") from exc
+                if category == ProviderErrorCategory.QUOTA:
+                    raise SemanticResumableStop(
+                        "模型服务余额或配额不足", scope="provider_quota") from exc
+                if category in _FATAL_PROVIDER_CATEGORIES:
+                    # 鉴权失败 / 模型不存在 / 未配置:重试与续跑都无益,任务直接失败。
+                    raise _TaskFatal(category) from exc
+                break  # UNKNOWN 等:保持原行为,本单元降级为各自独立
             except SemanticValidationError as exc:
                 # 拿到了响应但不合法(截断/拒答/ID 非法等):已记账,有界重试。
-                state = self._settle(task_id, revision, None)
+                call_ms = int((time.monotonic() - started_ms) * 1000)
+                state = self._settle(task_id, revision, None, call_ms=call_ms)
                 revision = state["revision"]
                 self._stop_if_not_running(state)
                 last_exc = exc
                 continue
-            # 成功路径:结算实际/预留用量,再据结算后状态判断是否应停止。
+            except Exception:
+                # provider 抛了契约外的异常(bug / 未包装的第三方异常):请求可能已发出,
+                # 先按估算结算清掉在飞记录再原样上抛,由 _run 标 failed。否则 in_flight
+                # 残留,续跑时 reserve 抛"已有在飞请求"被当作并发处置吞掉,任务卡在 running。
+                self._settle_quiet(task_id, revision, None)
+                raise
+            # 成功路径:结算实际/预留用量与实测耗时,再据结算后状态判断是否应停止。
             usage = result.get("usage_tokens")
             usage_estimated = bool(result.get("usage_estimated", False))
             if isinstance(usage, int) and usage >= 0 and not usage_estimated:
                 usage_tokens = usage  # 有效真实用量:结算实际
-            state = self._settle(task_id, revision, usage_tokens)
+            state = self._settle(task_id, revision, usage_tokens, call_ms=call_ms)
             revision = state["revision"]
             # 并发取消已把任务改为非 running:抛 Conflict 让 worker 停,结果绝不发布。
             self._stop_if_not_running(state)
@@ -544,32 +805,44 @@ class SemanticService:
             state = self.store.get_task(task_id)
             self.store.update_task(task_id, state["revision"],
                                    status="completed", phase="done",
-                                   coverage={"eligible": 0, "partial": False})
+                                   coverage={"eligible": 0, "partial": False,
+                                             "stop_reason": None})
             return
 
         budget_hit = False
+        stop_scope: Optional[str] = None  # 预算 / 可续跑停止的 scope,决定 stop_reason
         provider = self._new_provider()
+        # 按任务档位决定是否跳过全局日上限检查（无限制档跳过；任务档内上限仍由
+        # store 层强制）。属性而非参数：测试替身的 group 签名写死，不能加参。
+        provider.enforce_daily_limit = (
+            (state.get("budget") or {}).get("budget_mode") != BUDGET_MODE_UNLIMITED)
         async with provider:
             # ---------- phase1：批内分组 ----------
             try:
                 revision, groups, related, batch_count, phase1_partial = \
                     await self._run_phase1(task_id, revision, provider,
                                            eligible, video_title, checkpoint)
-            except SemanticBudgetExceeded:
-                # 预算耗尽:用已 checkpoint 的 phase1 结果发布 partial。
+            except SemanticBudgetExceeded as exc:
+                # 预算耗尽 / 可续跑停止:用已 checkpoint 的 phase1 结果发布 partial。
                 revision, groups, related, batch_count, phase1_partial = \
                     self._phase1_from_checkpoint(task_id)
                 budget_hit = True
+                stop_scope = exc.scope or "task"
 
             # ---------- crossphase：跨批候选原成员复核 ----------
             coverage: Dict[str, Any]
             if budget_hit or batch_count <= 1:
                 # 预算已耗尽,或只有一批(批内已全覆盖,无跨批可做)。
+                # 键名与 _run_cross 一致(total_pairs / pairs_reviewed / pairs_unvisited /
+                # windows_attempted),前端只读这一套。多批任务在批内阶段就停下时跨批还没开始,
+                # 候选对总数未知,记为 None;只有一批时(不论是否撞预算)没有跨批对,总数为 0。
                 coverage = {
                     "batches": batch_count,
-                    "cross_windows": 0,
-                    "pairs_visited": 0,
-                    "pairs_unvisited": 0,
+                    "windows_attempted": 0,
+                    "windows_reviewed": 0,
+                    "total_pairs": None if (budget_hit and batch_count > 1) else 0,
+                    "pairs_reviewed": 0,
+                    "pairs_unvisited": None if (budget_hit and batch_count > 1) else 0,
                     "oversize_skipped": 0,
                     "partial": bool(budget_hit or phase1_partial),
                     "reason": "budget" if budget_hit else ("phase1_degraded" if phase1_partial else None),
@@ -581,10 +854,12 @@ class SemanticService:
                     revision, groups, related, coverage = await self._run_cross(
                         task_id, revision, provider, snapshot, eligible,
                         groups, related, batch_count, phase1_partial)
-                except SemanticBudgetExceeded:
+                except SemanticBudgetExceeded as exc:
+                    # 兜底:_run_cross 自己会捕获预算异常并返回覆盖率,正常走不到这里。
+                    stop_scope = exc.scope or "task"
                     coverage = {
-                        "batches": batch_count, "cross_windows": 0,
-                        "pairs_visited": 0, "pairs_unvisited": -1,
+                        "batches": batch_count, "windows_attempted": 0, "windows_reviewed": 0,
+                        "total_pairs": None, "pairs_reviewed": 0, "pairs_unvisited": None,
                         "oversize_skipped": 0, "partial": True, "reason": "budget",
                     }
                     budget_hit = True
@@ -603,19 +878,35 @@ class SemanticService:
             raise SemanticConflict("发布前发现任务已非 running,停止(不发布)")
         state = self.store.publish_groups(
             task_id, latest["revision"], publishable, related_groups=related)
+        coverage = dict(coverage)
+        coverage["stop_reason"] = _stop_reason(
+            stop_scope or coverage.pop("stop_scope", None),
+            # budget_hit 时 stop_scope 必非空，_stop_reason 的 scope 分支已短路，
+            # degraded 取值在那种情况下不影响结果。
+            degraded=bool(phase1_partial) or bool(coverage.get("degraded")),
+            partial=partial)
+        coverage.pop("stop_scope", None)
         self.store.update_task(
             task_id, state["revision"],
             status="partial" if partial else "completed",
             phase="done", coverage=coverage)
 
     def _fail(self, task_id: str, revision: int, reason: str, message: str) -> None:
-        """把任务标 failed（安全原因码 + 脱敏消息，绝不回原始模型/服务端报文）。"""
+        """把任务标 failed（安全原因码 + 脱敏消息，绝不回原始模型/服务端报文）。
+
+        revision 参数仅作调用方意向记录：实际 CAS 用读到的最新 revision，
+        避免读-写之间预约结算已推进版本导致无谓冲突。"""
         # Task.error 是 Text 列(非 JSON):必须传安全**字符串**,不能传 dict(否则
         # StatementError/ProgrammingError 落库失败 -> 任务永久 running)。原因码与脱敏
         # 消息编成单行字符串,绝不含原始模型/服务端报文。
         try:
-            self.store.update_task(task_id, revision, status="failed",
-                                   error=f"{reason}: {message}")
+            # coverage.stop_reason 记为 failed:<原因码>：前端只读这个字段决定说明与按钮。
+            current = self.store.get_task(task_id)
+            coverage = dict(current.get("coverage") or {})
+            coverage.pop("stop_scope", None)
+            coverage["stop_reason"] = f"failed:{reason}"
+            self.store.update_task(task_id, current["revision"], status="failed",
+                                   error=f"{reason}: {message}", coverage=coverage)
         except SemanticConflict as exc:
             # 已终态/被旁路(如并发 cancel):不可覆写终态,debug 留痕(不静默吞)。
             logger.debug("标记任务 %s failed 时命中 CAS 冲突(已终态): %r", task_id, exc)
@@ -801,7 +1092,36 @@ class SemanticService:
             working = {g["representative_id"]: g for g in cross_cp["working"]}
         if cross_cp.get("coverage"):
             coverage = dict(cross_cp["coverage"])
+            # 只描述“上一次为什么停下”的字段不能带进这次运行：续跑后正常完成却仍显示
+            # 限频 / 预算停止。reason 是先写先得，也要清掉重算；partial 由本次覆盖率重算。
+            # degraded（窗口降级）是本任务已发生的事实，保留。
+            coverage.pop("stop_scope", None)
+            # 旧版本（本 PR 之前）写的 checkpoint 没有 degraded 键：从当时已有的字段推出来，
+            # 否则之前有窗口超大组 / 复核无结果的任务续跑后会被报成 completed。
+            # 已知盲区：旧版本轮末可能先写 reason="cross_pairs_unvisited"（先写先得），把其后
+            # 发生的窗口降级盖掉；这种形态从旧字段推不出降级，续跑后会显示“轮数用完”而非
+            # “有窗口降级”——仅说明文案偏差，终态与分组结果不受影响，不加启发式误判。
+            if not coverage.get("degraded") and (
+                    int(coverage.get("oversize_skipped") or 0) > 0
+                    or coverage.get("reason") in _CROSS_DEGRADED_REASONS):
+                coverage["degraded"] = True
+            coverage["reason"] = "phase1_degraded" if phase1_partial else None
+            coverage["partial"] = bool(phase1_partial) or bool(coverage.get("degraded"))
         reviewed_pairs = {tuple(p) for p in (cross_cp.get("reviewed_pairs") or [])}
+        if "singletons" in cross_cp:
+            # 已在前一轮被合并进组的单条不能在续跑时复活成单条(否则会被重复比较、计费)。
+            keep = set(cross_cp.get("singletons") or [])
+            singletons = {cid: it for cid, it in singletons.items() if cid in keep}
+        # 轮内进度:中断前这一轮的窗口划分与已完成窗口序号。只对 round_start 这一轮有效。
+        saved_plan: Optional[List[List[str]]] = None
+        saved_done: List[int] = []
+        # 中断时正在合并复核的窗口:已拿到的分组提议与下一个待复核提议的序号。
+        saved_in_progress: Optional[Dict[str, Any]] = None
+        if int(cross_cp.get("plan_round", -1)) == round_start and cross_cp.get("plan"):
+            saved_plan = [list(w) for w in cross_cp["plan"]]
+            saved_done = [int(i) for i in (cross_cp.get("windows_done") or [])]
+            if isinstance(cross_cp.get("window_in_progress"), dict):
+                saved_in_progress = dict(cross_cp["window_in_progress"])
 
         # 轮转:单窗口时 1 轮即全覆盖;多窗口时做有界多轮(每轮换偏移,让跨窗口代表
         # 候选至少有一次同窗机会),轮数上界受预算与 MAX_CROSS_ROUNDS 双重限制,
@@ -810,31 +1130,73 @@ class SemanticService:
         max_rounds = 1 if len(first_windows) <= 1 else min(
             MAX_CROSS_ROUNDS, len(first_windows))
 
+        # 预算异常分支需要知道停在哪一轮、哪些窗口已完成。
+        rnd = round_start
+        plan: Optional[List[List[str]]] = None
+        done_windows: set = set()
+        current: Optional[Dict[str, Any]] = None  # 正在合并复核的窗口进度
         try:
             for rnd in range(round_start, max_rounds):
-                windows = self._cross_windows(
-                    list(working.values()), singletons, content, video_title, rnd)
-                for window in windows:
+                if rnd == round_start and saved_plan is not None:
+                    # 续跑同一轮:用中断前持久化的窗口划分,跳过已完成窗口,不重复收费。
+                    windows = self._windows_from_plan(saved_plan, working, singletons, content)
+                    done_windows = set(saved_done)
+                else:
+                    windows = self._cross_windows(
+                        list(working.values()), singletons, content, video_title, rnd)
+                    done_windows = set()
+                plan = [[it["id"] for it in window] for window in windows]
+                for w_idx, window in enumerate(windows):
+                    if w_idx in done_windows:
+                        continue
                     if len(window) < 2:
+                        done_windows.add(w_idx)
                         continue
-                    coverage["windows_attempted"] += 1
-                    revision, data = await self._grouped_call(
-                        task_id, revision, provider, window, video_title, PHASE_CROSS)
-                    if data is None:
-                        # 本窗口未取得可用响应:不把其对计入 reviewed(不虚报),标 partial。
-                        coverage["partial"] = True
-                        coverage["reason"] = coverage["reason"] or "cross_degraded"
-                        continue
-                    # 成功复核:本窗口内所有候选对计入 reviewed_pairs(真实覆盖)。
-                    coverage["windows_reviewed"] += 1
-                    wids = [it["id"] for it in window]
-                    for i in range(len(wids)):
-                        for j in range(i + 1, len(wids)):
-                            reviewed_pairs.add(tuple(sorted((wids[i], wids[j]))))
-                    for proposal in data.get("equivalent_groups") or []:
-                        rep_ids = list(proposal.get("member_ids") or [])
-                        if len(rep_ids) < 2:
+                    resumed = None
+                    if saved_in_progress is not None and int(saved_in_progress.get("index", -1)) == w_idx:
+                        resumed = saved_in_progress
+                    saved_in_progress = None  # 只对续跑后遇到的第一个未完成窗口有效
+                    if resumed is not None:
+                        # 续跑:本窗口的分组调用在中断前已成功并计入 reviewed_pairs,
+                        # 只把剩下的合并提议复核完,不重做分组调用、不重复计数。
+                        proposals = [list(p) for p in (resumed.get("proposals") or [])]
+                        next_k = int(resumed.get("next") or 0)
+                    else:
+                        coverage["windows_attempted"] += 1
+                        revision, data = await self._grouped_call(
+                            task_id, revision, provider, window, video_title, PHASE_CROSS)
+                        if data is None:
+                            # 本窗口未取得可用响应:不把其对计入 reviewed(不虚报),标 partial。
+                            coverage["partial"] = True
+                            coverage["reason"] = coverage["reason"] or "cross_degraded"
+                            coverage["degraded"] = True
+                            done_windows.add(w_idx)
+                            revision = self._persist_cross(
+                                task_id, revision, working, coverage, reviewed_pairs,
+                                singletons, rnd, plan, done_windows)
                             continue
+                        # 成功复核:本窗口内所有候选对计入 reviewed_pairs(真实覆盖)。
+                        coverage["windows_reviewed"] += 1
+                        wids = [it["id"] for it in window]
+                        for i in range(len(wids)):
+                            for j in range(i + 1, len(wids)):
+                                reviewed_pairs.add(tuple(sorted((wids[i], wids[j]))))
+                        proposals = [list(p.get("member_ids") or [])
+                                     for p in (data.get("equivalent_groups") or [])]
+                        proposals = [p for p in proposals if len(p) >= 2]
+                        next_k = 0
+                        if proposals:
+                            # 分组结果先落盘:之后的合并复核若中途停下,续跑从下一个提议继续,
+                            # 不再为本窗口重新付一次分组调用。
+                            current = {"index": w_idx, "proposals": proposals, "next": 0}
+                            revision = self._persist_cross(
+                                task_id, revision, working, coverage, reviewed_pairs,
+                                singletons, rnd, plan, done_windows, current)
+                    current = {"index": w_idx, "proposals": proposals, "next": next_k}
+                    # 同一窗口的提议成员互不相交(validate_grouping 保证),前面提议的合并
+                    # 不会影响后面提议引用的候选,可以逐个提议续跑。
+                    for k in range(next_k, len(proposals)):
+                        rep_ids = proposals[k]
                         revision, merged, outcome = await self._verify_merge(
                             task_id, revision, provider, content, video_title,
                             rep_ids, working, singletons)
@@ -844,22 +1206,47 @@ class SemanticService:
                             coverage["oversize_skipped"] += 1
                             coverage["partial"] = True
                             coverage["reason"] = coverage["reason"] or "oversize"
+                            coverage["degraded"] = True
                         elif outcome == "unverified":
                             coverage["partial"] = True
                             coverage["reason"] = coverage["reason"] or "verify_unverified"
+                            coverage["degraded"] = True
                         # "rejected":模型明确不合并,完整判定,不降级。
+                        current = {"index": w_idx, "proposals": proposals, "next": k + 1}
+                        if k + 1 < len(proposals):
+                            # 每复核完一个提议就落盘,续跑从下一个提议继续。
+                            revision = self._persist_cross(
+                                task_id, revision, working, coverage, reviewed_pairs,
+                                singletons, rnd, plan, done_windows, current)
+                    # 窗口的分组调用与全部合并复核都完成才记为 done。
+                    done_windows.add(w_idx)
+                    current = None
+                    # 不在这里重算覆盖率:_recompute_cross_coverage 对 reason 先写先得,逐窗口重算会在
+                    # 预算停下前就写成 cross_pairs_unvisited,盖掉 budget。轮结束和函数末尾都会重算。
+                    revision = self._persist_cross(
+                        task_id, revision, working, coverage, reviewed_pairs,
+                        singletons, rnd, plan, done_windows)
                 # 先 settle(在 _grouped_call 内)后 checkpoint:持久化本轮进度。
                 coverage["rounds_done"] = rnd + 1
                 self._recompute_cross_coverage(coverage, reviewed_pairs)
                 revision = self._persist_cross(
-                    task_id, revision, working, coverage, reviewed_pairs)
-        except SemanticBudgetExceeded:
-            # 跨批途中预算耗尽:标 partial、据**已真实复核**的对结算覆盖,不虚报。
+                    task_id, revision, working, coverage, reviewed_pairs, singletons)
+                plan, done_windows = None, set()
+        except SemanticBudgetExceeded as exc:
+            # 跨批途中预算耗尽 / 可续跑停止:标 partial、据**已真实复核**的对结算覆盖,不虚报。
             coverage["partial"] = True
             coverage["reason"] = coverage["reason"] or "budget"
+            coverage["stop_scope"] = exc.scope or "task"
+            # 异常跨越了 _grouped_call 的返回点:同一单元里先前尝试的 reserve/settle
+            # 已推进 store 的 revision,本地值是旧的。必须重读,否则写 checkpoint 时
+            # CAS 冲突抛 SemanticConflict,被 _run 当作"并发处置"吞掉,任务永久 running。
+            revision = self.store.get_task(task_id)["revision"]
             self._recompute_cross_coverage(coverage, reviewed_pairs)
+            # 连同本轮窗口计划、已完成窗口与正在复核的窗口进度一起保存:
+            # 续跑同一轮时只做剩下的窗口和提议。
             revision = self._persist_cross(
-                task_id, revision, working, coverage, reviewed_pairs)
+                task_id, revision, working, coverage, reviewed_pairs,
+                singletons, rnd, plan, done_windows, current)
 
         self._recompute_cross_coverage(coverage, reviewed_pairs)
         new_groups = list(working.values())
@@ -905,21 +1292,66 @@ class SemanticService:
 
     def _persist_cross(self, task_id: str, revision: int,
                        working: Dict[str, Dict[str, Any]],
-                       coverage: Dict[str, Any], reviewed_pairs: set) -> int:
+                       coverage: Dict[str, Any], reviewed_pairs: set,
+                       singletons: Optional[Dict[str, Dict[str, Any]]] = None,
+                       plan_round: Optional[int] = None,
+                       plan: Optional[List[List[str]]] = None,
+                       windows_done: Optional[set] = None,
+                       window_in_progress: Optional[Dict[str, Any]] = None) -> int:
         """持久化 crossphase checkpoint(保留 phase1 段),返回新 revision。
 
-        resume 据 rounds_done 跳过已完成轮,不重复收费;working / reviewed_pairs 以
-        列表存(JSON 友好),覆盖率据已复核对真实计量。
+        resume 据 rounds_done 跳过已完成轮;同一轮内据 plan/windows_done 跳过已完成窗口,
+        不重复收费。working / reviewed_pairs 以列表存(JSON 友好),覆盖率据已复核对真实计量。
         """
         cp = self._task_checkpoint(task_id)
-        cp["cross"] = {
+        cross: Dict[str, Any] = {
             "rounds_done": int(coverage.get("rounds_done") or 0),
             "working": list(working.values()),
             "coverage": coverage,
             "reviewed_pairs": [list(p) for p in reviewed_pairs],
         }
+        if singletons is not None:
+            # 当前仍是单条的 id:已在本任务里被合并进组的单条续跑时不能复活。
+            cross["singletons"] = list(singletons.keys())
+        if plan is not None and plan_round is not None:
+            # 轮内进度:本轮窗口划分(每个窗口的候选 id)与已完成窗口序号。
+            cross["plan_round"] = int(plan_round)
+            cross["plan"] = [list(w) for w in plan]
+            cross["windows_done"] = sorted(int(i) for i in (windows_done or ()))
+            if window_in_progress is not None:
+                # 正在合并复核的窗口:分组提议与下一个待复核提议的序号。
+                cross["window_in_progress"] = {
+                    "index": int(window_in_progress["index"]),
+                    "proposals": [list(p) for p in window_in_progress.get("proposals") or []],
+                    "next": int(window_in_progress.get("next") or 0),
+                }
+        cp["cross"] = cross
         state = self.store.update_task(task_id, revision, checkpoint=cp)
         return state["revision"]
+
+    @staticmethod
+    def _windows_from_plan(plan: List[List[str]],
+                           working: Dict[str, Dict[str, Any]],
+                           singletons: Dict[str, Dict[str, Any]],
+                           content: Dict[str, str]) -> List[List[Dict[str, Any]]]:
+        """按持久化的窗口计划(候选 id 列表)重建本轮窗口。
+
+        成员信息取当前 working/singletons:中断前已在本轮合并掉的 id 不再是候选,直接跳过;
+        合并后的新组以其代表为键仍在 working 里,照常带全部成员。
+        """
+        windows: List[List[Dict[str, Any]]] = []
+        for ids in plan:
+            window: List[Dict[str, Any]] = []
+            for cid in ids:
+                if cid in working:
+                    members = list(working[cid].get("member_ids", []))
+                    window.append({"id": cid, "content": content.get(cid, ""),
+                                   MEMBERSHIP_KEY: members})
+                elif cid in singletons:
+                    window.append({"id": cid, "content": singletons[cid]["content"],
+                                   MEMBERSHIP_KEY: [cid]})
+            windows.append(window)
+        return windows
 
     async def _verify_merge(self, task_id: str, revision: int, provider: Any,
                             content: Dict[str, str], video_title: str,
