@@ -429,11 +429,11 @@ class SemanticService:
 
     def _settle_quiet(self, task_id: str, revision: int,
                       usage_tokens: Optional[int]) -> None:
-        """取消路径下的尽力结算:仅记账,吞异常(debug 留痕),绝不改变取消语义。"""
+        """尽力结算(取消、契约外异常路径):仅记账,吞异常(debug 留痕),不改变调用方语义。"""
         try:
             self._settle(task_id, revision, usage_tokens)
         except SemanticError as exc:
-            logger.debug("取消路径结算任务 %s 记账失败(可接受): %r", task_id, exc)
+            logger.debug("尽力结算任务 %s 记账失败(可接受): %r", task_id, exc)
 
     async def _grouped_call(self, task_id: str, revision: int, provider: Any,
                             items: List[Dict[str, Any]], video_title: str,
@@ -484,6 +484,12 @@ class SemanticService:
                 self._stop_if_not_running(state)
                 last_exc = exc
                 continue
+            except Exception:
+                # provider 抛了契约外的异常(bug / 未包装的第三方异常):请求可能已发出,
+                # 先按估算结算清掉在飞记录再原样上抛,由 _run 标 failed。否则 in_flight
+                # 残留,续跑时 reserve 抛"已有在飞请求"被当作并发处置吞掉,任务卡在 running。
+                self._settle_quiet(task_id, revision, None)
+                raise
             # 成功路径:结算实际/预留用量,再据结算后状态判断是否应停止。
             usage = result.get("usage_tokens")
             usage_estimated = bool(result.get("usage_estimated", False))
@@ -857,6 +863,10 @@ class SemanticService:
             # 跨批途中预算耗尽:标 partial、据**已真实复核**的对结算覆盖,不虚报。
             coverage["partial"] = True
             coverage["reason"] = coverage["reason"] or "budget"
+            # 异常跨越了 _grouped_call 的返回点:同一单元里先前尝试的 reserve/settle
+            # 已推进 store 的 revision,本地值是旧的。必须重读,否则写 checkpoint 时
+            # CAS 冲突抛 SemanticConflict,被 _run 当作"并发处置"吞掉,任务永久 running。
+            revision = self.store.get_task(task_id)["revision"]
             self._recompute_cross_coverage(coverage, reviewed_pairs)
             revision = self._persist_cross(
                 task_id, revision, working, coverage, reviewed_pairs)
