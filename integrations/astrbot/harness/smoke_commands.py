@@ -21,6 +21,8 @@ EXPECTED = {
     "状态": {},
     "热点": {"limit": "10"},
     "告警": {"limit": "5", "level": "all"},
+    "舆情": {"bvid": "", "strategy": "normal"},
+    "监控": {"action": "状态", "bvids": ""},
 }
 
 

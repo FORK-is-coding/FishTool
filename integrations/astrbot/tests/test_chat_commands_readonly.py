@@ -355,6 +355,78 @@ def test_hotspot_lists_keywords_and_videos():
     assert "BV1xx411c7mD（播放 12,345）" in text
 
 
+MONITOR_OK = (200, {"success": True, "data": {
+    "bvid": "BV1xx411c7mD",
+    "success": True,
+    "collected_count": 120,
+    "processed_count": 98,
+    "sentiment_result": {"positive_ratio": 0.5, "negative_ratio": 0.35, "neutral_ratio": 0.1, "risk_ratio": 0.05},
+    "alerts": [{"type": "negative_surge", "level": "medium", "message": "负面评论占比过高: 35.0%"}] * 7,
+    "warning": None,
+}})
+
+
+def test_monitor_video_summary_and_long_timeout():
+    cmds, _, client = make(routes={"/api/comment/monitor": MONITOR_OK}, ecfg={"long_request_timeout_s": 1800})
+    text = run(cmds.monitor_video_text("BV1xx411c7mD", "FULL"))
+    call = client.calls[0]
+    assert call["method"] == "POST" and call["timeout"] == 1800
+    assert call["json"] == {"bvid": "BV1xx411c7mD", "strategy": "full"}
+    assert "全量" in text and "采集 120 条，去重后 98 条" in text
+    assert "负面 35%" in text and "触发 7 条告警" in text and "另有 2 条" in text
+    assert "BV1xx411c7mD [" not in text  # 摘要标题已有 BV 号，告警行不再重复
+
+
+def test_monitor_video_not_collected():
+    cmds, _, _ = make(routes={"/api/comment/monitor": (200, {"success": True, "data": {
+        "success": False, "error": "未采集到评论数据，请检查B站Cookie",
+    }})})
+    assert "未完成：未采集到评论数据" in run(cmds.monitor_video_text("BV1xx411c7mD"))
+
+
+def test_monitor_video_validates_before_call():
+    cmds, _, client = make()
+    for bvid, strategy in (("bad", "normal"), ("BV1xx411c7mD", "fast")):
+        try:
+            run(cmds.monitor_video_text(bvid, strategy))
+        except CommandError:
+            pass
+        else:
+            raise AssertionError("expected CommandError")
+    assert not client.calls
+
+
+@pytest.mark.parametrize("action,path", [("暂停", "/api/comment/resident/pause"), ("停止", "/api/comment/resident/stop")])
+def test_resident_pause_stop(action, path):
+    cmds, _, client = make(routes={path: (200, {"success": True, "data": {"target_bvids": ["BV1"]}})})
+    assert run(cmds.resident_text(action)) == f"常驻监控已{action}，目标 1 个"
+    assert client.calls[0]["method"] == "POST"
+
+
+def test_resident_enable_with_and_without_targets():
+    path = "/api/comment/resident/enable"
+    cmds, _, client = make(routes={path: (200, {"success": True, "data": {"target_bvids": []}})})
+    assert "没有目标视频" in run(cmds.resident_text("开启"))
+    assert client.calls[0]["json"] == {}
+    run(cmds.resident_text("开启", ["BV1xx411c7mD"]))
+    assert client.calls[1]["json"] == {"bvids": ["BV1xx411c7mD"]}
+    with pytest.raises(CommandError):
+        run(cmds.resident_text("开启", ["bad"]))
+
+
+def test_resident_bad_action():
+    cmds, _, _ = make()
+    with pytest.raises(CommandError, match="监控操作"):
+        run(cmds.resident_text("重启"))
+
+
+def test_parse_bvid_list():
+    assert FishToolCommands.parse_bvid_list("BV1, BV2，BV1;BV3") == ["BV1", "BV2", "BV3"]
+    assert FishToolCommands.parse_bvid_list("") == []
+    with pytest.raises(CommandError, match="最多"):
+        FishToolCommands.parse_bvid_list(",".join(f"BV{i}" for i in range(21)))
+
+
 def test_hotspot_empty_snapshot():
     cmds, _, _ = make(routes={"/api/hotspot/discovery/latest": (200, {"success": True, "data": {
         "snapshot": {"keywords": [], "videos": []},

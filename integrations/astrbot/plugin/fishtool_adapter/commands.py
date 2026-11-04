@@ -19,6 +19,14 @@ LEVEL_CHOICES = ("all",) + ALERT_LEVELS
 LOGIN_CACHE_S = 60
 #: 单条评论原文在消息里的最大长度。
 TEXT_LIMIT = 200
+#: 舆情摘要里最多列出的告警条数。
+MAX_ALERT_LINES = 5
+#: 采集策略（web/routers/comment.py 只接受 normal/full）。
+STRATEGIES = ("normal", "full")
+#: 常驻监控的操作。
+RESIDENT_ACTIONS = ("状态", "开启", "暂停", "停止")
+#: 一次指令最多指定的常驻监控目标数。
+MAX_RESIDENT_TARGETS = 20
 
 _LEVEL_LABEL = {"high": "高", "medium": "中", "low": "低"}
 _STATE_LABEL = {
@@ -225,6 +233,84 @@ class FishToolCommands:
         if len(lines) == 1:
             lines.append("本轮没有可展示的热搜词或视频")
         return "\n".join(lines)
+
+    # ------------------------------------------------------------------ write commands
+    async def monitor_video_text(self, bvid: str, strategy: str = "normal") -> str:
+        """跑一次单视频评论舆情（/comment/monitor，长请求），返回摘要。"""
+        bvid = self.check_bvid(bvid)
+        strategy = self.check_strategy(strategy)
+        body = await self._call(
+            "POST", "/api/comment/monitor", long=True,
+            json={"bvid": bvid, "strategy": strategy},
+        )
+        data = _data(body)
+        lines = [f"【舆情分析】{bvid}（{'全量' if strategy == 'full' else '快速'}）"]
+        if not data.get("success", True):
+            lines.append(f"未完成：{shorten(data.get('error') or '未采集到评论', 160)}")
+            return "\n".join(lines)
+        collected = data.get("collected_count")
+        processed = data.get("processed_count")
+        lines.append(f"采集 {collected} 条，去重后 {processed} 条")
+        sentiment = data.get("sentiment_result") if isinstance(data.get("sentiment_result"), dict) else None
+        if sentiment:
+            parts = []
+            for key, label in (("positive_ratio", "正面"), ("negative_ratio", "负面"),
+                               ("neutral_ratio", "中性"), ("risk_ratio", "风险")):
+                value = sentiment.get(key)
+                if isinstance(value, (int, float)):
+                    parts.append(f"{label} {value:.0%}")
+            if parts:
+                lines.append("情感：" + "，".join(parts))
+        alerts = [a for a in (data.get("alerts") or []) if isinstance(a, dict)]
+        if alerts:
+            lines.append(f"触发 {len(alerts)} 条告警：")
+            for alert in alerts[:MAX_ALERT_LINES]:
+                lines.append(f"- {self.format_alert({**alert, 'bvid': ''})}")
+            if len(alerts) > MAX_ALERT_LINES:
+                lines.append(f"……另有 {len(alerts) - MAX_ALERT_LINES} 条，见面板")
+        else:
+            lines.append("未触发告警")
+        if data.get("warning"):
+            lines.append(f"注意：{shorten(data['warning'], 160)}")
+        return "\n".join(lines)
+
+    async def resident_text(self, action: str, bvids: list[str] | None = None) -> str:
+        """常驻监控：状态 / 开启 [BV 列表] / 暂停 / 停止。"""
+        action = (action or "状态").strip()
+        if action not in RESIDENT_ACTIONS:
+            raise CommandError(f"监控操作只能是 {'/'.join(RESIDENT_ACTIONS)}：{shorten(action, 20)}")
+        if action == "状态":
+            return f"常驻监控：{await self._resident_line()}"
+        if action == "开启":
+            payload = {"bvids": [self.check_bvid(b) for b in bvids]} if bvids else {}
+            snap = _data(await self._call("POST", "/api/comment/resident/enable", json=payload))
+        else:
+            path = "pause" if action == "暂停" else "stop"
+            snap = _data(await self._call("POST", f"/api/comment/resident/{path}"))
+        targets = snap.get("target_bvids") or []
+        text = f"常驻监控已{action}，目标 {len(targets)} 个"
+        if action == "开启" and not targets:
+            text += "（没有目标视频，请用 /fishtool 监控 开启 BV号,BV号 指定）"
+        return text
+
+    @staticmethod
+    def parse_bvid_list(raw: str) -> list[str]:
+        """``BV1,BV2`` / ``BV1，BV2`` → 去重后的列表；空串返回空列表。"""
+        parts = re.split(r"[,，;；\s]+", raw or "")
+        result: list[str] = []
+        for part in parts:
+            if part and part not in result:
+                result.append(part)
+        if len(result) > MAX_RESIDENT_TARGETS:
+            raise CommandError(f"一次最多指定 {MAX_RESIDENT_TARGETS} 个视频")
+        return result
+
+    @staticmethod
+    def check_strategy(strategy: str) -> str:
+        strategy = (strategy or "normal").strip().lower()
+        if strategy not in STRATEGIES:
+            raise CommandError(f"采集策略只能是 {'/'.join(STRATEGIES)}：{shorten(strategy, 20)}")
+        return strategy
 
     @staticmethod
     def _video_line(item: dict) -> str:

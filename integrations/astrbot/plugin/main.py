@@ -10,7 +10,7 @@ import mimetypes
 from pathlib import Path
 
 from astrbot.api import AstrBotConfig, logger
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star, StarTools
 from astrbot.api.web import error_response, file_response, json_response, request, stream_response
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
@@ -22,6 +22,7 @@ from .fishtool_adapter.constants import PLUGIN_NAME, chat_cfg, engine_cfg
 from .fishtool_adapter.errors import CommandError
 from .fishtool_adapter.events import EventRelay
 from .fishtool_adapter.exports import ExportStore, safe_filename
+from .fishtool_adapter.jobs import JobRunner
 from .fishtool_adapter.paths import DataLayout
 from .fishtool_adapter.proxy import EngineProxy, envelope
 from .fishtool_adapter.runtime_env import EngineEnvError, ensure_engine_env, remove_engine_env
@@ -66,6 +67,7 @@ class FishToolPlugin(Star):
         self.subs = SubscriptionStore(self.layout.subscriptions_file, logger)
         self.cmds = FishToolCommands(self.sup, self.client, self.ecfg, logger)
         self.gate = G.Gate(self.chat, is_subscribed=self.subs.contains)
+        self.jobs = JobRunner(self._send_text, logger)
 
         p = f"/{PLUGIN_NAME}"  # 路由必须带插件名前缀（plugin-pages.md）
         reg = context.register_web_api
@@ -137,6 +139,8 @@ class FishToolPlugin(Star):
         self._closed = True
         self.proxy.closed = True
         await self._cancel_boot()
+        # 后台指令任务必须在关闭 HTTP client 之前取消，否则还在跑的任务会撞上已关闭的 client
+        await self.jobs.close()
         await self.relay.stop()
         await self.sup.stop(final=True)
         await self.client.aclose()
@@ -266,6 +270,15 @@ class FishToolPlugin(Star):
     def _denied_text(event: AstrMessageEvent) -> str:
         return G.DENIED_TEXT.format(sid=event.get_sender_id())
 
+    async def _send_text(self, umo: str, text: str) -> bool:
+        """主动推送一条文本到会话；失败只记日志，由调用方决定是否退回。"""
+        try:
+            await self.context.send_message(umo, MessageChain().message(text))
+            return True
+        except Exception as exc:  # noqa: BLE001 - 推送失败（平台断开、会话失效）不能影响其他任务
+            logger.warning(f"[fishtool] 推送到 {umo} 失败: {exc}")
+            return False
+
     async def _safe(self, coro) -> str:
         """只把 CommandError 转成用户可读文字；其他异常交给调用方或框架兜底。"""
         try:
@@ -306,6 +319,51 @@ class FishToolPlugin(Star):
         if gate != G.OK:
             return
         yield event.plain_result(await self._safe(self.cmds.alerts_text(limit, level)))
+
+    @fishtool.command("舆情")
+    async def cmd_monitor(self, event: AstrMessageEvent, bvid: str = "", strategy: str = "normal"):
+        """后台跑一次评论舆情分析，完成后推送到本会话（仅管理员；策略 normal/full）"""
+        gate = self._gate(event, "monitor", G.ADMIN)
+        if gate == G.DENIED:
+            yield event.plain_result(self._denied_text(event))
+        if gate != G.OK:
+            return
+        if not bvid:
+            yield event.plain_result("用法：/fishtool 舆情 <BV号> [normal|full]")
+            return
+        try:
+            bvid = self.cmds.check_bvid(bvid)
+            strategy = self.cmds.check_strategy(strategy)
+        except CommandError as exc:
+            yield event.plain_result(str(exc))
+            return
+        key = f"monitor:{bvid}"
+        if not self.jobs.claim(key):
+            yield event.plain_result(f"{bvid} 正在分析中，完成后会发到发起的会话")
+            return
+        task = self.jobs.start_text_job(key, event.unified_msg_origin, self.cmds.monitor_video_text(bvid, strategy))
+        if task is None:
+            self.jobs.release(key)
+            return
+        mode = "全量，评论多时可能要很久" if strategy == "full" else "快速，约 1 分钟"
+        yield event.plain_result(f"已开始分析 {bvid}（{mode}），完成后发到这里")
+
+    @fishtool.command("监控")
+    async def cmd_resident(self, event: AstrMessageEvent, action: str = "状态", bvids: str = ""):
+        """常驻监控：状态 / 开启 [BV号,BV号] / 暂停 / 停止（状态以外仅管理员）"""
+        action = (action or "状态").strip()
+        level = G.RESTRICTED if action == "状态" else G.ADMIN
+        gate = self._gate(event, f"resident:{action}", level)
+        if gate == G.DENIED:
+            yield event.plain_result(self._denied_text(event))
+        if gate != G.OK:
+            return
+        try:
+            targets = self.cmds.parse_bvid_list(bvids) if action == "开启" else None
+        except CommandError as exc:
+            yield event.plain_result(str(exc))
+            return
+        yield event.plain_result(await self._safe(self.cmds.resident_text(action, targets)))
 
     async def api_proxy(self, sub: str):
         if self._closed:
