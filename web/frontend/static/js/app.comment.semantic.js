@@ -241,6 +241,12 @@
         // 旧 request_key 已随终态失效，不重置的话“重新分析”会复用旧 key，
         // 后端幂等返回旧任务，看起来像按钮没反应。进行中任务的 key 保持不动。
         if (state.task && !isActiveStatus(state.task.status)) resetRequestKey();
+        // 刷新 / 切回 BV 时任务已停下（含 interrupted）：visibilitychange 的补弹路径
+        // 不走这里，必须单独补。要在 loadResult 之前：loadResult 会用结果接口的
+        // 简化 task（没有 coverage/budget）覆盖 state.task，弹窗就拿不到原因和用量了。
+        if (state.task && !isActiveStatus(state.task.status)) {
+            maybeShowStopReport(state.task);
+        }
         renderOverview();
         // 有最近任务且处于进行中：接管轮询（不重复发起模型请求）。
         if (state.task && isActiveStatus(state.task.status)) {
@@ -712,6 +718,7 @@
                 state.polling = false;
                 state.pollStalled = false;
                 resetRequestKey();
+                if (task.status === 'partial') maybeShowStopReport(task);
                 loadResult(taskId, 1, seq);
                 return;
             }
@@ -720,6 +727,7 @@
                 state.polling = false;
                 state.pollStalled = false;
                 resetRequestKey();
+                if (task.status === 'failed') maybeShowStopReport(task);
                 return;
             }
             await sleep(pollInterval(startedAt));
@@ -729,8 +737,175 @@
     // 页面回到前台：当前 BV 的任务若仍在进行，就重新接管轮询（隐藏时已停）。
     function resumePollingIfActive() {
         if (state.polling || !state.task || !state.task.task_id) return;
+        // 页面在后台时停下的弹窗延后到回前台再弹（partial/failed 的停止报告）。
+        if (state.task.status === 'partial' || state.task.status === 'failed'
+            || state.task.status === 'interrupted') {
+            maybeShowStopReport(state.task);
+        }
         if (!isActiveStatus(state.task.status)) return;
         startPolling(state.task.task_id, state.fetchSeq);
+    }
+
+    // ---- 停止报告：原因 + 进度 + 用量 + 建议动作，每次停止只弹一次 ----
+    const STOP_REPORT_STORAGE_KEY = 'fishtool.semantic.stopReport';
+    // sessionStorage 被禁用（隐私模式 / AstrBot 内存 storage）时用内存兜底：
+    // 刷新后内存丢失会再弹一次，属已知限制，不能让 storage 异常打断展示。
+    let stopReportMemory = null;
+
+    // 读回的是已存的 JSON 原始字符串；存的时候也是 JSON，必须比较同一种表示，
+    // 不能把存的解析成对象再和原始字符串比较（那样永远不相等，去重失效）。
+    function readLastStopReport() {
+        if (stopReportMemory) return stopReportMemory;
+        try {
+            if (!window.sessionStorage) return null;
+            return window.sessionStorage.getItem(STOP_REPORT_STORAGE_KEY) || null;
+        } catch (e) { return null; }
+    }
+
+    function rememberStopReport(key) {
+        const value = JSON.stringify(key);
+        stopReportMemory = value;
+        try {
+            if (window.sessionStorage) window.sessionStorage.setItem(STOP_REPORT_STORAGE_KEY, value);
+        } catch (e) { /* 存储不可用时仅靠内存去重 */ }
+    }
+
+    // 去重键：(task_id, stop_reason, stop_seq)。不能用 revision：预约/结算都会推进它。
+    function stopReportKey(task) {
+        const budget = task.budget || {};
+        const coverage = task.coverage || {};
+        return { task_id: task.task_id, stop_reason: coverage.stop_reason || '',
+                 stop_seq: budget.stop_seq || 0 };
+    }
+
+    function stopReportAdvice(task) {
+        const reason = (task.coverage || {}).stop_reason;
+        if (reason === 'task_budget' || reason === 'attempt_budget') {
+            return '本次任务的预算已用完。可以切换为无限制档并继续，或保持默认档继续。';
+        }
+        if (reason === 'daily_budget') {
+            return '今日语义折叠预算已用完。可以明天继续，或切换为无限制档并继续。';
+        }
+        if (reason === 'global_daily_limit') {
+            return '今日全局 AI 用量已达上限。可到设置页调高「每日 token 上限」后继续，或切换为无限制档并继续。';
+        }
+        if (reason === 'rate_limited') return '模型服务限频。稍后点「继续执行」重试。';
+        if (reason === 'provider_unavailable') return '模型服务暂时不可用。检查服务商状态后点「继续执行」。';
+        if (reason === 'provider_quota') return '模型服务账户余额或配额不足。充值后点「继续执行」。';
+        if (task.status === 'failed') return '任务执行失败，详情见任务区错误信息。修正后点「继续执行」。';
+        if (task.status === 'interrupted') {
+            return '工具重启导致分析中断。已成功的批次不会重发；点「继续执行」接着跑。';
+        }
+        return '任务已部分完成，点「继续执行」可补齐未完成的部分。';
+    }
+
+    // 弹窗内容：停止原因、已处理批次/总批次、跨批覆盖、本任务用量、已折叠组数、建议。
+    function stopReportHtml(task) {
+        const coverage = task.coverage || {};
+        const budget = task.budget || {};
+        const groups = task.groups || [];
+        const settled = Number(budget.settled_tokens) || 0;
+        // last_settlement_estimated 表示「最近一次结算是按估算入账」（如中断后的残留
+        // 预约），不代表每次结算都是实测；所以只能说「含估算」，不能说「实测」。
+        const estimated = coverage.last_settlement_estimated
+            ? '（含估算）' : '（以服务商返回用量为准，部分调用可能无用量数据）';
+        const rows = [];
+        const push = (label, value) => rows.push(`<li>${label}：<strong>${value}</strong></li>`);
+        push('停止原因', STOP_REASON_NOTES[coverage.stop_reason] || '任务未能完整完成');
+        const batches = Number(coverage.batches);
+        // coverage 只有总批数，没有已处理批数字段；调用次数（含重试）单列，不混进批次数。
+        if (Number.isFinite(batches) && batches > 0) {
+            push('总批次', text(batches));
+            push('模型调用次数（含重试）', text(budget.attempt_count, 0));
+        } else {
+            push('模型调用次数', text(budget.attempt_count, 0));
+        }
+        const cross = crossCoverageText(coverage);
+        if (cross) push('跨批覆盖', cross);
+        push('本任务已用 token', `${text(settled, 0)}${estimated}`);
+        const foldable = groups.filter(g => (g.member_ids || []).length >= 2).length;
+        push('已产生的折叠组', text(foldable, 0));
+        push('建议', escapeHtml(stopReportAdvice(task)));
+        return `<ul class="semantic-consent-list">${rows.join('')}</ul>`;
+    }
+
+    function maybeShowStopReport(task) {
+        if (!task || !task.task_id) return;
+        // 只在「继续执行还能产生新进度」的停止时弹。completed/cancelled/
+        // rounds_exhausted/degraded/不可续跑的失败只留在任务区，不打扰。
+        // interrupted（进程重启中断）续跑可以继续，也弹：续跑要确认未知在飞结果，
+        // 确认框由 onResume 给出，不在弹窗里重复。
+        if (task.status !== 'partial' && task.status !== 'failed'
+            && task.status !== 'interrupted') return;
+        if (!canResume(task)) return;
+        // 页面在后台时不弹：resumePollingIfActive 回前台后再补。
+        if (typeof document !== 'undefined' && document.hidden) return;
+        const key = stopReportKey(task);
+        const raw = JSON.stringify(key);
+        if (readLastStopReport() === raw) return;
+        rememberStopReport(key);
+        showStopReport(task);
+    }
+
+    function showStopReport(task) {
+        const backdrop = document.createElement('div');
+        backdrop.className = 'app-modal-backdrop';
+        backdrop.setAttribute('role', 'alertdialog');
+        backdrop.setAttribute('aria-modal', 'true');
+        backdrop.setAttribute('aria-label', '语义折叠停止报告');
+
+        const modal = document.createElement('div');
+        modal.className = 'app-modal semantic-stop-report';
+        const reason = (task.coverage || {}).stop_reason;
+        const canUpgrade = task.status === 'partial'
+            && ['task_budget', 'attempt_budget', 'daily_budget', 'global_daily_limit'].indexOf(reason) !== -1;
+        modal.innerHTML = `
+            <h3>语义折叠已停止</h3>
+            ${stopReportHtml(task)}
+            <div class="app-modal-actions">
+                <button type="button" class="btn btn-secondary" data-act="later">稍后再说</button>
+                ${canUpgrade ? '<button type="button" class="btn btn-primary" data-act="upgrade">切换为无限制并继续</button>' : ''}
+                <button type="button" class="btn btn-primary" data-act="resume">继续执行</button>
+            </div>`;
+        backdrop.append(modal);
+        const closeModal = mountAppModal(backdrop, () => {});
+        modal.querySelector('[data-act="later"]').addEventListener('click', () => closeModal());
+        modal.querySelector('[data-act="resume"]').addEventListener('click', () => {
+            closeModal();
+            onResume();
+        });
+        if (canUpgrade) {
+            modal.querySelector('[data-act="upgrade"]').addEventListener('click', () => {
+                closeModal();
+                resumeWithUnlimited(task);
+            });
+        }
+        backdrop.addEventListener('click', event => { if (event.target === backdrop) closeModal(); });
+        const primary = modal.querySelector('[data-act="resume"]');
+        if (primary) primary.focus();
+    }
+
+    // 弹窗里的「切换为无限制并继续」：走与开始时相同的二次确认，再带 upgrade_to 续跑。
+    async function resumeWithUnlimited(task) {
+        const bvid = state.bvid;
+        const seq = state.fetchSeq;
+        const taskId = task.task_id;
+        const revision = task.revision;
+        const ok = await confirmUnlimited(state.preflight);
+        if (!ok || seq !== state.fetchSeq || bvid !== state.bvid) return;
+        try {
+            const resp = await apiWrite(`/tasks/${encodeURIComponent(taskId)}/resume`, 'POST', {
+                expected_revision: revision,
+                acknowledge_unknown: true,
+                upgrade_to: 'unlimited',
+            });
+            if (seq !== state.fetchSeq || bvid !== state.bvid) return;
+            state.task = (resp && resp.data) || state.task;
+            renderOverview();
+            if (state.task && state.task.task_id) startPolling(state.task.task_id, seq);
+        } catch (error) {
+            showAppAlert(`切换档位并继续失败：${error.message}`);
+        }
     }
 
     // 任务进度区：阶段 / 进度 / 覆盖 / 预算 / 错误（只读展示）。
@@ -1089,7 +1264,7 @@
         // 测试 / 调试入口：暴露内部状态与关键函数（不改变运行行为）。
         window.__semanticPanel = {
             state, selectBvid, renderResult, stopPolling, init, onLoadClick, submitDecision,
-            resumePollingIfActive, onStart, setBudgetMode: applyBudgetMode,
+            resumePollingIfActive, onStart, setBudgetMode: applyBudgetMode, resumeWithUnlimited,
         };
     }
 })();

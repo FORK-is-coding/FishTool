@@ -283,3 +283,17 @@
     margin: 8px 0;
     font-size: 13px;
 }
+
+/* 停止报告弹窗（PR 4）：与同意模态同一外观与排版，只复用、不另造风格 */
+.semantic-stop-report {
+    max-width: 520px;
+    text-align: left;
+}
+
+.semantic-stop-report .semantic-consent-list {
+    margin: 12px 0 16px;
+}
+
+.semantic-stop-report .semantic-consent-list strong {
+    font-weight: 600;
+}
