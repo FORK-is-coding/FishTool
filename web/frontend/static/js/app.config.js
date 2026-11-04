@@ -64,6 +64,10 @@ async function loadLLMConfig() {
         const config = data.config || {};
         document.getElementById('llm-base-url').value = config.api_base || 'https://api.openai.com/v1';
         document.getElementById('llm-model').value = config.model || 'gpt-3.5-turbo';
+        const limitInput = document.getElementById('llm-daily-limit');
+        if (limitInput && Number.isInteger(config.daily_token_limit)) {
+            limitInput.value = String(config.daily_token_limit);
+        }
         await loadLLMModels();
     } catch (error) {
         console.error('加载 AI 大模型配置失败:', error);
@@ -100,17 +104,46 @@ async function saveLLMConfig() {
     }
 }
 
+// 全局每日 token 上限单独保存：走通用 PUT /config/，后端会校验取值并热重载 LLM 客户端。
+// 不复用 saveLLMConfig，避免用户只改上限也要重新输入 API Key。
+async function saveLLMDailyLimit() {
+    const input = document.getElementById('llm-daily-limit');
+    const raw = input ? input.value.trim() : '';
+    const value = Number(raw);
+    if (raw === '' || !Number.isInteger(value) || value < 0) {
+        showAppAlert('每日 token 上限必须是不小于 0 的整数（0 表示不限制）');
+        return;
+    }
+    try {
+        await apiRequest('/config/', {
+            method: 'PUT',
+            body: JSON.stringify({ key: 'llm.daily_token_limit', value })
+        });
+        showAppAlert(value === 0 ? '已设置为不限制每日 token 用量' : `每日 token 上限已设置为 ${value}`);
+    } catch (error) {
+        showAppAlert(`保存失败: ${error.message}`);
+    }
+}
+
+function formatTodayUsage(today) {
+    if (!today) return '';
+    const used = Number.isInteger(today.total_tokens) ? today.total_tokens : '未知';
+    const limit = Number(today.limit) > 0 ? today.limit : '不限制';
+    return `<p>今日已用: ${escapeHtml(String(used))} / 上限: ${escapeHtml(String(limit))}</p>`;
+}
+
 async function loadLLMUsage() {
     showLoading('llm-usage');
-    
+
     try {
         const data = await apiRequest('/config/llm/usage?days=7');
-        
+
         const usage = data.daily_usage.map(day => `
             <p>${day.date}: ${day.total_tokens} tokens (${day.request_count} 次请求)</p>
         `).join('');
-        
+
         document.getElementById('llm-usage').innerHTML = `
+            ${formatTodayUsage(data.today)}
             <h4>最近7天用量</h4>
             <p>总Token: ${data.total_tokens} | 总请求: ${data.total_requests}</p>
             ${usage}
