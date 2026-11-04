@@ -55,8 +55,13 @@ class DataLayout:
 
     @property
     def remote_dir(self) -> Path:
-        """二期机器人遥控的订阅与任务数据。"""
+        """聊天指令的订阅与任务数据。"""
         return self.root / "remote"
+
+    @property
+    def subscriptions_file(self) -> Path:
+        """告警推送订阅（subscriptions.SubscriptionStore）。"""
+        return self.remote_dir / "subscriptions.json"
 
     @property
     def exports_dir(self) -> Path:
