@@ -808,6 +808,20 @@ class SemanticService:
         if cross_cp.get("coverage"):
             coverage = dict(cross_cp["coverage"])
         reviewed_pairs = {tuple(p) for p in (cross_cp.get("reviewed_pairs") or [])}
+        if "singletons" in cross_cp:
+            # 已在前一轮被合并进组的单条不能在续跑时复活成单条(否则会被重复比较、计费)。
+            keep = set(cross_cp.get("singletons") or [])
+            singletons = {cid: it for cid, it in singletons.items() if cid in keep}
+        # 轮内进度:中断前这一轮的窗口划分与已完成窗口序号。只对 round_start 这一轮有效。
+        saved_plan: Optional[List[List[str]]] = None
+        saved_done: List[int] = []
+        # 中断时正在合并复核的窗口:已拿到的分组提议与下一个待复核提议的序号。
+        saved_in_progress: Optional[Dict[str, Any]] = None
+        if int(cross_cp.get("plan_round", -1)) == round_start and cross_cp.get("plan"):
+            saved_plan = [list(w) for w in cross_cp["plan"]]
+            saved_done = [int(i) for i in (cross_cp.get("windows_done") or [])]
+            if isinstance(cross_cp.get("window_in_progress"), dict):
+                saved_in_progress = dict(cross_cp["window_in_progress"])
 
         # 轮转:单窗口时 1 轮即全覆盖;多窗口时做有界多轮(每轮换偏移,让跨窗口代表
         # 候选至少有一次同窗机会),轮数上界受预算与 MAX_CROSS_ROUNDS 双重限制,
@@ -816,31 +830,72 @@ class SemanticService:
         max_rounds = 1 if len(first_windows) <= 1 else min(
             MAX_CROSS_ROUNDS, len(first_windows))
 
+        # 预算异常分支需要知道停在哪一轮、哪些窗口已完成。
+        rnd = round_start
+        plan: Optional[List[List[str]]] = None
+        done_windows: set = set()
+        current: Optional[Dict[str, Any]] = None  # 正在合并复核的窗口进度
         try:
             for rnd in range(round_start, max_rounds):
-                windows = self._cross_windows(
-                    list(working.values()), singletons, content, video_title, rnd)
-                for window in windows:
+                if rnd == round_start and saved_plan is not None:
+                    # 续跑同一轮:用中断前持久化的窗口划分,跳过已完成窗口,不重复收费。
+                    windows = self._windows_from_plan(saved_plan, working, singletons, content)
+                    done_windows = set(saved_done)
+                else:
+                    windows = self._cross_windows(
+                        list(working.values()), singletons, content, video_title, rnd)
+                    done_windows = set()
+                plan = [[it["id"] for it in window] for window in windows]
+                for w_idx, window in enumerate(windows):
+                    if w_idx in done_windows:
+                        continue
                     if len(window) < 2:
+                        done_windows.add(w_idx)
                         continue
-                    coverage["windows_attempted"] += 1
-                    revision, data = await self._grouped_call(
-                        task_id, revision, provider, window, video_title, PHASE_CROSS)
-                    if data is None:
-                        # 本窗口未取得可用响应:不把其对计入 reviewed(不虚报),标 partial。
-                        coverage["partial"] = True
-                        coverage["reason"] = coverage["reason"] or "cross_degraded"
-                        continue
-                    # 成功复核:本窗口内所有候选对计入 reviewed_pairs(真实覆盖)。
-                    coverage["windows_reviewed"] += 1
-                    wids = [it["id"] for it in window]
-                    for i in range(len(wids)):
-                        for j in range(i + 1, len(wids)):
-                            reviewed_pairs.add(tuple(sorted((wids[i], wids[j]))))
-                    for proposal in data.get("equivalent_groups") or []:
-                        rep_ids = list(proposal.get("member_ids") or [])
-                        if len(rep_ids) < 2:
+                    resumed = None
+                    if saved_in_progress is not None and int(saved_in_progress.get("index", -1)) == w_idx:
+                        resumed = saved_in_progress
+                    saved_in_progress = None  # 只对续跑后遇到的第一个未完成窗口有效
+                    if resumed is not None:
+                        # 续跑:本窗口的分组调用在中断前已成功并计入 reviewed_pairs,
+                        # 只把剩下的合并提议复核完,不重做分组调用、不重复计数。
+                        proposals = [list(p) for p in (resumed.get("proposals") or [])]
+                        next_k = int(resumed.get("next") or 0)
+                    else:
+                        coverage["windows_attempted"] += 1
+                        revision, data = await self._grouped_call(
+                            task_id, revision, provider, window, video_title, PHASE_CROSS)
+                        if data is None:
+                            # 本窗口未取得可用响应:不把其对计入 reviewed(不虚报),标 partial。
+                            coverage["partial"] = True
+                            coverage["reason"] = coverage["reason"] or "cross_degraded"
+                            done_windows.add(w_idx)
+                            revision = self._persist_cross(
+                                task_id, revision, working, coverage, reviewed_pairs,
+                                singletons, rnd, plan, done_windows)
                             continue
+                        # 成功复核:本窗口内所有候选对计入 reviewed_pairs(真实覆盖)。
+                        coverage["windows_reviewed"] += 1
+                        wids = [it["id"] for it in window]
+                        for i in range(len(wids)):
+                            for j in range(i + 1, len(wids)):
+                                reviewed_pairs.add(tuple(sorted((wids[i], wids[j]))))
+                        proposals = [list(p.get("member_ids") or [])
+                                     for p in (data.get("equivalent_groups") or [])]
+                        proposals = [p for p in proposals if len(p) >= 2]
+                        next_k = 0
+                        if proposals:
+                            # 分组结果先落盘:之后的合并复核若中途停下,续跑从下一个提议继续,
+                            # 不再为本窗口重新付一次分组调用。
+                            current = {"index": w_idx, "proposals": proposals, "next": 0}
+                            revision = self._persist_cross(
+                                task_id, revision, working, coverage, reviewed_pairs,
+                                singletons, rnd, plan, done_windows, current)
+                    current = {"index": w_idx, "proposals": proposals, "next": next_k}
+                    # 同一窗口的提议成员互不相交(validate_grouping 保证),前面提议的合并
+                    # 不会影响后面提议引用的候选,可以逐个提议续跑。
+                    for k in range(next_k, len(proposals)):
+                        rep_ids = proposals[k]
                         revision, merged, outcome = await self._verify_merge(
                             task_id, revision, provider, content, video_title,
                             rep_ids, working, singletons)
@@ -854,11 +909,26 @@ class SemanticService:
                             coverage["partial"] = True
                             coverage["reason"] = coverage["reason"] or "verify_unverified"
                         # "rejected":模型明确不合并,完整判定,不降级。
+                        current = {"index": w_idx, "proposals": proposals, "next": k + 1}
+                        if k + 1 < len(proposals):
+                            # 每复核完一个提议就落盘,续跑从下一个提议继续。
+                            revision = self._persist_cross(
+                                task_id, revision, working, coverage, reviewed_pairs,
+                                singletons, rnd, plan, done_windows, current)
+                    # 窗口的分组调用与全部合并复核都完成才记为 done。
+                    done_windows.add(w_idx)
+                    current = None
+                    # 不在这里重算覆盖率:_recompute_cross_coverage 对 reason 先写先得,逐窗口重算会在
+                    # 预算停下前就写成 cross_pairs_unvisited,盖掉 budget。轮结束和函数末尾都会重算。
+                    revision = self._persist_cross(
+                        task_id, revision, working, coverage, reviewed_pairs,
+                        singletons, rnd, plan, done_windows)
                 # 先 settle(在 _grouped_call 内)后 checkpoint:持久化本轮进度。
                 coverage["rounds_done"] = rnd + 1
                 self._recompute_cross_coverage(coverage, reviewed_pairs)
                 revision = self._persist_cross(
-                    task_id, revision, working, coverage, reviewed_pairs)
+                    task_id, revision, working, coverage, reviewed_pairs, singletons)
+                plan, done_windows = None, set()
         except SemanticBudgetExceeded:
             # 跨批途中预算耗尽:标 partial、据**已真实复核**的对结算覆盖,不虚报。
             coverage["partial"] = True
@@ -868,8 +938,11 @@ class SemanticService:
             # CAS 冲突抛 SemanticConflict,被 _run 当作"并发处置"吞掉,任务永久 running。
             revision = self.store.get_task(task_id)["revision"]
             self._recompute_cross_coverage(coverage, reviewed_pairs)
+            # 连同本轮窗口计划、已完成窗口与正在复核的窗口进度一起保存:
+            # 续跑同一轮时只做剩下的窗口和提议。
             revision = self._persist_cross(
-                task_id, revision, working, coverage, reviewed_pairs)
+                task_id, revision, working, coverage, reviewed_pairs,
+                singletons, rnd, plan, done_windows, current)
 
         self._recompute_cross_coverage(coverage, reviewed_pairs)
         new_groups = list(working.values())
@@ -915,21 +988,66 @@ class SemanticService:
 
     def _persist_cross(self, task_id: str, revision: int,
                        working: Dict[str, Dict[str, Any]],
-                       coverage: Dict[str, Any], reviewed_pairs: set) -> int:
+                       coverage: Dict[str, Any], reviewed_pairs: set,
+                       singletons: Optional[Dict[str, Dict[str, Any]]] = None,
+                       plan_round: Optional[int] = None,
+                       plan: Optional[List[List[str]]] = None,
+                       windows_done: Optional[set] = None,
+                       window_in_progress: Optional[Dict[str, Any]] = None) -> int:
         """持久化 crossphase checkpoint(保留 phase1 段),返回新 revision。
 
-        resume 据 rounds_done 跳过已完成轮,不重复收费;working / reviewed_pairs 以
-        列表存(JSON 友好),覆盖率据已复核对真实计量。
+        resume 据 rounds_done 跳过已完成轮;同一轮内据 plan/windows_done 跳过已完成窗口,
+        不重复收费。working / reviewed_pairs 以列表存(JSON 友好),覆盖率据已复核对真实计量。
         """
         cp = self._task_checkpoint(task_id)
-        cp["cross"] = {
+        cross: Dict[str, Any] = {
             "rounds_done": int(coverage.get("rounds_done") or 0),
             "working": list(working.values()),
             "coverage": coverage,
             "reviewed_pairs": [list(p) for p in reviewed_pairs],
         }
+        if singletons is not None:
+            # 当前仍是单条的 id:已在本任务里被合并进组的单条续跑时不能复活。
+            cross["singletons"] = list(singletons.keys())
+        if plan is not None and plan_round is not None:
+            # 轮内进度:本轮窗口划分(每个窗口的候选 id)与已完成窗口序号。
+            cross["plan_round"] = int(plan_round)
+            cross["plan"] = [list(w) for w in plan]
+            cross["windows_done"] = sorted(int(i) for i in (windows_done or ()))
+            if window_in_progress is not None:
+                # 正在合并复核的窗口:分组提议与下一个待复核提议的序号。
+                cross["window_in_progress"] = {
+                    "index": int(window_in_progress["index"]),
+                    "proposals": [list(p) for p in window_in_progress.get("proposals") or []],
+                    "next": int(window_in_progress.get("next") or 0),
+                }
+        cp["cross"] = cross
         state = self.store.update_task(task_id, revision, checkpoint=cp)
         return state["revision"]
+
+    @staticmethod
+    def _windows_from_plan(plan: List[List[str]],
+                           working: Dict[str, Dict[str, Any]],
+                           singletons: Dict[str, Dict[str, Any]],
+                           content: Dict[str, str]) -> List[List[Dict[str, Any]]]:
+        """按持久化的窗口计划(候选 id 列表)重建本轮窗口。
+
+        成员信息取当前 working/singletons:中断前已在本轮合并掉的 id 不再是候选,直接跳过;
+        合并后的新组以其代表为键仍在 working 里,照常带全部成员。
+        """
+        windows: List[List[Dict[str, Any]]] = []
+        for ids in plan:
+            window: List[Dict[str, Any]] = []
+            for cid in ids:
+                if cid in working:
+                    members = list(working[cid].get("member_ids", []))
+                    window.append({"id": cid, "content": content.get(cid, ""),
+                                   MEMBERSHIP_KEY: members})
+                elif cid in singletons:
+                    window.append({"id": cid, "content": singletons[cid]["content"],
+                                   MEMBERSHIP_KEY: [cid]})
+            windows.append(window)
+        return windows
 
     async def _verify_merge(self, task_id: str, revision: int, provider: Any,
                             content: Dict[str, str], video_title: str,
