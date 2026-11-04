@@ -860,7 +860,8 @@ class SemanticStore:
             session.close()
 
     def settle_attempt(
-        self, task_id: int, expected_revision: int, usage_tokens: Optional[int] = None
+        self, task_id: int, expected_revision: int, usage_tokens: Optional[int] = None,
+        call_ms: Optional[int] = None,
     ) -> Dict[str, Any]:
         """结算当前在飞请求：实际 usage 或保留估算，清 in_flight，更新台账。
 
@@ -871,6 +872,8 @@ class SemanticStore:
             task_id: 任务 ID。
             expected_revision: 期望 run.revision（仅当确有在飞请求时校验）。
             usage_tokens: 非负整数为实际用量；None/非法保留预约估算并标 estimated。
+            call_ms: 本次调用的实测耗时（毫秒，非负）。只累计真实发起过模型调用的
+                结算；取消（_settle_quiet）与 void 不传，不计入耗时统计。
 
         Returns:
             新 State DTO。
@@ -897,6 +900,9 @@ class SemanticStore:
                 and usage_tokens >= 0
             )
             self._settle_in_flight(session, run, int(usage_tokens) if valid_actual else None)
+            if call_ms is not None and isinstance(call_ms, int) and call_ms >= 0:
+                run.elapsed_call_ms = int(run.elapsed_call_ms or 0) + call_ms
+                run.timed_calls = int(run.timed_calls or 0) + 1
             run.revision = int(run.revision) + 1
             session.commit()
             return self._state_dto(session, task, run)
@@ -1699,3 +1705,38 @@ class SemanticStore:
         if member is None:
             raise SemanticValidationError(f"rpid 不属于该任务的任何分组: {rpid}")
         return [str(rpid)]
+
+    # ------------------------------------------------------------------
+    # 耗时统计（预估时间用）
+    # ------------------------------------------------------------------
+    def recent_call_ms_median(self, limit_runs: int = 10) -> Optional[int]:
+        """最近若干有实测耗时的任务，单次调用平均耗时的中位数（毫秒）。
+
+        取最近 limit_runs 个 timed_calls>0 的任务，各算 平均=elapsed/timed，
+        再取中位数。没有历史数据时返回 None，由调用方回退到固定区间。
+        只读、不触网；数据库不可用时返回 None（预估缺失不应打断预检）。
+        """
+        session = self._session()
+        try:
+            # 至少有过 2 次计时调用的任务才纳入：单次调用的任务偶然性太大，
+            # 会把中位数拉偏（比如那次恰好是个特别慢/特别快的窗口）。
+            runs = (
+                session.query(SemanticRun)
+                .filter(SemanticRun.timed_calls >= 2)
+                .order_by(SemanticRun.id.desc())
+                .limit(max(1, int(limit_runs)))
+                .all()
+            )
+            if not runs:
+                return None
+            averages = sorted(
+                int(r.elapsed_call_ms) / int(r.timed_calls) for r in runs)
+            mid = len(averages) // 2
+            if len(averages) % 2:
+                return int(averages[mid])
+            return int((averages[mid - 1] + averages[mid]) / 2)
+        except Exception:
+            logger.debug("读取历史调用耗时失败", exc_info=True)
+            return None
+        finally:
+            session.close()

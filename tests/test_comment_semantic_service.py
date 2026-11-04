@@ -84,6 +84,10 @@ class FakeStore:
     def latest_task(self, bvid: str) -> Optional[Dict[str, Any]]:
         return dict(self._task) if self._task else None
 
+    def recent_call_ms_median(self, limit_runs: int = 10):
+        """与真实 store 同名：测试可用 self._median 注入历史耗时中位数。"""
+        return getattr(self, "_median", None)
+
     # ----- 创建 -----
     def create_task(self, snapshot, model_identity, limits, request_key,
                     budget_mode="default") -> Dict[str, Any]:
@@ -158,7 +162,8 @@ class FakeStore:
         self.calls.append("reserve")
         return dict(self._task)
 
-    def settle_attempt(self, task_id, expected_revision, usage_tokens=None) -> Dict[str, Any]:
+    def settle_attempt(self, task_id, expected_revision, usage_tokens=None,
+                       call_ms=None) -> Dict[str, Any]:
         self._check_rev(expected_revision)
         b = self._task["budget"]
         if b["in_flight"] is None:
@@ -170,6 +175,9 @@ class FakeStore:
         b["settled_tokens"] += actual
         if b["in_flight"].get("daily_tracked", True):
             b["daily_settled"] += actual
+        if call_ms is not None:
+            b["elapsed_call_ms"] += call_ms
+            b["timed_calls"] += 1
         b["in_flight"] = None
         self._task["revision"] += 1
         self.calls.append("settle")

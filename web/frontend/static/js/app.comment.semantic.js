@@ -199,6 +199,7 @@
         const normalized = String(bvid || '').trim();
         if (!normalized) return;
         stopPolling();
+        stopEtaTicker();  // 切 BV：旧任务的剩余时间不能继续倒数
         state.bvid = normalized;
         state.task = null;
         state.result = null;
@@ -272,6 +273,32 @@
         if (input && state.bvid && input.value.trim() !== state.bvid) input.value = state.bvid;
     }
 
+    // 开始前粗估：预计调用次数与耗时区间，只有存在估算数据时才显示。
+    function startEstimateText() {
+        const est = (state.preflight || {}).estimate || null;
+        if (!est || !est.eligible) return '';
+        const minutes = s => Math.max(1, Math.round((Number(s) || 0) / 60));
+        const measured = est.median_call_ms ? '，按最近任务的实测耗时' : '，耗时为粗估区间';
+        return `预计约 ${est.calls_min}～${est.calls_max} 次调用，`
+            + `约 ${minutes(est.seconds_min)}～${minutes(est.seconds_max)} 分钟`
+            + `（粗估${measured}，取决于模型响应速度）`;
+    }
+
+    // 运行中：已用时间 + 预计还需 + 进度；按秒倒数，轮询时校准。
+    function etaLine(task) {
+        const eta = task && task.eta;
+        if (!eta) return '';
+        if (eta.queued_note) return eta.queued_note;
+        const remain = Number(eta.remaining_ms);
+        if (!Number.isFinite(remain)) return '';
+        const secs = Math.max(0, Math.round((remain - (Date.now() - (eta._localAt || 0)) / 1000)));
+        const mins = Math.max(1, Math.round(secs / 60));  // 还有剩余调用时不显示 0 分钟
+        const used = Math.round((Number(eta.elapsed_ms) || 0) / 60000);
+        const progress = eta.total ? `（${eta.done}/${eta.total}）` : '';
+        const atLeast = eta.at_least ? '至少 ' : '';
+        return `已用约 ${used} 分钟 · 预计还需约 ${atLeast}${mins} 分钟 ${progress}（按实测耗时）`;
+    }
+
     // 渲染面板概览：选中范围、provider、同意/未配置状态、开始按钮、auto_fold 开关。
     function renderOverview() {
         const pf = state.preflight || {};
@@ -287,6 +314,7 @@
             : '<span class="semantic-warn">未配置大模型，请先到配置页填写后再使用</span>';
 
         // 概览统计只做展示，取 preflight 的 counts；不改动旧大屏统计。
+        const estimateText = startEstimateText();
         const html = `
             <div class="semantic-overview">
                 <p class="semantic-provider">${providerLine}</p>
@@ -295,6 +323,7 @@
                     <span>本次范围 <strong>${text(counts.selected, 0)}</strong>/${escapeHtml(String(scopeLimit))}</span>
                     <span>可参与 <strong>${text(counts.eligible, 0)}</strong></span>
                 </div>
+                ${estimateText ? `<p class="semantic-estimate">${escapeHtml(estimateText)}</p>` : ''}
                 <label class="semantic-autofold">
                     <input type="checkbox" id="semantic-autofold-toggle" ${autoFold ? 'checked' : ''}>
                     自动折叠等价评论（仅改展示，不触发模型调用）
@@ -909,11 +938,37 @@
     }
 
     // 任务进度区：阶段 / 进度 / 覆盖 / 预算 / 错误（只读展示）。
+    // ETA 按秒倒数：只更新那一行文字，不重渲染整个任务区（避免把按钮状态/焦点打乱）。
+    let etaTimer = null;
+
+    function startEtaTicker() {
+        if (etaTimer) return;
+        etaTimer = setInterval(() => {
+            const task = state.task;
+            if (!task || !task.eta || task.eta.remaining_ms === undefined) { stopEtaTicker(); return; }
+            const area = el('semantic-task-area');
+            if (!area) return;
+            const node = area.querySelector('.semantic-eta');
+            if (node) node.textContent = etaLine(task);
+        }, 1000);
+    }
+
+    function stopEtaTicker() {
+        if (etaTimer) { clearInterval(etaTimer); etaTimer = null; }
+    }
+
     function renderTaskArea() {
         const area = el('semantic-task-area');
         if (!area) return;
         const task = state.task;
         if (!task) { area.innerHTML = ''; return; }
+        // ETA 的本地时间戳：按秒倒数用，每次拿到新任务态就校准一次，不额外请求后端。
+        if (task.eta && task.eta.remaining_ms !== undefined) {
+            task.eta._localAt = Date.now();
+            startEtaTicker();
+        } else {
+            stopEtaTicker();
+        }
         const coverage = task.coverage || {};
         const budget = task.budget || {};
         // progress 是 0..1 的标量（store._state_dto: float(task.progress)），不是对象。
@@ -925,6 +980,8 @@
             html += ` · ${escapeHtml(String(Math.round(Math.min(1, ratio) * 100)))}%`;
         }
         html += '</div>';
+        const etaText = etaLine(task);
+        if (etaText) html += `<p class="semantic-eta">${escapeHtml(etaText)}</p>`;
         const coverageText = crossCoverageText(coverage);
         if (coverageText) {
             html += `<p class="semantic-coverage">跨批覆盖：${escapeHtml(coverageText)}`;

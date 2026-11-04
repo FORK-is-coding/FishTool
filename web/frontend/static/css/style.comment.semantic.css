@@ -297,3 +297,16 @@
 .semantic-stop-report .semantic-consent-list strong {
     font-weight: 600;
 }
+
+/* 预估时间（PR 5） */
+.semantic-estimate {
+    margin: 6px 0;
+    font-size: 13px;
+    color: var(--ink-3, #6b7280);
+}
+
+.semantic-eta {
+    margin: 6px 0;
+    font-size: 13px;
+    color: var(--ink-3, #6b7280);
+}
