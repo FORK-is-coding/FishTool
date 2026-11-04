@@ -160,6 +160,10 @@ class ChatSemanticProvider:
         self._client_factory = client_factory or LLMClient
         self._timeout = timeout
         self._client = None
+        # 由 service 在创建后按任务预算档位设置：默认档 True（全局日上限照查）；
+        # 无限制档为 False（跳过全局日上限检查，用量照常记账）。属性而非 group() 参数：
+        # 测试替身的 group 签名是写死的，加参数会破坏所有 FakeProvider。
+        self.enforce_daily_limit = True
 
     # ---- 无需建客户端即可读取的身份 / 配置探测 ----
 
@@ -274,6 +278,7 @@ class ChatSemanticProvider:
                 stream=False,
                 module="comment_semantic",
                 omit_temperature=omit_temperature,
+                enforce_daily_limit=self.enforce_daily_limit,
             )
         except TokenLimitExceededError as exc:
             raise SemanticProviderError(

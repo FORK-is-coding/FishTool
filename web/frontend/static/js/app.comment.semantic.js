@@ -53,6 +53,7 @@
         decisionBusy: false,      // 决策请求进行中（防双击重复 POST）
         requestKey: null,         // 当前 BV 的稳定发起 key（终态/切 BV 才换新）
         requestKeyBvid: '',       // requestKey 绑定的 BV
+        budgetMode: 'default',    // 预算档位（init 时从 localStorage 读）
     };
 
     // ---- 本机 session token（写请求必带；token 不进 URL / 日志）----
@@ -322,6 +323,15 @@
         };
         if (!task || isTerminalWithResult(task.status) || task.status === 'failed'
             || task.status === 'cancelled') {
+            // 预算档位单选（开始/重新分析时才可选择；任务进行中禁用）。
+            area.append(buildBudgetModePicker(task));
+            const hint = globalQuotaHint();
+            if (hint) {
+                const p = document.createElement('p');
+                p.className = 'semantic-hint semantic-quota-hint';
+                p.textContent = hint;
+                area.append(p);
+            }
             const label = task ? '重新分析' : '开始分析';
             area.append(makeBtn(label, 'btn-primary', onStart, !configured));
         }
@@ -331,6 +341,105 @@
         if (task && canResume(task)) {
             area.append(makeBtn('继续执行', 'btn-primary', onResume, !configured));
         }
+    }
+
+    // ---- 预算模式（default/unlimited，两档数值由服务端定义）----
+    const BUDGET_MODE_KEY = 'fishtool.semantic.budgetMode';
+
+    function loadBudgetMode() {
+        // localStorage 可能不可用（隐私模式 / AstrBot 内存 storage）：回落默认档。
+        try {
+            const v = window.localStorage && window.localStorage.getItem(BUDGET_MODE_KEY);
+            return v === 'unlimited' ? 'unlimited' : 'default';
+        } catch (e) { return 'default'; }
+    }
+
+    function saveBudgetMode(v) {
+        try {
+            if (window.localStorage) window.localStorage.setItem(BUDGET_MODE_KEY, v);
+        } catch (e) { /* 存储不可用时只是不记住选择 */ }
+    }
+
+    function applyBudgetMode(value) {
+        state.budgetMode = value === 'unlimited' ? 'unlimited' : 'default';
+        saveBudgetMode(state.budgetMode);
+        // 换档等于换一种任务意图：重置幂等键，避免同 key 不同模式被后端 409。
+        resetRequestKey();
+    }
+
+    function buildBudgetModePicker(task) {
+        const wrap = document.createElement('span');
+        wrap.className = 'semantic-budget-mode';
+        const active = !!(task && isActiveStatus(task.status));
+        const options = [
+            ['default', '默认档（每日限额）'],
+            ['unlimited', '无限制（不计入每日语义预算）'],
+        ];
+        options.forEach((pair) => {
+            const value = pair[0];
+            const text = pair[1];
+            const label = document.createElement('label');
+            label.className = 'semantic-budget-option';
+            const radio = document.createElement('input');
+            radio.type = 'radio';
+            radio.name = 'semantic-budget-mode';
+            radio.value = value;
+            radio.checked = state.budgetMode === value;
+            if (active) radio.disabled = true;
+            radio.addEventListener('change', () => {
+                applyBudgetMode(value);
+                renderActions(!!(state.preflight && state.preflight.model_configured));
+            });
+            const span = document.createElement('span');
+            span.textContent = text;
+            label.append(radio, span);
+            wrap.append(label);
+        });
+        return wrap;
+    }
+
+    function fmtTokens(v) {
+        const n = Number(v) || 0;
+        if (n >= 10000) return `${(n / 10000).toFixed(1)} 万`;
+        return String(n);
+    }
+
+    // 默认档开始前：本次粗估已可能超出全局日额度时给出提示（无限制档跳过全局检查）。
+    function globalQuotaHint() {
+        const pf = state.preflight || {};
+        const gd = pf.global_daily || {};
+        const est = pf.estimate || {};
+        if (state.budgetMode !== 'default') return '';
+        if (gd.remaining === null || gd.remaining === undefined || !est.tokens_min) return '';
+        if (est.tokens_min <= gd.remaining) return '';
+        return `提示：今天全局 AI 额度约剩 ${fmtTokens(gd.remaining)} token，本次分析预计至少消耗 `
+            + `${fmtTokens(est.tokens_min)}，可能中途因额度不足停下（可续跑）；可到设置页调高`
+            + `“每日 token 上限”，或改用“无限制”档。`;
+    }
+
+    // 选“无限制”开始前的二次确认：写明条数、粗估消耗/耗时、全局额度占用、可取消、费用不退。
+    async function confirmUnlimited(pf) {
+        const est = (pf && pf.estimate) || null;
+        const gd = (pf && pf.global_daily) || {};
+        const minutes = (s) => Math.max(1, Math.round((Number(s) || 0) / 60));
+        const parts = [];
+        // 预检没给出估算（旧后端 / 预检失败）时不能拼出“0 条、1～1 分钟”这类假数字。
+        if (est && est.eligible) {
+            parts.push(`当前视频待分析评论约 ${est.eligible} 条。`);
+            parts.push(`预计调用模型约 ${est.calls_min || 0}～${est.calls_max || 0} 次，`
+                + `消耗约 ${fmtTokens(est.tokens_min)}～${fmtTokens(est.tokens_max)} token，`
+                + `耗时约 ${minutes(est.seconds_min)}～${minutes(est.seconds_max)} 分钟（粗估）。`);
+        } else {
+            parts.push('暂时无法预估本次的消耗和耗时。');
+        }
+        if (gd.remaining !== null && gd.remaining !== undefined) {
+            parts.push(`今天全局 AI 额度还剩约 ${fmtTokens(gd.remaining)} token`
+                + '（无限制档不占用语义每日预算，但仍占用全局额度）。');
+        }
+        parts.push('任务可以随时取消；已产生的用量费用不退。');
+        return await showAppConfirm(parts.join('\n'), {
+            title: '以无限制模式开始分析', confirmText: '开始分析', cancelText: '再想想',
+        });
     }
 
     // auto_fold 开关：仅经 API 持久化偏好 + 本地重渲染展示，绝不发起模型请求。
@@ -399,6 +508,12 @@
                 }
             }
             if (seq !== state.fetchSeq || bvid !== state.bvid) return;
+            // 无限制档：开始前二次确认（估算消耗/耗时、全局额度占用、费用不退）。
+            if (state.budgetMode === 'unlimited') {
+                const confirmed = await confirmUnlimited(pf);
+                if (seq !== state.fetchSeq || bvid !== state.bvid) return;
+                if (!confirmed) return;
+            }
             await createTask(bvid, seq);
         } finally {
             state.starting = false;
@@ -474,6 +589,7 @@
                 limit: state.limit,
                 consent_version: CONSENT_VERSION,
                 request_key: requestKey,
+                budget_mode: state.budgetMode,
             });
             if (seq !== state.fetchSeq || bvid !== state.bvid) return;
             state.task = (resp && resp.data) || null;
@@ -643,8 +759,9 @@
         }
         // 预算：已结算 / 预约 token（store budget DTO）。
         if (budget.settled_tokens !== undefined || budget.reserved_tokens !== undefined) {
-            html += `<p class="semantic-coverage">本次用量：已结算 ${text(budget.settled_tokens, 0)} · 预约 ${text(budget.reserved_tokens, 0)} tokens`;
-            if (budget.daily_settled !== undefined) html += ` · 今日累计 ${text(budget.daily_settled, 0)}`;
+            const modeLabel = budget.budget_mode === 'unlimited' ? '无限制' : '默认档';
+            html += `<p class="semantic-coverage">本次用量：已结算 ${text(budget.settled_tokens, 0)} · 预约 ${text(budget.reserved_tokens, 0)} tokens · 预算模式 ${modeLabel}`;
+            if (budget.daily_settled !== undefined) html += ` · 今日累计 ${text(budget.daily_settled, 0)}（仅默认档）`;
             html += '</p>';
         }
         const stopNote = stopReasonNote(task);
@@ -947,6 +1064,7 @@
     }
 
     function init() {
+        state.budgetMode = loadBudgetMode();
         const btn = el('semantic-load-btn');
         if (btn) btn.addEventListener('click', onLoadClick);
         const input = el('semantic-bvid');
@@ -971,7 +1089,7 @@
         // 测试 / 调试入口：暴露内部状态与关键函数（不改变运行行为）。
         window.__semanticPanel = {
             state, selectBvid, renderResult, stopPolling, init, onLoadClick, submitDecision,
-            resumePollingIfActive, onStart,
+            resumePollingIfActive, onStart, setBudgetMode: applyBudgetMode,
         };
     }
 })();

@@ -31,9 +31,14 @@ import asyncio
 import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from core.config import config
+
 from .contracts import (
     BATCH_ATTEMPTS,
     BATCH_SIZE,
+    BUDGET_MODE_DEFAULT,
+    BUDGET_MODE_UNLIMITED,
+    BUDGET_PROFILES,
     CONSENT_VERSION,
     DEFAULT_LIMIT,
     DEFAULT_LIMITS,
@@ -41,6 +46,7 @@ from .contracts import (
     MAX_GROUP_SIZE,
     MAX_LIMIT,
     MEMBERSHIP_KEY,
+    OUTPUT_TOKENS,
     PHASE_BATCH,
     PHASE_CROSS,
     RULE_VERSION,
@@ -53,7 +59,10 @@ from .contracts import (
     SemanticValidationError,
     STOP_DEGRADED,
     STOP_ROUNDS_EXHAUSTED,
+    SYSTEM_PROMPT,
+    budget_profile,
     estimate_request_tokens,
+    resolve_budget_mode,
     stop_reason_for_scope,
 )
 
@@ -179,6 +188,66 @@ def _content_by_id(snapshot: Dict[str, Any]) -> Dict[str, str]:
             for raw in (snapshot.get("items") or []) if raw.get("id")}
 
 
+#: 开始前粗估的单次调用耗时区间（秒）。没有历史实测数据时的固定区间；
+#: PR:预估时间 会用最近任务的实测中位数替换。
+_ESTIMATE_SECONDS_PER_CALL = (10, 30)
+
+
+def _start_estimate(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    """开始前粗估：按当前快照的合格条数推算调用次数、token 与耗时区间。
+
+    跨批候选数要等 phase1 分组后才知道，所以只给区间：下限为只跑批内（无跨批
+    可合并），上限按两轮跨批、每轮每批一个窗口的分组调用估算；合并复核的调用数
+    事先不可知，实际可能超过上限，前端文案必须写明“粗估”。token 按字节数保守
+    估算（字节恒 >= token，与 estimate_request_tokens 同口径）。
+    """
+    eligible = _eligible_items_in_order(snapshot)
+    n = len(eligible)
+    if not n:
+        return {"eligible": 0, "calls_min": 0, "calls_max": 0,
+                "tokens_min": 0, "tokens_max": 0, "seconds_min": 0, "seconds_max": 0,
+                "estimated": True}
+    batches = -(-n // BATCH_SIZE)
+    calls_min = batches
+    calls_max = batches * (1 + MAX_CROSS_ROUNDS)
+    content_bytes = sum(len((it.get("content") or "").encode("utf-8")) for it in eligible)
+    system_bytes = len(SYSTEM_PROMPT.encode("utf-8"))
+    per_round_tokens = content_bytes + batches * (system_bytes + OUTPUT_TOKENS)
+    return {
+        "eligible": n,
+        "calls_min": calls_min,
+        "calls_max": calls_max,
+        "tokens_min": per_round_tokens,
+        "tokens_max": per_round_tokens * (1 + MAX_CROSS_ROUNDS),
+        "seconds_min": calls_min * _ESTIMATE_SECONDS_PER_CALL[0],
+        "seconds_max": calls_max * _ESTIMATE_SECONDS_PER_CALL[1],
+        "estimated": True,
+    }
+
+
+def _global_daily_remaining() -> Dict[str, Any]:
+    """全局 AI 日上限的当日剩余（默认档开始前提示用）；读取失败按未知返回。
+
+    与 llm.client._check_token_limit 同一口径：0 表示不限制（remaining=None）。
+    """
+    try:
+        from datetime import date as _date
+
+        from core.config import LLM_DAILY_TOKEN_LIMIT_DEFAULT
+        from llm.client import _coerce_daily_limit, _db_tokens_used_on
+        # 与 LLMClient.__init__ 同口径：缺配置用默认值，非法值按默认值处理。
+        # 不能用 `or 0`：缺配置会被当成 0（不限制），提示就不出现了。
+        limit = _coerce_daily_limit(
+            config.get("llm.daily_token_limit", LLM_DAILY_TOKEN_LIMIT_DEFAULT))
+        used = _db_tokens_used_on(_date.today())
+        used = int(used) if used is not None else 0
+        return {"limit": limit, "used": used,
+                "remaining": None if limit <= 0 else max(0, limit - used)}
+    except Exception:  # noqa: BLE001 - 预检提示信息缺失不应打断预检本身
+        logger.debug("读取全局日用量失败", exc_info=True)
+        return {"limit": None, "used": None, "remaining": None}
+
+
 def _chunk_items(items: List[Dict[str, Any]], video_title: str,
                  phase: str) -> List[List[Dict[str, Any]]]:
     """按 BATCH_SIZE 条数 + INPUT_BYTES 输入字节双上限切批。
@@ -290,6 +359,11 @@ class SemanticService:
             "consent_version": CONSENT_VERSION,
             "rule_version": RULE_VERSION,
             "limits": dict(DEFAULT_LIMITS),
+            # 预算模式：两档数值（选择“无限制”时的确认弹窗用）+ 按当前快照的开始前
+            # 粗估（调用次数/token/耗时区间）+ 全局 AI 日上限当日剩余（默认档提示用）。
+            "budget_profiles": {mode: dict(p) for mode, p in BUDGET_PROFILES.items()},
+            "estimate": _start_estimate(snapshot),
+            "global_daily": _global_daily_remaining(),
             "preference": {
                 "auto_fold": pref.get("auto_fold"),
                 "revision": pref.get("revision"),
@@ -299,13 +373,15 @@ class SemanticService:
         }
 
     async def start(self, bvid: str, limit: int, consent_version: str,
-                    request_key: str) -> Dict[str, Any]:
+                    request_key: str, budget_mode: Optional[str] = None) -> Dict[str, Any]:
         """校验「持久化的、与模型身份绑定的同意」后创建任务，快速返回公开态。
 
         不在 durable create 之前发任何模型请求；创建成功且是新 queued 任务才入队
         后台 worker（全局串行）。幂等 request_key 由 store 保证。
+        budget_mode 只接受服务端定义的两档（contracts.BUDGET_PROFILES），随任务钉死。
         """
         limit = _clamp_limit(limit)
+        mode = resolve_budget_mode(budget_mode)
         # 资源存在性是最基本的前提，必须先于 consent / 模型配置校验（issue #47）：
         # 否则 BV 号打错时用户只会看到 503「模型未配置」或 400「未同意」，排查方向被带偏。
         # store.preference 在视频不存在时抛 SemanticNotFound（-> 404），且只是一次轻量
@@ -330,7 +406,12 @@ class SemanticService:
                 "尚未对当前模型身份授予语义折叠同意", reason="consent_required")
 
         snapshot = self.store.snapshot(bvid, limit=limit)
-        state = self.store.create_task(snapshot, identity, dict(DEFAULT_LIMITS), request_key)
+        # 默认档沿用 DEFAULT_LIMITS（与既有行为/测试口径一致）；无限制档用档位上限覆盖。
+        limits = dict(DEFAULT_LIMITS)
+        if mode == BUDGET_MODE_UNLIMITED:
+            limits.update(budget_profile(mode))
+        state = self.store.create_task(snapshot, identity, limits, request_key,
+                                       budget_mode=mode)
         if state.get("status") == "queued":
             self._schedule(state["task_id"])
         return _public_state(state)
@@ -354,10 +435,12 @@ class SemanticService:
         return _public_state(state)
 
     async def resume(self, task_id: str, expected_revision: int,
-                     acknowledge_unknown: bool = False) -> Dict[str, Any]:
+                     acknowledge_unknown: bool = False,
+                     upgrade_to: Optional[str] = None) -> Dict[str, Any]:
         """续跑：要求 interrupted/partial/failed + 对未知在飞的 ack；模型身份变更则拒。
 
         不重发已成功的 checkpoint 单元;保留既往计费;在剩余预算内继续。
+        upgrade_to="unlimited" 时把默认档任务升级为无限制档（只允许单向升级）。
         """
         state = self.store.get_task(task_id)
         configured, identity = self._provider_identity()
@@ -370,7 +453,8 @@ class SemanticService:
                 "模型身份已变更，拒绝在不同身份下续跑；请新建任务")
 
         resumed = self.store.resume_task(
-            task_id, expected_revision, acknowledge_unknown=acknowledge_unknown)
+            task_id, expected_revision, acknowledge_unknown=acknowledge_unknown,
+            upgrade_to=upgrade_to)
         if resumed.get("status") == "queued":
             self._schedule(resumed["task_id"])
         return _public_state(resumed)
@@ -638,6 +722,10 @@ class SemanticService:
         budget_hit = False
         stop_scope: Optional[str] = None  # 预算 / 可续跑停止的 scope,决定 stop_reason
         provider = self._new_provider()
+        # 按任务档位决定是否跳过全局日上限检查（无限制档跳过；任务档内上限仍由
+        # store 层强制）。属性而非参数：测试替身的 group 签名写死，不能加参。
+        provider.enforce_daily_limit = (
+            (state.get("budget") or {}).get("budget_mode") != BUDGET_MODE_UNLIMITED)
         async with provider:
             # ---------- phase1：批内分组 ----------
             try:

@@ -112,9 +112,12 @@ class _FakeService:
             raise self.preflight_error
         return self.preflight_value
 
-    async def start(self, bvid, limit, consent_version, request_key):
+    async def start(self, bvid, limit, consent_version, request_key, budget_mode=None):
         if self.start_error is not None:
             raise self.start_error
+        self.start_kwargs = {"bvid": bvid, "limit": limit,
+                             "consent_version": consent_version,
+                             "request_key": request_key, "budget_mode": budget_mode}
         return self.start_value
 
     def status(self, task_id):
@@ -126,7 +129,11 @@ class _FakeService:
     async def cancel(self, task_id, expected_revision):
         return self.cancel_value
 
-    async def resume(self, task_id, expected_revision, acknowledge_unknown=False):
+    async def resume(self, task_id, expected_revision, acknowledge_unknown=False,
+                     upgrade_to=None):
+        self.resume_kwargs = {"task_id": task_id, "expected_revision": expected_revision,
+                              "acknowledge_unknown": acknowledge_unknown,
+                              "upgrade_to": upgrade_to}
         return self.resume_value
 
 
@@ -254,6 +261,44 @@ def test_create_task_success(client, token):
     )
     assert resp.status_code == 200
     assert resp.json()['data']['task_id'] == 't1'
+
+
+def test_create_task_budget_mode_passthrough_and_validation(client, service, token):
+    """budget_mode 透传给 service；未知档位由请求模型直接拒绝（422），不落 service。"""
+    resp = client.post(
+        '/api/comment/semantic/tasks',
+        json={'bvid': 'BV1GJ411x7h7', 'consent_version': 'semantic-fold-v1',
+              'request_key': 'k1', 'budget_mode': 'unlimited'},
+        headers=_wh(token),
+    )
+    assert resp.status_code == 200
+    assert service.start_kwargs['budget_mode'] == 'unlimited'
+
+    resp = client.post(
+        '/api/comment/semantic/tasks',
+        json={'bvid': 'BV1GJ411x7h7', 'consent_version': 'semantic-fold-v1',
+              'request_key': 'k1', 'budget_mode': 'infinite'},
+        headers=_wh(token),
+    )
+    assert resp.status_code == 422
+
+
+def test_resume_upgrade_to_passthrough_and_validation(client, service, token):
+    """upgrade_to 透传；只允许 unlimited，其它值（含 default 降级）422。"""
+    resp = client.post(
+        '/api/comment/semantic/tasks/t1/resume',
+        json={'expected_revision': 2, 'acknowledge_unknown': True, 'upgrade_to': 'unlimited'},
+        headers=_wh(token),
+    )
+    assert resp.status_code == 200
+    assert service.resume_kwargs['upgrade_to'] == 'unlimited'
+
+    resp = client.post(
+        '/api/comment/semantic/tasks/t1/resume',
+        json={'expected_revision': 2, 'upgrade_to': 'default'},
+        headers=_wh(token),
+    )
+    assert resp.status_code == 422
 
 
 def test_create_task_budget_429(client, service, token):

@@ -26,7 +26,7 @@
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
@@ -210,6 +210,8 @@ class TaskCreateRequest(BaseModel):
     limit: StrictInt = Field(default=_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT)
     consent_version: StrictStr = Field(min_length=1, max_length=128)
     request_key: StrictStr = Field(min_length=1, max_length=256)
+    # 预算档位：服务端定义 default/unlimited，请求只传模式名，不接受任意数值。
+    budget_mode: Literal["default", "unlimited"] = "default"
 
 
 class RevisionRequest(BaseModel):
@@ -227,6 +229,8 @@ class ResumeRequest(BaseModel):
 
     expected_revision: StrictInt = Field(ge=0)
     acknowledge_unknown: StrictBool = False
+    # 续跑同时升级档位：只允许 default -> unlimited（降级会让已用量超限、立刻再停）。
+    upgrade_to: Optional[Literal["unlimited"]] = None
 
 
 class DecisionRequest(BaseModel):
@@ -377,6 +381,7 @@ async def create_task(request: TaskCreateRequest) -> Dict[str, Any]:
             request.limit,
             request.consent_version,
             request.request_key,
+            budget_mode=request.budget_mode,
         )
     except HTTPException:
         raise
@@ -497,6 +502,7 @@ async def resume_task(task_id: str, request: ResumeRequest) -> Dict[str, Any]:
             task_id,
             request.expected_revision,
             acknowledge_unknown=request.acknowledge_unknown,
+            upgrade_to=request.upgrade_to,
         )
     except HTTPException:
         raise

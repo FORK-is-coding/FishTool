@@ -53,8 +53,17 @@ class FakeDate extends RealDate {
 async function main() {
   const elements = {};
   const getEl = id => (elements[id] = elements[id] || makeElement(id));
+  // localStorage 内存桩：预算模式“记住上次选择”用；Map 语义与真 storage 一致。
+  const storageMap = new Map();
+  const localStorageStub = {
+    getItem: k => (storageMap.has(k) ? storageMap.get(k) : null),
+    setItem: (k, v) => storageMap.set(k, String(v)),
+    removeItem: k => storageMap.delete(k),
+  };
   const docListeners = {};
   const postedKeys = [];    // 每次 POST /tasks 带的 request_key
+  const postedBodies = [];  // 每次 POST /tasks 的完整请求体
+  const confirmCalls = [];  // 每次 showAppConfirm 的文案与选项
   let latestOverride;       // 定义后 /latest 一律返回它（用于切回时返回终态任务）
   const statusCalls = [];   // 每次 GET /tasks/{id} 的假时间
   const stallHistory = [];  // 每次轮询请求发出时，上一轮渲染留下的 pollStalled
@@ -79,7 +88,11 @@ async function main() {
     },
     window: {},
     Date: FakeDate,
-    showAppAlert() {}, showToast() {}, showAppConfirm: async () => true,
+    showAppAlert() {}, showToast() {},
+    showAppConfirm: async (msg, opts) => {
+      confirmCalls.push({ msg: String(msg), opts: opts || {} });
+      return scenario.confirmResult !== false;
+    },
     mountAppModal: () => (() => {}),
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
     encodeURIComponent, JSON, Object, Array, Number, String, Boolean, Math, Promise, RegExp, Error,
@@ -87,8 +100,12 @@ async function main() {
       let payload = { success: true, data: null };
       const method = (options && options.method) || 'GET';
       if (method === 'POST' && /\/tasks$/.test(url)) {
-        // 发起任务：记录 request_key，返回 queued，之后轮询按 statuses 推进
-        try { postedKeys.push(JSON.parse(options.body).request_key); } catch (e) { postedKeys.push(null); }
+        // 发起任务：记录 request_key 与完整请求体，返回 queued，之后轮询按 statuses 推进
+        try {
+          const body = JSON.parse(options.body);
+          postedKeys.push(body.request_key);
+          postedBodies.push(body);
+        } catch (e) { postedKeys.push(null); postedBodies.push(null); }
         payload = { success: true, data: { task_id: 't1', status: 'queued', revision: 0 } };
         return { ok: true, status: 200, json: async () => payload };
       }
@@ -132,6 +149,7 @@ async function main() {
   Object.assign(ctx.window, {
     document: ctx.document, setTimeout: fakeSetTimeout, clearTimeout() {},
     setInterval: () => 0, clearInterval() {}, requestAnimationFrame: () => 0, addEventListener() {},
+    localStorage: localStorageStub,
   });
   ctx.globalThis = ctx;
   vm.createContext(ctx);
@@ -178,6 +196,23 @@ async function main() {
     await ctx.window.__semanticPanel.onStart();
     await flush();
     out.postedKeys = postedKeys.slice();
+  }
+  if (scenario.budgetFlow) {
+    // 预算模式流程：先切档，再点“开始分析”；记录确认弹窗与 POST 请求体。
+    stopAfter = 1000;
+    if (scenario.budgetFlow.mode) ctx.window.__semanticPanel.setBudgetMode(scenario.budgetFlow.mode);
+    await ctx.window.__semanticPanel.onStart();
+    await flush();
+    if (scenario.budgetFlow.thenSwitch) {
+      // 运行中切换档位：幂等键必须重置，下一次发起带新模式。
+      ctx.window.__semanticPanel.setBudgetMode(scenario.budgetFlow.thenSwitch);
+      await ctx.window.__semanticPanel.onStart();
+      await flush();
+    }
+    out.confirmCalls = confirmCalls.slice();
+    out.postedBodies = postedBodies.slice();
+    out.postedKeys = postedKeys.slice();
+    out.storedMode = storageMap.get('fishtool.semantic.budgetMode') || null;
   }
   if (scenario.stopAtEnd) {
     ctx.window.__semanticPanel.stopPolling();
@@ -344,3 +379,52 @@ def test_reselect_bv_with_terminal_task_uses_new_request_key(tmp_path) -> None:
     keys = out["postedKeys"]
     assert len(keys) == 2 and keys[0] and keys[1]
     assert keys[0] != keys[1]
+
+# ---------------------------------------------------------------------------
+# PR 3：预算模式选择与无限制档二次确认
+# ---------------------------------------------------------------------------
+
+def test_unlimited_mode_requires_confirm_and_posts_mode(tmp_path) -> None:
+    """选无限制档：开始前弹二次确认（写明费用不退），确认后 POST 带 budget_mode=unlimited。"""
+    statuses = [_running(i) for i in range(1, 5)]
+    out = _run({"statuses": statuses, "maxStatusCalls": 0, "noLatest": True,
+                "budgetFlow": {"mode": "unlimited"}}, tmp_path)
+    assert len(out["confirmCalls"]) == 1
+    msg = out["confirmCalls"][0]["msg"]
+    assert "费用不退" in msg
+    # harness 的预检不带 estimate：不能拼出“0 条、1～1 分钟”这类假数字
+    assert "暂时无法预估" in msg and "约 0 条" not in msg
+    assert len(out["postedBodies"]) == 1
+    assert out["postedBodies"][0]["budget_mode"] == "unlimited"
+    assert out["storedMode"] == "unlimited"
+
+
+def test_unlimited_mode_declined_posts_nothing(tmp_path) -> None:
+    """确认弹窗点“再想想”：不发起任何任务。"""
+    statuses = [_running(i) for i in range(1, 5)]
+    out = _run({"statuses": statuses, "maxStatusCalls": 0, "noLatest": True,
+                "confirmResult": False, "budgetFlow": {"mode": "unlimited"}}, tmp_path)
+    assert len(out["confirmCalls"]) == 1
+    assert out["postedBodies"] == []
+
+
+def test_default_mode_posts_default_without_confirm(tmp_path) -> None:
+    """默认档：不弹确认，POST 带 budget_mode=default。"""
+    statuses = [_running(i) for i in range(1, 5)]
+    out = _run({"statuses": statuses, "maxStatusCalls": 0, "noLatest": True,
+                "budgetFlow": {}}, tmp_path)
+    assert out["confirmCalls"] == []
+    assert len(out["postedBodies"]) == 1
+    assert out["postedBodies"][0]["budget_mode"] == "default"
+
+
+def test_switching_mode_resets_request_key(tmp_path) -> None:
+    """运行中切到无限制档：幂等键重置（否则同 key 不同模式被后端 409），第二次发起带新模式。"""
+    statuses = [_running(i) for i in range(1, 50)]
+    out = _run({"statuses": statuses, "maxStatusCalls": 3, "noLatest": True,
+                "budgetFlow": {"mode": "default", "thenSwitch": "unlimited"}}, tmp_path)
+    keys = out["postedKeys"]
+    assert len(keys) == 2 and keys[0] and keys[1]
+    assert keys[0] != keys[1]
+    assert out["postedBodies"][0]["budget_mode"] == "default"
+    assert out["postedBodies"][1]["budget_mode"] == "unlimited"

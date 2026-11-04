@@ -302,7 +302,12 @@ class LLMClient:
         # 检查Token限制
         # 按字符数/4 粗略估算输入 token
         estimated_tokens = sum(len(m['content']) // 4 for m in messages)
-        self._check_token_limit(estimated_tokens)
+        # 内部专用 kwarg：只用于本地限额控制，必须在 _check_token_limit 之前 pop，
+        # 绝不能混进发往服务端的 payload。False 表示调用方（语义无限制档）自带预算闸门，
+        # 跳过全局日上限检查；用量照常写入 llm_usage。
+        enforce_daily_limit = kwargs.pop('enforce_daily_limit', True)
+        if enforce_daily_limit:
+            self._check_token_limit(estimated_tokens)
 
         # 内部专用 kwarg：只用于本地记账/参数控制，绝不混入发往服务端的 payload。
         # - module: 用量归属标签（记录 LLMUsage 用）
@@ -393,7 +398,10 @@ class LLMClient:
         """
         # 检查Token限制
         estimated_tokens = sum(len(m['content']) // 4 for m in messages)
-        self._check_token_limit(estimated_tokens)
+        # 同 chat_completion：enforce_daily_limit 在限额检查前 pop，不进请求体。
+        enforce_daily_limit = kwargs.pop('enforce_daily_limit', True)
+        if enforce_daily_limit:
+            self._check_token_limit(estimated_tokens)
 
         # 内部专用 kwarg 不入 payload（与 chat_completion 对齐）
         kwargs.pop('module', None)

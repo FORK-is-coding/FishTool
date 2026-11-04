@@ -666,6 +666,27 @@ def test_group_auth_classified(monkeypatch):
     assert ei.value.category == ProviderErrorCategory.AUTH
 
 
+def test_group_passes_enforce_daily_limit_flag(monkeypatch):
+    """provider 的 enforce_daily_limit 属性原样传给 chat_completion：
+    默认 True（默认档照查全局日上限）；service 按任务档位改成 False。"""
+    monkeypatch.setattr(prov, "_read_api_key", lambda: "sk-x")
+
+    async def _run(p):
+        async with p as prov_in:
+            await prov_in.group([{"id": "c0", "content": "a"}])
+
+    ok = _ok_response('{"equivalent_groups": [], "related_groups": [], "uncertain_ids": []}')
+    client = _FakeClient(response=ok)
+    asyncio.run(_run(_make_provider(client)))
+    assert client.calls[0]["kwargs"]["enforce_daily_limit"] is True
+
+    client2 = _FakeClient(response=ok)
+    p2 = _make_provider(client2)
+    p2.enforce_daily_limit = False
+    asyncio.run(_run(p2))
+    assert client2.calls[0]["kwargs"]["enforce_daily_limit"] is False
+
+
 def test_group_token_limit_classified(monkeypatch):
     """底层 TokenLimitExceededError -> category=TOKEN_LIMIT。"""
     monkeypatch.setattr(prov, "_read_api_key", lambda: "sk-x")

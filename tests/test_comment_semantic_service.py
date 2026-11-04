@@ -85,9 +85,12 @@ class FakeStore:
         return dict(self._task) if self._task else None
 
     # ----- 创建 -----
-    def create_task(self, snapshot, model_identity, limits, request_key) -> Dict[str, Any]:
+    def create_task(self, snapshot, model_identity, limits, request_key,
+                    budget_mode="default") -> Dict[str, Any]:
+        self.last_create = {"limits": dict(limits or {}), "budget_mode": budget_mode}
         if self._task is not None:
-            if self._task.get("request_key") == request_key:
+            if (self._task.get("request_key") == request_key
+                    and self._task["budget"].get("budget_mode", "default") == budget_mode):
                 return dict(self._task)  # 幂等
             raise SemanticConflict("request_key 冲突")
         self._task = {
@@ -101,7 +104,9 @@ class FakeStore:
                        "max_attempts": self._limits["max_attempts"],
                        "task_token_budget": self._limits["task_token_budget"],
                        "daily_token_budget": self._limits["daily_token_budget"],
-                       "daily_reserved": 0, "daily_settled": 0, "in_flight": None},
+                       "daily_reserved": 0, "daily_settled": 0, "in_flight": None,
+                       "budget_mode": budget_mode, "stop_seq": 0,
+                       "elapsed_call_ms": 0, "timed_calls": 0},
         }
         return dict(self._task)
 
@@ -136,14 +141,17 @@ class FakeStore:
             raise SemanticBudgetExceeded("超最大尝试数", scope="attempts")
         if b["reserved_tokens"] + estimated_tokens > b["task_token_budget"]:
             raise SemanticBudgetExceeded("超任务预算", scope="task")
-        if b["daily_reserved"] + estimated_tokens > b["daily_token_budget"]:
+        daily_tracked = b.get("budget_mode", "default") != "unlimited"
+        if daily_tracked and b["daily_reserved"] + estimated_tokens > b["daily_token_budget"]:
             raise SemanticBudgetExceeded("超每日预算", scope="daily")
         attempt_id = f"a{b['attempt_count']}"
         b["in_flight"] = {"attempt_id": attempt_id,
                           "estimated_tokens": estimated_tokens,
-                          "usage_estimated": True}
+                          "usage_estimated": True,
+                          "daily_tracked": daily_tracked}
         b["reserved_tokens"] += estimated_tokens
-        b["daily_reserved"] += estimated_tokens
+        if daily_tracked:
+            b["daily_reserved"] += estimated_tokens
         b["request_count"] += 1
         b["attempt_count"] += 1
         self._task["revision"] += 1
@@ -160,7 +168,8 @@ class FakeStore:
         est = b["in_flight"]["estimated_tokens"]
         actual = usage_tokens if isinstance(usage_tokens, int) and usage_tokens >= 0 else est
         b["settled_tokens"] += actual
-        b["daily_settled"] += actual
+        if b["in_flight"].get("daily_tracked", True):
+            b["daily_settled"] += actual
         b["in_flight"] = None
         self._task["revision"] += 1
         self.calls.append("settle")
@@ -174,7 +183,8 @@ class FakeStore:
         self._check_rev(expected_revision)
         est = b["in_flight"]["estimated_tokens"]
         b["reserved_tokens"] -= est
-        b["daily_reserved"] -= est
+        if b["in_flight"].get("daily_tracked", True):
+            b["daily_reserved"] -= est
         b["attempt_count"] -= 1
         b["request_count"] -= 1
         b["in_flight"] = None
@@ -191,12 +201,20 @@ class FakeStore:
         self._task["revision"] += 1
         return dict(self._task)
 
-    def resume_task(self, task_id, expected_revision, acknowledge_unknown=False) -> Dict[str, Any]:
+    def resume_task(self, task_id, expected_revision, acknowledge_unknown=False,
+                    upgrade_to=None) -> Dict[str, Any]:
         self._check_rev(expected_revision)
         if self._task["status"] not in ("interrupted", "partial", "failed"):
             raise SemanticConflict("状态不可续跑")
         if self._has_unknown() and not acknowledge_unknown:
             raise SemanticConflict("存在未知在飞,需 acknowledge_unknown")
+        if upgrade_to is not None:
+            b = self._task["budget"]
+            if upgrade_to != "unlimited" or b.get("budget_mode", "default") != "default":
+                raise SemanticValidationError("只允许从默认档升级为无限制")
+            b["budget_mode"] = "unlimited"
+            b["max_attempts"] = 3000
+            b["task_token_budget"] = 80_000_000
         self._task["status"] = "queued"
         self._task["revision"] += 1
         return dict(self._task)
@@ -2115,3 +2133,97 @@ def test_zero_eligible_items_completes_with_null_stop_reason():
     final = run(scenario())
     assert final["status"] == "completed"
     assert "stop_reason" in final["coverage"] and final["coverage"]["stop_reason"] is None
+
+# ---------------------------------------------------------------------------
+# PR 3：预算模式（default/unlimited）
+# ---------------------------------------------------------------------------
+
+def test_start_unlimited_uses_profile_and_skips_global_daily_limit():
+    """无限制档：create_task 收到档位上限与模式；运行时 provider 跳过全局日上限。"""
+    from modules.comment.semantic.contracts import BUDGET_PROFILES
+    store = FakeStore(_snapshot(3))
+    provider = FakeProvider()
+    service = _service(store, provider)
+
+    async def scenario():
+        await service.start("BV1", 200, CONSENT_VERSION, "rk-unl", budget_mode="unlimited")
+        await _drain(service)
+        return service.status("t1")
+
+    final = run(scenario())
+    assert final["status"] == "completed"
+    assert store.last_create["budget_mode"] == "unlimited"
+    assert store.last_create["limits"]["task_token_budget"] == \
+        BUDGET_PROFILES["unlimited"]["task_token_budget"]
+    assert store.last_create["limits"]["max_attempts"] == \
+        BUDGET_PROFILES["unlimited"]["max_attempts"]
+    assert provider.enforce_daily_limit is False
+
+
+def test_start_default_mode_unchanged():
+    """默认档：沿用 DEFAULT_LIMITS 口径，provider 照查全局日上限。"""
+    from modules.comment.semantic.contracts import TASK_TOKEN_BUDGET as TTB
+    store = FakeStore(_snapshot(3))
+    provider = FakeProvider()
+    service = _service(store, provider)
+
+    async def scenario():
+        await service.start("BV1", 200, CONSENT_VERSION, "rk-def")
+        await _drain(service)
+        return service.status("t1")
+
+    final = run(scenario())
+    assert final["status"] == "completed"
+    assert store.last_create["budget_mode"] == "default"
+    assert store.last_create["limits"]["task_token_budget"] == TTB
+    assert provider.enforce_daily_limit is True
+
+
+def test_start_rejects_unknown_budget_mode():
+    """未知档位：参数错误，不建任务。"""
+    store = FakeStore(_snapshot(3))
+    service = _service(store, FakeProvider())
+
+    with pytest.raises(SemanticValidationError):
+        run(service.start("BV1", 200, CONSENT_VERSION, "rk-bad", budget_mode="vip"))
+    assert store._task is None
+
+
+def test_resume_upgrade_to_unlimited_passes_through():
+    """续跑带 upgrade_to：store 升级档位后任务重新排队，运行按新口径执行。"""
+    store = FakeStore(_snapshot(3))
+    provider = FakeProvider()
+    service = _service(store, provider)
+
+    async def scenario():
+        await service.start("BV1", 200, CONSENT_VERSION, "rk-upg")
+        await _drain(service)
+        # 造一个可续跑的停止状态
+        store._task["status"] = "partial"
+        store._task["coverage"] = {"stop_reason": "daily_budget"}
+        first = service.status("t1")
+        await service.resume("t1", first["revision"], upgrade_to="unlimited")
+        await _drain(service)
+        return service.status("t1")
+
+    final = run(scenario())
+    assert final["status"] == "completed"
+    assert final["budget"]["budget_mode"] == "unlimited"
+    assert provider.enforce_daily_limit is False  # 续跑后按无限制档执行
+
+
+def test_preflight_exposes_budget_profiles_estimate_and_global_daily():
+    """preflight 返回两档数值、开始前粗估与全局日剩余，供确认弹窗使用。"""
+    store = FakeStore(_snapshot(6))
+    service = _service(store, FakeProvider())
+
+    pf = run(service.preflight("BV1"))
+    assert set(pf["budget_profiles"]) == {"default", "unlimited"}
+    assert pf["budget_profiles"]["default"]["task_token_budget"] > 0
+    est = pf["estimate"]
+    assert est["eligible"] == 6
+    assert 1 <= est["calls_min"] <= est["calls_max"]
+    assert 0 < est["tokens_min"] <= est["tokens_max"]
+    assert est["seconds_min"] <= est["seconds_max"]
+    assert est["estimated"] is True
+    assert set(pf["global_daily"]) == {"limit", "used", "remaining"}
