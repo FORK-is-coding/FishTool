@@ -337,9 +337,12 @@ def parse_blocks(html_text: str) -> list[Block]:
     return parser.blocks
 
 # ---------------------------------------------------------------- 渲染
-def _esc(text: str) -> str:
+def escape_text(text: str) -> str:
     """纯文本 → reportlab Paragraph 标记里的安全文本（外部文本里的 < & 不能被当成标记）。"""
     return html_lib.escape(text, quote=False)
+
+
+_esc = escape_text
 
 
 def _runs_markup(runs: list[tuple[str, bool]]) -> str:
@@ -367,7 +370,7 @@ def _spaced(canvas, x: float, y: float, text: str, font: str, size: float, spaci
     canvas.drawText(obj)
 
 
-def _make_section_label(text: str, *, ai: bool, fonts: Fonts):
+def section_label(text: str, *, ai: bool, fonts: Fonts):
     """章节标签：黑底白字（AI 章节黄底黑字）+ 右侧斜切角，最小 48 mm（report_theme.py 的 h2）。"""
     from reportlab.lib.colors import HexColor
     from reportlab.lib.units import mm
@@ -511,7 +514,7 @@ def build_story(blocks: list[Block], fonts: Fonts, width: float, *, charts: list
             continue
         if block.kind in ("h2", "h2ai"):
             text = "".join(t for t, _ in block.runs).strip()
-            story.append(_make_section_label(text, ai=block.kind == "h2ai", fonts=fonts))
+            story.append(section_label(text, ai=block.kind == "h2ai", fonts=fonts))
             continue
         if block.kind == "table":
             story.append(_data_table(block.rows, styles, width))
