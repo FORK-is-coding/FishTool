@@ -258,3 +258,28 @@
     margin: 6px 0 12px;
     font-size: 14px;
 }
+
+/* 预算模式选择（PR 3） */
+.semantic-budget-mode {
+    display: inline-flex;
+    gap: 14px;
+    margin-right: 12px;
+    font-size: 13px;
+    vertical-align: middle;
+}
+
+.semantic-budget-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+}
+
+.semantic-budget-option input {
+    margin: 0;
+}
+
+.semantic-quota-hint {
+    margin: 8px 0;
+    font-size: 13px;
+}

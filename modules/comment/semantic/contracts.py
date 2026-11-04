@@ -63,6 +63,46 @@ DEFAULT_LIMITS: Dict[str, int] = {
 }
 
 # --------------------------------------------------------------------------
+# 预算模式（服务端唯一定义两档；前端只传模式名，不接受任意数值）
+# --------------------------------------------------------------------------
+BUDGET_MODE_DEFAULT = "default"
+BUDGET_MODE_UNLIMITED = "unlimited"
+
+#: 无限制档的上限数值：任务 token 给足 8000 万（约为 500 条评论估算用量的百倍余量）、
+#: 调用次数 3000（硬上限，防失控循环）；日预算不适用（不检查、不计入 semantic_daily_usage，
+#: 用量照常记进全局 llm_usage）。数值本身仍是上限，不是"真的无限"。
+UNLIMITED_MAX_ATTEMPTS = 3000
+UNLIMITED_TASK_TOKEN_BUDGET = 80_000_000
+UNLIMITED_DAILY_TOKEN_BUDGET = 0  # 占位：无限制档不做日预算检查，此值不参与判断
+
+BUDGET_PROFILES: Dict[str, Dict[str, int]] = {
+    BUDGET_MODE_DEFAULT: {
+        "max_attempts": MAX_ATTEMPTS,
+        "task_token_budget": TASK_TOKEN_BUDGET,
+        "daily_token_budget": DAILY_TOKEN_BUDGET,
+    },
+    BUDGET_MODE_UNLIMITED: {
+        "max_attempts": UNLIMITED_MAX_ATTEMPTS,
+        "task_token_budget": UNLIMITED_TASK_TOKEN_BUDGET,
+        "daily_token_budget": UNLIMITED_DAILY_TOKEN_BUDGET,
+    },
+}
+
+
+def resolve_budget_mode(value: Optional[str]) -> str:
+    """把请求里的预算模式规整为已知档位；None 回落默认档，未知值抛参数错误。"""
+    if value is None:
+        return BUDGET_MODE_DEFAULT
+    if value in BUDGET_PROFILES:
+        return value
+    raise SemanticValidationError(f"未知预算模式: {value!r}", reason="bad_budget_mode")
+
+
+def budget_profile(mode: str) -> Dict[str, int]:
+    """取某档位的三项上限（调用方必须先 resolve_budget_mode）。"""
+    return dict(BUDGET_PROFILES[resolve_budget_mode(mode)])
+
+# --------------------------------------------------------------------------
 # 类型化异常（单一事实源；A/C 从这里导入，勿重定义）
 # --------------------------------------------------------------------------
 class SemanticError(Exception):
@@ -239,6 +279,8 @@ __all__ = [
     "CONSENT_VERSION", "RULE_VERSION", "DEFAULT_LIMIT", "MAX_LIMIT",
     "MAX_ATTEMPTS", "BATCH_ATTEMPTS", "BATCH_SIZE", "INPUT_BYTES",
     "OUTPUT_TOKENS", "TASK_TOKEN_BUDGET", "DAILY_TOKEN_BUDGET",
+    "BUDGET_MODE_DEFAULT", "BUDGET_MODE_UNLIMITED", "BUDGET_PROFILES",
+    "resolve_budget_mode", "budget_profile",
     "CONTENT_BYTES_CAP", "MAX_GROUP_SIZE",
     "PHASE_BATCH", "PHASE_CROSS", "VALID_PHASES", "MEMBERSHIP_KEY",
     "ALLOWED_ITEM_KEYS", "FORBIDDEN_ITEM_KEYS", "DEFAULT_LIMITS",

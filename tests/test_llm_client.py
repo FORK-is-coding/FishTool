@@ -559,6 +559,63 @@ def test_chat_completion_blocks_when_token_limit_exceeded(llm_env):
     assert client.client.posts == []
 
 
+def test_chat_completion_enforce_daily_limit_false_skips_check(llm_env):
+    """enforce_daily_limit=False（语义无限制档）：跳过日上限检查，请求照常发出，
+    用量照常记账，且该参数不出现在请求体里。"""
+    client = _make_client()
+    client.daily_tokens_used = 10 ** 9  # 远超上限：默认一定会被拦
+    fake = client.client
+    fake.post_response = _FakeResponse(payload={
+        "choices": [{"message": {"content": "ok"}}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+    })
+
+    result = asyncio.run(client.chat_completion(
+        [{"role": "user", "content": "hi"}], enforce_daily_limit=False))
+    assert result["choices"]
+    assert len(fake.posts) == 1
+    assert "enforce_daily_limit" not in fake.posts[0]["json"]
+    assert client.daily_tokens_used == 10 ** 9 + 15  # 用量照常记账
+
+    # 显式 True（及默认不传）仍然拦截
+    client2 = _make_client()
+    client2.daily_tokens_used = 10 ** 9
+    with pytest.raises(TokenLimitExceededError):
+        asyncio.run(client2.chat_completion(
+            [{"role": "user", "content": "hi"}], enforce_daily_limit=True))
+    assert client2.client.posts == []
+
+
+def test_chat_completion_stream_enforce_daily_limit_false_skips_check(llm_env):
+    """流式接口同样支持跳过：限额超用时 enforce_daily_limit=False 仍可发起，
+    参数不混进请求体。"""
+    client = _make_client()
+    client.daily_tokens_used = 10 ** 9
+    client.client.stream_response = _AsyncLineResponse(
+        ['data: {"choices":[{"delta":{"content":"Hel"}}]}', 'data: [DONE]'])
+
+    async def _collect():
+        chunks = []
+        async for chunk in client.chat_completion_stream(
+                [{"role": "user", "content": "hi"}], enforce_daily_limit=False):
+            chunks.append(chunk)
+        return chunks
+
+    assert asyncio.run(_collect()) == ["Hel"]
+    assert "enforce_daily_limit" not in client.client.streams[0]["json"]
+
+    client2 = _make_client()
+    client2.daily_tokens_used = 10 ** 9
+
+    async def _blocked():
+        async for _ in client2.chat_completion_stream([{"role": "user", "content": "hi"}]):
+            pass
+
+    with pytest.raises(TokenLimitExceededError):
+        asyncio.run(_blocked())
+    assert client2.client.streams == []
+
+
 # ---------------------------------------------------------------------------
 # chat_completion_stream
 # ---------------------------------------------------------------------------
