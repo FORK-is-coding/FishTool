@@ -180,7 +180,10 @@ function renderTopicsResultWithEvidence(result) {
     const generatedAtText = eventEpochText(result.generated_at_s) || result.generated_at || '';
     const replayBadge = result.replayed
         ? `<span class="event-status event-status-completed">[历史重放]</span>` : '';
+    // 模型侧失败回退规则模板时后端给出 warning（含每日上限已用完的提示），原先没有展示。
+    const warning = result.warning ? `<p class="monitor-warning">${escapeHtml(result.warning)}</p>` : '';
     document.getElementById('event-opportunity-result').innerHTML = `
+        ${warning}
         <p>生成方式（实际）：${escapeHtml(mode)} ${replayBadge}</p>
         <p class="event-meta">已保存选题：${(result.saved_ids || []).length} 条｜saved_ids：${escapeHtml((result.saved_ids || []).join(', ') || '无')}</p>
         ${generatedAtText ? `<p class="event-meta">原生成时间：${escapeHtml(generatedAtText)}</p>` : ''}

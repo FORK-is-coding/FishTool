@@ -22,6 +22,7 @@
 
 三、降级
 - LLM 未配置：返回 llm_not_configured 错误与配置提示
+- LLM 每日 token 上限用完：返回 token_limit 与调高上限的提示
 - LLM 调用失败：返回 llm_error
 - generate_fallback_tips 提供通用建议（备用）
 
@@ -41,7 +42,7 @@ from datetime import datetime
 import logging
 
 from core.logger import get_logger
-from core.exceptions import LLMNotConfiguredError, LLMError
+from core.exceptions import LLMNotConfiguredError, LLMError, TokenLimitExceededError
 from llm.client import LLMClient
 
 logger = get_logger(__name__)
@@ -281,6 +282,13 @@ class StrategyAnalyzer:
                 'analyzed_at': datetime.now().isoformat()
             }
             
+        except TokenLimitExceededError as e:
+            logger.warning(f"[策略分析] 每日 token 上限已用完: {e}")
+            return {
+                'success': False,
+                'error': 'token_limit',
+                'message': e.user_message,
+            }
         except LLMError as e:
             logger.error(f"[策略分析] LLM错误: {e}")
             return {

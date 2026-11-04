@@ -305,6 +305,25 @@ def test_e35_model_failures_use_event_templates(env, llm) -> None:
     assert _topics(env)[0].ai_suggestions["action"] == "make_candidate"
 
 
+def test_event_mode_daily_token_limit_warning_explains_cause(env) -> None:
+    """事件模式撞到每日 token 上限：照常走事件规则模板，warning 说明是上限并指出配置页。"""
+    from core.exceptions import TokenLimitExceededError
+
+    _seed_opportunity_run(env)
+    llm = FakeLLM(error=TokenLimitExceededError(2_000_100, 2_000_000))
+    service, _generator, _llm, _tag = _build_service(env, llm=llm)
+
+    result = asyncio.run(service.generate(_event_request(count=1, use_llm=True, generation_request_id="e35-limit")))
+
+    assert result["used_llm"] is False
+    assert result["topics"]
+    assert "每日上限" in result["warning"]
+    assert "2000100/2000000" in result["warning"]
+    assert "配置页" in result["warning"]
+    assert "事件规则模板" in result["warning"]
+    assert "模型生成失败" not in result["warning"]
+
+
 # ===========================================================================
 # E36 — Topic 事务中间 flush 失败
 # ===========================================================================

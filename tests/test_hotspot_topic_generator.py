@@ -318,6 +318,26 @@ def test_generate_topics_recovers_from_llm_not_configured_error(db_env) -> None:
     assert len(result["topics"]) == 2
 
 
+def test_generate_topics_daily_token_limit_explains_cause(db_env) -> None:
+    """每日 token 上限用完：照常走规则回退，warning 说明是上限而不是“生成失败”，并指出配置页。"""
+    import asyncio
+
+    from core.exceptions import TokenLimitExceededError
+
+    llm = FakeLLM(configured=True, error=TokenLimitExceededError(2_000_100, 2_000_000))
+    generator = _build(generator_tags={"a": 3, "b": 2}, llm=llm)
+
+    result = asyncio.run(generator.generate_topics("方向", "游戏", count=2, use_llm=True))
+
+    assert result["used_llm"] is False
+    assert len(result["topics"]) == 2
+    assert "每日上限" in result["warning"]
+    assert "2000100/2000000" in result["warning"]
+    assert "配置页" in result["warning"]
+    assert "降级方案" in result["warning"]
+    assert "LLM生成失败" not in result["warning"]
+
+
 # --------------------------------------------------------------------- 选题库持久化
 
 def test_save_to_topic_library_persists_keywords_and_context(db_env) -> None:

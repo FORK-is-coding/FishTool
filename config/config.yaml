@@ -80,7 +80,7 @@ llm:
   api_base: https://api.deepseek.com
   api_key: ''
   batch_size: 100
-  daily_token_limit: 100000
+  daily_token_limit: 2000000
   max_tokens: 2000
   model: deepseek-flash
   provider: openai
