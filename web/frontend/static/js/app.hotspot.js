@@ -164,7 +164,10 @@ function renderTopicsResult(result) {
 
     // 显示**实际 generation_mode**（无 LLM 时同样出规则模板选题）；缺字段时按 used_llm 回退。
     const generationMode = result.generation_mode || (result.used_llm ? 'llm_assisted' : 'rule_template');
+    // 后端在模型侧失败回退规则时给出 warning（含每日上限已用完的提示），原先没有展示。
+    const warning = result.warning ? `<p class="monitor-warning">${escapeHtml(result.warning)}</p>` : '';
     document.getElementById('topic-result').innerHTML = `
+        ${warning}
         <p>生成方式（实际 generation_mode）: ${escapeHtml(generationMode)}</p>
         <p>热门Tag: ${escapeHtml((result.hot_tags || []).slice(0, 5).join(', ')) || '暂无'}</p>
         ${topics}

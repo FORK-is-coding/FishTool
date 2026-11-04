@@ -287,6 +287,20 @@ def test_analyze_strategy_sends_identity_constrained_messages() -> None:
     assert call["kwargs"] == {"temperature": 0.7, "max_tokens": 2000}
 
 
+def test_analyze_strategy_daily_token_limit_has_own_error_code() -> None:
+    """每日上限用完：error 为 token_limit，提示指向配置页（不再混在 llm_error 里）。"""
+    from core.exceptions import TokenLimitExceededError
+
+    analyzer = StrategyAnalyzer(_ContractLLMClient(error=TokenLimitExceededError(120, 100)))
+
+    result = asyncio.run(analyzer.analyze_strategy(_up_data()))
+
+    assert result["success"] is False
+    assert result["error"] == "token_limit"
+    assert "每日上限" in result["message"]
+    assert "配置页" in result["message"]
+
+
 def test_analyze_strategy_rejects_missing_identity_echo() -> None:
     """模型未按要求回显身份时应拒绝整份分析（从外部打异常结果结构）。"""
     content = "===== 选题方向 =====\n核心观察: 无身份回显"

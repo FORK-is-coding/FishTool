@@ -7,6 +7,14 @@ function getLotteryFocusTemplate() {
 }
 
 /** 渲染真人判定卡片，直接展示后端生成的运营分析文本。 */
+// 结果里任一用户因 AI 每日 token 上限用完而改用规则兜底时，在列表顶部提示一次（卡片上只留短标记）。
+function renderLotteryDailyLimitNotice(items) {
+    const hit = (items || []).some(item => item && item.fallback_reason === 'daily_token_limit');
+    return hit
+        ? '<p class="monitor-warning">今日 AI 用量已达每日上限，本次改用可解释规则判定；可在配置页调高“每日 token 上限”，或明天再试。</p>'
+        : '';
+}
+
 function renderLotteryUser(item) {
     const profile = item.profile || {};
     const classification = item.classification || 'indeterminate';
@@ -43,7 +51,7 @@ function renderLotteryUser(item) {
             <p>UID ${escapeHtml(item.uid)} · 投稿 ${knownNumeric(profile.video_count)}</p>
             <p>近期活动 ${knownNumeric(profile.recent_activity_count)} · 抽奖转发占比 ${knownRatioPercent(profile.lottery_repost_ratio)}</p>
             <p class="lottery-reasons">${escapeHtml(analysis)}</p>
-            <small>${item.confidence === null || item.confidence === undefined ? '置信度未评估' : `置信度 ${Math.round(Number(item.confidence) * 100)}%`} · ${item.source === 'llm' ? 'AI受限数据判定' : (item.source === 'evidence_gate' ? '证据不足' : '可解释规则兜底')}</small>
+            <small>${item.confidence === null || item.confidence === undefined ? '置信度未评估' : `置信度 ${Math.round(Number(item.confidence) * 100)}%`} · ${item.source === 'llm' ? 'AI受限数据判定' : (item.source === 'evidence_gate' ? '证据不足' : '可解释规则兜底')}${item.fallback_reason === 'daily_token_limit' ? '（AI 每日上限）' : ''}</small>
         </article>`;
 }
 
@@ -260,6 +268,7 @@ async function startRealUserFilter() {
         const suspiciousUsers = Array.isArray(result.suspicious_users) ? result.suspicious_users : [];
         const indeterminateUsers = Array.isArray(result.indeterminate_users) ? result.indeterminate_users : [];
         document.getElementById('lottery-filter-result').innerHTML = `
+            ${renderLotteryDailyLimitNotice([...realUsers, ...suspiciousUsers, ...indeterminateUsers])}
             <div class="lottery-summary-strip">
                 <span>评论 ${Number(result.comment_count) || 0}</span>
                 <span>用户 ${Number(result.user_count) || 0}</span>
@@ -336,6 +345,7 @@ async function verifyLotteryWinners() {
 function renderVerifyWinnersResult(data, resultHost) {
     const results = Array.isArray(data.results) ? data.results : [];
     resultHost.innerHTML = `
+        ${renderLotteryDailyLimitNotice(results)}
         <div class="lottery-summary-strip">
             <span>中奖 ${Number(data.winner_count) || 0}</span>
             <span>真人 ${Number(data.real_count) || 0}</span>
