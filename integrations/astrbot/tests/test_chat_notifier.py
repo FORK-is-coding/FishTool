@@ -144,9 +144,36 @@ def test_first_connection_does_not_backfill():
     assert h.batches == [] and h.notifier.buffered == 0
 
 
+def test_alert_arriving_during_send_is_not_stranded():
+    """推送进行中到达的告警：本轮定时任务结束前要补排下一轮，否则没有后续告警时会一直卡在缓冲区。"""
+    async def main():
+        h = Harness()
+        gate = asyncio.Event()
+        original = h._send
+
+        async def slow_send(sessions, alerts, overflow):
+            if not h.batches:
+                h.notifier.add({"id": 99, "level": "high", "message": "late"})  # 推送期间到达
+                await gate.wait()
+            await original(sessions, alerts, overflow)
+
+        h.notifier._send_batch = slow_send
+        h.notifier.add({"id": 1, "level": "high", "message": "first"})
+        await settle()
+        gate.set()
+        await settle()
+        await settle()
+        return h
+
+    h = run(main())
+    assert [[a["message"] for a in b[1]] for b in h.batches] == [["first"], ["late"]]
+    assert h.notifier.buffered == 0
+
+
 def test_reconnect_backfills_only_after_disconnect():
     disconnect_at = 1_000_000.0
-    before = "1970-01-12T13:46:30"   # < disconnect_at
+    before = "1970-01-12T13:45:00"   # 早于 disconnect_at 100 秒，超出 60 秒放宽窗口
+    slack = "1970-01-12T13:46:30"    # 早于 disconnect_at 10 秒，落在放宽窗口内
     after = "1970-01-12T13:47:00"    # > disconnect_at
 
     async def main():
@@ -154,6 +181,7 @@ def test_reconnect_backfills_only_after_disconnect():
         # 用 UTC 字符串避免时区差异
         h.unread = [
             {"id": 3, "level": "high", "created_at": after + "+00:00", "message": "new"},
+            {"id": 4, "level": "high", "created_at": slack + "+00:00", "message": "edge"},
             {"id": 2, "level": "high", "created_at": before + "+00:00", "message": "old"},
         ]
         h.notifier.on_connection(True)
@@ -165,7 +193,7 @@ def test_reconnect_backfills_only_after_disconnect():
 
     h = run(main())
     assert len(h.batches) == 1
-    assert [a["message"] for a in h.batches[0][1]] == ["new"]
+    assert [a["message"] for a in h.batches[0][1]] == ["edge", "new"]
 
 
 def test_backfill_skips_already_pushed():

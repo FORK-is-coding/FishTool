@@ -21,6 +21,8 @@ from .errors import CommandError
 SEEN_LIMIT = 500
 #: 补发时最多拉取的未读告警数。
 BACKFILL_LIMIT = 50
+#: 补发时间窗往前放宽的秒数：覆盖“引擎已停推、插件还没察觉断线”的那一段。
+BACKFILL_SLACK_S = 60
 #: 多个订阅会话之间的发送间隔（秒），降低风控风险。
 SEND_GAP_S = 1.0
 #: 单次推送最多包含的告警条数；超出部分只计数。
@@ -111,7 +113,16 @@ class AlertNotifier:
 
     async def _flush_later(self) -> None:
         await self._sleep(self.chat.get("notify_merge_seconds", 120))
-        await self.flush()
+        try:
+            await self.flush()
+        finally:
+            # 推送期间到达的告警：那时本任务还没结束，_ensure_flush_scheduled 不会另排定时器。
+            # 这里结束前放手并补排一次，否则没有下一条告警时它们会一直留在缓冲区。
+            if self._flush_task is asyncio.current_task():
+                self._flush_task = None
+            if self._buffer or self._overflow:
+                if not self.closed:
+                    self._ensure_flush_scheduled()
 
     async def flush(self) -> None:
         """把缓冲区里的告警推送给所有订阅会话。"""
@@ -162,9 +173,11 @@ class AlertNotifier:
             self.log.warning(f"[fishtool] 告警补发查询失败: {exc!r}")
             return 0
         added = 0
+        # since 是插件发现断线的时刻；引擎在那之前就可能已停推，往前放宽一点，重复的由 id 去重挡住
+        horizon = since - BACKFILL_SLACK_S
         for alert in reversed([a for a in alerts if isinstance(a, dict)]):  # 旧的先进
             created = _parse_time(alert.get("created_at"))
-            if created is not None and created < since:
+            if created is not None and created < horizon:
                 continue
             if self.add(alert):
                 added += 1

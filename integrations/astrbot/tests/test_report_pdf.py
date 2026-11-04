@@ -89,6 +89,17 @@ def test_parse_table_and_ordered_list():
     assert blocks[2].kind == "table" and blocks[2].rows == [["UID", "名次"], ["1 <me>", "3"]]
 
 
+def test_loose_and_nested_lists_keep_list_items():
+    """markdown2 的“松散列表”会生成 <li><p>…</p></li>；嵌套列表的父项在子列表后还有尾文字。都不能丢、也不能变成普通段落。"""
+    blocks = rp.parse_blocks(
+        '<main class="report"><ul><li><p>一段</p><p>二段</p></li></ul>'
+        "<ul><li>父<ul><li>子</li></ul>尾</li></ul></main>"
+    )
+    assert [(b.kind, "".join(t for t, _ in b.runs)) for b in blocks] == [
+        ("li", "一段"), ("li", "二段"), ("li", "父"), ("li", "子"), ("li", "尾"),
+    ]
+
+
 def test_unknown_tags_keep_text():
     blocks = rp.parse_blocks('<main class="report"><div><span>游离文字</span></div><p>a<code>b</code>c</p></main>')
     assert ["".join(t for t, _ in b.runs) for b in blocks] == ["游离文字", "abc"]

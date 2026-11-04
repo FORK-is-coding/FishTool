@@ -263,6 +263,12 @@ class _ReportParser(HTMLParser):
             self._quote += 1
         elif tag == "h2":
             self._open("h2ai" if "ai-section" in (attrs.get("class") or "") else "h2")
+        elif tag == "p" and self._cur is not None and self._cur.kind in ("li", "oli"):
+            # 松散列表 <li><p>…</p></li>：第一个 p 并入当前列表项；后续 p 另起一项（保持列表样式）
+            if "".join(t for t, _ in self._cur.runs).strip():
+                self._open("li")
+        elif tag == "p" and self._lists and self._cur is None:
+            self._open("li")
         elif tag in self._BLOCKS and tag != "blockquote":
             self._open(tag)
         elif tag == "hr":
@@ -292,6 +298,8 @@ class _ReportParser(HTMLParser):
         elif tag == "blockquote":
             self._close()
             self._quote = max(0, self._quote - 1)
+        elif tag == "p" and self._cur is not None and self._cur.kind in ("li", "oli"):
+            self._close()
         elif tag in self._BLOCKS:
             self._close()
         elif tag in self._INLINE_BOLD:
@@ -309,7 +317,8 @@ class _ReportParser(HTMLParser):
         if self._cur is None:
             if not data.strip():
                 return
-            self._open("p")  # 游离文本（主题外的结构）当段落
+            # 游离文本当段落；列表里的游离文本（如 </p> 之后、</li> 之前）仍归到列表项
+            self._open("li" if self._lists else "p")
         if data == _BR:
             self._cur.runs.append(("\n", False))
             return
