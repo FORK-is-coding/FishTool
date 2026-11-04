@@ -7,7 +7,8 @@
 - ``-fix20261030``：本轮改动过的脚本与样式表；
 - ``-ui20261101``：前端视觉改版 PR（C+ 白色档案）改动过的脚本与全部样式表；
 - ``-v029ui20261101``：桌面端 UI 对齐 + v0.2.9 PR 改动过的脚本与样式表；
-- ``-v030``：v0.3.0 PR（版本号与 AGPL-3.0 声明）改动过的脚本，必须是最后一段后缀；
+- ``-v030``：v0.3.0 PR（版本号与 AGPL-3.0 声明）改动过的脚本；
+- ``-v031``：v0.3.1 PR（开场 BUILD 号）改动过的脚本，必须是最后一段后缀；
 - ``-budget20261104``：语义折叠预算模式 / 停止报告 / 预估时间一轮改动的资源。
 """
 from pathlib import Path
@@ -34,6 +35,10 @@ BUMPED_V029 = {
 # v0.3.0 PR：开场 BUILD 号与启动公告里的开源协议名称，两个脚本追加 -v030。
 BUMPED_V030 = {
     "js": ("app.intro.js", "app.notice.js"),
+}
+# v0.3.1 PR：开场 BUILD 号改为 0.3.1，app.intro.js 追加 -v031。
+BUMPED_V031 = {
+    "js": ("app.intro.js",),
 }
 # 语义折叠（可逆）PR：新增 app.comment.semantic.js / style.comment.semantic.css，并给
 # app.comment.js 追加 -semantic20261102 后缀（挂入当前 BV 钩子，老缓存必须失效重新加载）。
@@ -98,11 +103,22 @@ def test_assets_changed_in_v029_end_with_v029_suffix() -> None:
 
 
 def test_assets_changed_in_v030_end_with_v030_suffix() -> None:
-    """v0.3.0 PR 改过的脚本以 -v030 结尾（只追加，不改前面的历史后缀）。"""
+    """v0.3.0 PR 改过的脚本都带 -v030；没被 v0.3.1 改过的仍以它结尾（只追加，不改历史后缀）。"""
     versions = _versions("js")
+    later = set(BUMPED_V031["js"])
     for name in BUMPED_V030["js"]:
         assert name in versions, f"index.html 未引用 {name}"
-        assert versions[name].endswith("-v030"), f"{name} 版本号未更新: {versions[name]}"
+        assert "-v030" in versions[name], f"{name} 版本号未更新: {versions[name]}"
+        if name not in later:
+            assert versions[name].endswith("-v030"), f"{name} 版本号未更新: {versions[name]}"
+
+
+def test_assets_changed_in_v031_end_with_v031_suffix() -> None:
+    """v0.3.1 PR 改过的脚本以 -v031 结尾。"""
+    versions = _versions("js")
+    for name in BUMPED_V031["js"]:
+        assert name in versions, f"index.html 未引用 {name}"
+        assert versions[name].endswith("-v031"), f"{name} 版本号未更新: {versions[name]}"
 
 
 def test_semantic_fold_assets_carry_bumped_version() -> None:
@@ -137,7 +153,7 @@ def test_each_asset_is_referenced_once() -> None:
     html = INDEX_HTML.read_text(encoding="utf-8")
     groups = (
         ("js", BUMPED_SCRIPTS + BUMPED_1030["js"] + BUMPED_UI_1101["js"] + BUMPED_V029["js"]
-            + BUMPED_SEMANTIC["js"] + BUMPED_V030["js"] + ("app.comment.semantic.js",)),
+            + BUMPED_SEMANTIC["js"] + BUMPED_V030["js"] + BUMPED_V031["js"] + ("app.comment.semantic.js",)),
         ("css", BUMPED_1030["css"] + BUMPED_UI_1101["css"] + BUMPED_V029["css"]
             + ("style.comment.semantic.css",)),
     )

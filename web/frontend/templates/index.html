@@ -65,7 +65,7 @@
                 <span class="logo-mark" aria-hidden="true">FISH<br>TOOL</span>
                 <div class="logo-copy">
                     <h2>FishTool运营助手</h2>
-                    <span class="logo-version">v0.3.0测试版</span>
+                    <span class="logo-version">v0.3.1测试版</span>
                 </div>
             </div>
             <nav class="nav-menu">
@@ -119,7 +119,7 @@
                 <i class="cta-rule"></i>
                 <span>开始<br>监控</span>
             </a>
-            <span class="side-ver">v0.3.0</span>
+            <span class="side-ver">v0.3.1</span>
         </aside>
 
         <!-- 主内容区：首个子元素是吸顶细条，面包屑 / 页码 / 时钟由 app.core.js 更新。 -->
@@ -140,7 +140,7 @@
                     <div class="hero-meta">
                         <span class="meta-lattice" aria-hidden="true"></span>
                         <span>INFO.// FISHTOOL OPERATIONS CONSOLE</span>
-                        <span class="meta-r">BUILD 0.3.0</span>
+                        <span class="meta-r">BUILD 0.3.1</span>
                         <!-- 重播开场动画：24px 浅灰颗粒小方块 + 回旋箭头；悬停时变深灰斜纹、左侧黄色短竖条，并向左展开 REPLAY INTRO -->
                         <button type="button" class="intro-replay" id="intro-replay-btn" onclick="FishIntro.replay(event)" aria-label="重播开场动画" title="重播开场动画">
                             <span class="intro-replay-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v4.5h-4.5"/></svg></span>
@@ -984,7 +984,7 @@
                         <div class="usage-card-content" tabindex="0"><!-- 免责声明内容支持在卡片内使用鼠标滚轮独立滚动。 -->
                             <div class="usage-disclaimer"><!-- 按协议章节保留原始文案，便于阅读和维护。 -->
                                 <p>免责声明与边界限定协议</p>
-                                <p>1. 项目性质与开源协议<br>本项目（以下简称"本工具"）系面向B站个人创作者的辅助性开源代码，旨在提供技术学习与经验交流的工具。本工具完全免费，源代码以 GNU Affero General Public License v3.0（AGPL-3.0）发布，完整条款见项目仓库根目录的 LICENSE 文件。v0.3.0 起由 MIT 改为 AGPL-3.0；v0.3.0 之前发布的版本仍按其附带的 MIT 许可证授权。</p>
+                                <p>1. 项目性质与开源协议<br>本项目（以下简称"本工具"）系面向B站个人创作者的辅助性开源代码，旨在提供技术学习与经验交流的工具。本工具完全免费，源代码以 GNU Affero General Public License v3.0（AGPL-3.0）发布，完整条款见项目仓库根目录的 LICENSE 文件。</p>
                                 <p>2. 免责条款<br>本工具按"原样（AS IS）"提供，开发者不提供任何明示或暗示的保证（包括但不限于对适销性、特定用途适用性和非侵权性的保证）。<br>技术风险：因使用、修改或分发本工具源码而导致的任何直接、间接、偶然、特殊或后果性的损害（包括但不限于账号封禁、数据丢失、设备故障等），开发者及贡献者概不负责。<br>合规风险：用户在使用本工具获取B站公开数据及调用AI大模型时，必须严格遵守《中华人民共和国网络安全法》、《数据安全法》及B站平台用户协议。因用户自行修改代码、绕过限制、高频抓取或滥用AI生成内容而引发的任何法律纠纷、平台处罚或经济损失，均由用户自行承担。</p>
                                 <p>3. 数据与隐私边界限定<br>公开数据原则：本工具默认仅获取B站平台向公众公开的数据。<br>本地化与隐私：本工具未设置任何后门或云端数据收集机制。用户的API Key、Cookie等敏感凭证均由用户自行配置，并以加密形式仅存储于本地设备。因用户本地环境不安全或操作不当导致的凭证泄露，开发者不承担任何责任。</p>
                                 <p>4. 知识产权与禁止滥用<br>本项目的源代码、UI设计及文档以 AGPL-3.0 发布。分发本工具或其衍生版本，或将修改后的版本部署为网络服务供他人使用时，须保留版权与许可声明，并以 AGPL-3.0 公开对应的完整源代码。任何个人或组织不得将本工具或其衍生版本用于违法用途、恶意攻击、数据倒卖或破坏平台生态的行为。</p>
@@ -1003,7 +1003,7 @@
     <!-- 版本参数用于让 8000 端口加载本次弹窗修复后的脚本，避免旧 JS 缓存导致 onclick 无响应。 -->
     <script src="/static/js/app.core.js?v=progress-20261026-fix20261027-fix20261030-ui20261101"></script>
 <!-- 开场动画控制器：three.js 与 LOGO 数据只在播放完整版时按需加载。 -->
-<script src="/static/js/app.intro.js?v=ui20261101-v029ui20261101-v030" data-three="/static/vendor/three.min.js?v=r160" data-logo="/static/intro/logo-mark.js?v=ui20261101"></script>
+<script src="/static/js/app.intro.js?v=ui20261101-v029ui20261101-v030-v031" data-three="/static/vendor/three.min.js?v=r160" data-logo="/static/intro/logo-mark.js?v=ui20261101"></script>
 <script src="/static/js/app.hotspot.js?v=progress-20261026-fix20261027-fix20261030-ui20261101"></script>
 <!-- 第三批 g：事件工作台 / 机会列表 / 证据回看 / 最小反馈（新增脚本，不改既有结构）。 -->
 <script src="/static/js/app.events.js?v=batch3h-20261003-fix20261027"></script>
