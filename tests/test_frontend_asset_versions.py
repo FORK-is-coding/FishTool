@@ -7,7 +7,8 @@
 - ``-fix20261030``：本轮改动过的脚本与样式表；
 - ``-ui20261101``：前端视觉改版 PR（C+ 白色档案）改动过的脚本与全部样式表；
 - ``-v029ui20261101``：桌面端 UI 对齐 + v0.2.9 PR 改动过的脚本与样式表；
-- ``-v030``：v0.3.0 PR（版本号与 AGPL-3.0 声明）改动过的脚本，必须是最后一段后缀。
+- ``-v030``：v0.3.0 PR（版本号与 AGPL-3.0 声明）改动过的脚本，必须是最后一段后缀；
+- ``-budget20261104``：语义折叠预算模式 / 停止报告 / 预估时间一轮改动的资源。
 """
 from pathlib import Path
 import re
@@ -38,6 +39,12 @@ BUMPED_V030 = {
 # app.comment.js 追加 -semantic20261102 后缀（挂入当前 BV 钩子，老缓存必须失效重新加载）。
 BUMPED_SEMANTIC = {
     "js": ("app.comment.js",),
+}
+# 语义折叠预算模式 / 停止报告 / 预估时间 PR：给三个语义资源统一追加 -budget20261104，
+# 否则打包版与已打开过页面的浏览器会继续使用旧缓存的面板脚本与样式。
+BUMPED_BUDGET = {
+    "js": ("app.comment.semantic.js", "app.comment.js"),
+    "css": ("style.comment.semantic.css",),
 }
 
 
@@ -103,11 +110,26 @@ def test_semantic_fold_assets_carry_bumped_version() -> None:
     js_versions = _versions("js")
     for name in BUMPED_SEMANTIC["js"]:
         assert name in js_versions, f"index.html 未引用 {name}"
-        assert js_versions[name].endswith("-semantic20261102"), f"{name} 版本号未更新: {js_versions[name]}"
+        assert js_versions[name].endswith("-semantic20261102-budget20261104"), \
+            f"{name} 版本号未更新: {js_versions[name]}"
     # 新增的独立脚本 / 样式表：必须被引用且带独立 ?v=（老缓存失效）。
     assert js_versions.get("app.comment.semantic.js"), "index.html 未引用 app.comment.semantic.js"
     css_versions = _versions("css")
     assert css_versions.get("style.comment.semantic.css"), "index.html 未引用 style.comment.semantic.css"
+
+
+def test_semantic_budget_assets_carry_bumped_version() -> None:
+    """预算模式 / 停止报告 / 预估时间一轮：三个语义资源统一追加 -budget20261104。"""
+    js_versions = _versions("js")
+    css_versions = _versions("css")
+    for name in BUMPED_BUDGET["js"]:
+        assert name in js_versions, f"index.html 未引用 {name}"
+        assert js_versions[name].endswith("-budget20261104"), \
+            f"{name} 版本号未更新: {js_versions[name]}"
+    for name in BUMPED_BUDGET["css"]:
+        assert name in css_versions, f"index.html 未引用 {name}"
+        assert css_versions[name].endswith("-budget20261104"), \
+            f"{name} 版本号未更新: {css_versions[name]}"
 
 
 def test_each_asset_is_referenced_once() -> None:
