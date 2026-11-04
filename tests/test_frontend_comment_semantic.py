@@ -536,6 +536,50 @@ def test_server_folded_members_hidden_only_from_folded_flat_list(auto_fold):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="本机无 node")
+@pytest.mark.parametrize("coverage, expected, absent", [
+    # 新键（_run_cross 输出）：分子是已复核对数，分母是候选对总数
+    ({"total_pairs": 19900, "pairs_reviewed": 2175, "pairs_unvisited": 17725, "partial": True},
+     "跨批覆盖：2175/19900", "0/17725"),
+    ({"total_pairs": 66, "pairs_reviewed": 66, "pairs_unvisited": 0, "partial": False},
+     "跨批覆盖：66/66</p>", None),
+    # 旧版本落库的多批任务、批内阶段预算停止：旧键也是 0/0，但跨批并未开始，显示“未开始”而不是隐藏
+    ({"batches": 3, "pairs_visited": 0, "pairs_unvisited": 0, "partial": True},
+     "跨批覆盖：未开始", None),
+    # 批内阶段就停下：跨批未开始
+    ({"total_pairs": None, "pairs_reviewed": 0, "pairs_unvisited": None, "partial": True},
+     "跨批覆盖：未开始", None),
+    # 旧版本落库的任务：pairs_visited / pairs_unvisited
+    ({"pairs_visited": 10, "pairs_unvisited": 35, "partial": True}, "跨批覆盖：10/45", None),
+    ({"pairs_visited": 0, "pairs_unvisited": -1, "partial": True}, "跨批覆盖：未开始", None),
+])
+def test_cross_coverage_reads_reviewed_pairs_over_total(coverage, expected, absent):
+    """原实现只读 pairs_visited，后端实际输出 pairs_reviewed，界面显示成 0/未复核对数。"""
+    result = _completed_result_dto(100, 1)
+    responses = _base_responses(result, 1)
+    responses["/latest"]["data"].update({"status": "partial", "coverage": coverage})
+    out = _run_node([{"bvid": "BV1dto", "responses": responses}])[0]
+    assert expected in out["taskHtml"]
+    if absent:
+        assert absent not in out["taskHtml"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="本机无 node")
+@pytest.mark.parametrize("coverage", [
+    {"batches": 1, "total_pairs": 0, "pairs_reviewed": 0, "pairs_unvisited": 0, "partial": False},  # 只有一批
+    # 单批任务在批内阶段就撞预算：永远不会进入跨批，不显示“未开始”
+    {"batches": 1, "total_pairs": 0, "pairs_reviewed": 0, "pairs_unvisited": 0, "partial": True},
+    {"pairs_visited": 0, "pairs_unvisited": 0, "partial": False},  # 旧版本的单批任务
+    {},  # 没有覆盖率信息
+])
+def test_cross_coverage_hidden_when_no_cross_pairs(coverage):
+    result = _completed_result_dto(100, 1)
+    responses = _base_responses(result, 1)
+    responses["/latest"]["data"].update({"coverage": coverage})
+    out = _run_node([{"bvid": "BV1dto", "responses": responses}])[0]
+    assert "跨批覆盖" not in out["taskHtml"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="本机无 node")
 def test_budget_uses_store_token_field_names():
     result = _completed_result_dto(100, 1)
     responses = _base_responses(result, 1)

@@ -571,11 +571,16 @@ class SemanticService:
             coverage: Dict[str, Any]
             if budget_hit or batch_count <= 1:
                 # 预算已耗尽,或只有一批(批内已全覆盖,无跨批可做)。
+                # 键名与 _run_cross 一致(total_pairs / pairs_reviewed / pairs_unvisited /
+                # windows_attempted),前端只读这一套。多批任务在批内阶段就停下时跨批还没开始,
+                # 候选对总数未知,记为 None;只有一批时(不论是否撞预算)没有跨批对,总数为 0。
                 coverage = {
                     "batches": batch_count,
-                    "cross_windows": 0,
-                    "pairs_visited": 0,
-                    "pairs_unvisited": 0,
+                    "windows_attempted": 0,
+                    "windows_reviewed": 0,
+                    "total_pairs": None if (budget_hit and batch_count > 1) else 0,
+                    "pairs_reviewed": 0,
+                    "pairs_unvisited": None if (budget_hit and batch_count > 1) else 0,
                     "oversize_skipped": 0,
                     "partial": bool(budget_hit or phase1_partial),
                     "reason": "budget" if budget_hit else ("phase1_degraded" if phase1_partial else None),
@@ -588,9 +593,10 @@ class SemanticService:
                         task_id, revision, provider, snapshot, eligible,
                         groups, related, batch_count, phase1_partial)
                 except SemanticBudgetExceeded:
+                    # 兜底:_run_cross 自己会捕获预算异常并返回覆盖率,正常走不到这里。
                     coverage = {
-                        "batches": batch_count, "cross_windows": 0,
-                        "pairs_visited": 0, "pairs_unvisited": -1,
+                        "batches": batch_count, "windows_attempted": 0, "windows_reviewed": 0,
+                        "total_pairs": None, "pairs_reviewed": 0, "pairs_unvisited": None,
                         "oversize_skipped": 0, "partial": True, "reason": "budget",
                     }
                     budget_hit = True
