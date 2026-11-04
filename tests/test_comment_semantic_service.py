@@ -1177,3 +1177,88 @@ def test_end_to_end_real_store_provider_crash_marks_failed_not_running():
     assert isinstance(final["error"], str)  # Text 列:字符串
     assert "secret" not in final["error"].lower()  # 脱敏
     assert final["error"].startswith("internal_error")
+    # 契约外异常也要先结算在飞记录:否则 in_flight 残留,续跑会卡住。
+    assert final["budget"]["in_flight"] is None
+    assert final["budget"]["reserved_tokens"] == 0
+    assert final["budget"]["settled_tokens"] > 0  # 请求可能已发出:按估算计费,不退款
+
+
+def _real_store_with_consent(bvid: str, n: int):
+    from modules.comment.semantic.store import SemanticStore
+
+    _seed_video_comments(bvid, n)
+    store = SemanticStore()
+    pref = store.preference(bvid)
+    store.set_preference(bvid, pref["revision"],
+                         consent_version=CONSENT_VERSION, model_identity=dict(IDENTITY))
+    return store
+
+
+def test_real_store_provider_crash_then_resume_completes_not_stuck_running():
+    """契约外异常导致 failed 后续跑:不能因残留在飞记录卡在 running(原实现会)。"""
+    bvid = "BVreal0b1"
+    store = _real_store_with_consent(bvid, 2)
+    calls = {"n": 0}
+
+    class FlakyProvider(FakeProvider):
+        async def group(self, items, video_title="", phase=PHASE_BATCH, omit_temperature=False):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("provider bug")
+            return await super().group(items, video_title, phase, omit_temperature)
+
+    provider = FlakyProvider()
+    service = svc.SemanticService(store=store, provider_factory=lambda: provider)
+
+    async def scenario():
+        state = await service.start(bvid, 200, CONSENT_VERSION, "rk-0b-1")
+        await _drain(service)
+        failed = service.status(state["task_id"])
+        await service.resume(state["task_id"], failed["revision"])
+        await _drain(service)
+        return failed, service.status(state["task_id"])
+
+    failed, final = run(scenario())
+    assert failed["status"] == "failed"
+    assert final["status"] in ("completed", "partial")
+    assert final["phase"] == "done"
+    assert final["budget"]["in_flight"] is None
+    assert final["budget"]["reserved_tokens"] == 0
+
+
+def test_real_store_cross_budget_after_settled_retry_ends_partial_not_running(monkeypatch):
+    """跨批同一单元里先 settle 过一次(校验失败重试),重试时 reserve 才超预算。
+
+    此时本地 revision 落后 store 两步;原实现用旧 revision 写 cross checkpoint,
+    CAS 冲突被当作并发处置吞掉,任务永久停在 running/cross。
+    """
+    bvid = "BVreal0b2"
+    store = _real_store_with_consent(bvid, 4)
+
+    def handler(items, title, phase, omit):
+        if phase == PHASE_BATCH:
+            return _empty()
+        raise SemanticValidationError("截断", reason="truncated")
+
+    service = svc.SemanticService(
+        store=store, provider_factory=lambda: FakeProvider(handler=handler))
+    import modules.comment.semantic.service as mod
+    # phase1 两批各 1 次 + cross 第一次尝试 1 次 = 3;第二次尝试 reserve 超限。
+    monkeypatch.setattr(mod, "DEFAULT_LIMITS", {**mod.DEFAULT_LIMITS, "max_attempts": 3})
+    old = mod.BATCH_SIZE
+    mod.BATCH_SIZE = 2  # 4 条 -> 2 批,进入 cross
+    try:
+        async def scenario():
+            state = await service.start(bvid, 200, CONSENT_VERSION, "rk-0b-2")
+            await _drain(service)
+            return service.status(state["task_id"])
+
+        final = run(scenario())
+    finally:
+        mod.BATCH_SIZE = old
+    assert final["status"] == "partial"
+    assert final["phase"] == "done"
+    assert final["coverage"]["reason"] == "budget"
+    assert final["budget"]["attempt_count"] == 3
+    assert final["budget"]["in_flight"] is None
+

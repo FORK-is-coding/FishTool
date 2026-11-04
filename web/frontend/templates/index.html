@@ -787,6 +787,14 @@
                         <small id="llm-model-status"></small>
                     </div>
                     <button class="btn btn-primary" onclick="saveLLMConfig()">保存配置</button>
+                    <!-- 全局每日 token 上限：所有 AI 功能共用，单独保存，不需要重新填写 API Key。
+                         与上方“保存配置”分成独立一组（上边距 + 分隔线），避免误以为点“保存配置”会一起保存。 -->
+                    <div class="form-group" style="margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--rule);">
+                        <label for="llm-daily-limit">每日 token 上限：</label>
+                        <input type="number" id="llm-daily-limit" class="form-control" min="0" step="1" inputmode="numeric" placeholder="2000000">
+                        <small>所有 AI 功能共用，0 表示不限制。</small>
+                    </div>
+                    <button class="btn btn-secondary" onclick="saveLLMDailyLimit()">保存上限</button>
                 </section>
 
                 <section class="section">

@@ -733,14 +733,51 @@ def test_get_daily_usage_falls_back_to_memory(llm_env, monkeypatch):
 
 
 def test_get_daily_usage_zero_limit_avoids_division_by_zero(llm_env, monkeypatch):
-    """限额为 0 时百分比按 0 处理。"""
+    """限额为 0 表示不限制：百分比按 0 处理，没有剩余额度（None）。"""
     client = _make_client()
     client.daily_token_limit = 0
     monkeypatch.setattr(llm_module, "get_session", lambda: _FakeSession(records=[]))
 
     usage = client.get_daily_usage()
     assert usage["usage_percent"] == 0
-    assert usage["remaining"] == 0
+    assert usage["limit"] == 0
+    assert usage["remaining"] is None
+
+
+def test_get_daily_usage_zero_limit_memory_fallback_has_no_remaining(llm_env, monkeypatch):
+    """数据库不可用的回退分支同样按“不限制”返回 remaining=None。"""
+    client = _make_client()
+    client.daily_token_limit = 0
+    client.daily_tokens_used = 42
+
+    def _boom():
+        raise RuntimeError("no db")
+
+    monkeypatch.setattr(llm_module, "get_session", _boom)
+    assert client.get_daily_usage()["remaining"] is None
+
+
+def test_check_token_limit_zero_means_unlimited(llm_env):
+    """限额为 0：任何用量都放行（用量照常记账，不做拦截）。"""
+    client = _make_client()
+    client.daily_token_limit = 0
+    client.daily_tokens_used = 10 ** 12
+    client._check_token_limit(10 ** 9)
+
+
+@pytest.mark.parametrize("raw", [-1, "500", 1.5, True, None])
+def test_invalid_configured_limit_falls_back_to_default(llm_env, raw):
+    """手改 yaml 写出非法上限时，按默认值处理，不放开也不锁死。"""
+    llm_env["config"]._values["llm.daily_token_limit"] = raw
+    client = _make_client()
+    assert client.daily_token_limit == llm_module.LLM_DAILY_TOKEN_LIMIT_DEFAULT
+
+
+def test_missing_configured_limit_uses_new_default(llm_env):
+    """配置里没有该键时，回退到新默认值（不再是 10 万）。"""
+    llm_env["config"]._values.pop("llm.daily_token_limit")
+    client = _make_client()
+    assert client.daily_token_limit == llm_module.LLM_DAILY_TOKEN_LIMIT_DEFAULT == 2_000_000
 
 
 @pytest.fixture()

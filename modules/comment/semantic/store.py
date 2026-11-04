@@ -854,43 +854,14 @@ class SemanticStore:
                     f"结算修订冲突：期望 {expected_revision}，实际 {run.revision}"
                 )
 
-            est = int(in_flight.get("estimated_tokens", 0))
-            # 预约所属自然日：旧记录无该字段时回退到今天（仅影响极老的在飞记录）。
-            reserve_date = in_flight.get("reserve_date") or _today()
             valid_actual = (
                 usage_tokens is not None
                 and isinstance(usage_tokens, int)
                 and not isinstance(usage_tokens, bool)
                 and usage_tokens >= 0
             )
-            actual = int(usage_tokens) if valid_actual else est
-            estimated = not valid_actual
-
-            # 任务台账：settled 增加 actual；预约端回收估算 est（任务级与日期无关）。
-            run.settled_tokens = int(run.settled_tokens) + actual
-            run.reserved_tokens = max(0, int(run.reserved_tokens) - est)
-
-            # 日台账拆成两件事，各归其日：
-            #   1) 预约回收：对**预约所属日** reserve_date 扣回 est（不碰其他日的实时预约）。
-            #   2) 实际入账：对**预约所属日** settled_tokens 记 actual（归属到发起请求的那天）。
-            # 跨午夜场景下，结算当日的 reserved_tokens 代表当天别的任务的活跃预约，绝不被触碰。
-            res_day = session.query(SemanticDailyUsage).filter_by(date=reserve_date).first()
-            if res_day is None:
-                # 预约日记录缺失（异常/极老数据）：只记实际入账，预约端无可回收，不臆造。
-                res_day = SemanticDailyUsage(
-                    date=reserve_date, reserved_tokens=0, settled_tokens=actual, request_count=0
-                )
-                session.add(res_day)
-            else:
-                res_day.settled_tokens = int(res_day.settled_tokens) + actual
-                res_day.reserved_tokens = max(0, int(res_day.reserved_tokens) - est)
-
-            run.in_flight = None
+            self._settle_in_flight(session, run, int(usage_tokens) if valid_actual else None)
             run.revision = int(run.revision) + 1
-            # 供恢复/展示标注：最近一次结算是否为估算。
-            cov = dict(run.coverage or {})
-            cov["last_settlement_estimated"] = estimated
-            run.coverage = cov
             session.commit()
             return self._state_dto(session, task, run)
         except SemanticError:
@@ -901,6 +872,41 @@ class SemanticStore:
             raise
         finally:
             session.close()
+
+    @staticmethod
+    def _settle_in_flight(session, run: SemanticRun, actual: Optional[int]) -> None:
+        """在调用方事务内结算并清空 run.in_flight（不提交、不改 revision）。
+
+        settle_attempt 与 resume_task 共用这一份台账逻辑。actual 为 None 表示没有可信的
+        实际用量，按预约估算 est 记账（请求可能已计费，不退款）。
+
+        - 任务台账：settled += actual（或 est）；reserved 回收 est。
+        - 日台账按**预约所属日** reserve_date 记：回收该日预约 est、入账 actual。
+          跨午夜时结算当日的 reserved_tokens 是当天别的任务的活跃预约，绝不触碰。
+        - 记录最近一次结算是否为估算，供恢复/展示标注。
+        """
+        in_flight = dict(run.in_flight or {})
+        est = int(in_flight.get("estimated_tokens", 0) or 0)
+        # 预约所属自然日：旧记录无该字段时回退到今天（仅影响极老的在飞记录）。
+        reserve_date = in_flight.get("reserve_date") or _today()
+        amount = est if actual is None else int(actual)
+
+        run.settled_tokens = int(run.settled_tokens) + amount
+        run.reserved_tokens = max(0, int(run.reserved_tokens) - est)
+
+        res_day = session.query(SemanticDailyUsage).filter_by(date=reserve_date).first()
+        if res_day is None:
+            # 预约日记录缺失（异常/极老数据）：只记实际入账，预约端无可回收，不臆造。
+            session.add(SemanticDailyUsage(
+                date=reserve_date, reserved_tokens=0, settled_tokens=amount, request_count=0))
+        else:
+            res_day.settled_tokens = int(res_day.settled_tokens) + amount
+            res_day.reserved_tokens = max(0, int(res_day.reserved_tokens) - est)
+
+        run.in_flight = None
+        cov = dict(run.coverage or {})
+        cov["last_settlement_estimated"] = actual is None
+        run.coverage = cov
 
     # ------------------------------------------------------------------
     # 崩溃恢复 / 继续 / 取消
@@ -948,6 +954,9 @@ class SemanticStore:
     ) -> Dict[str, Any]:
         """把可恢复任务重置为 queued；保留既有计费，不重发已成功批次。
 
+        残留的在飞记录（无论是否 outcome_unknown）在同一事务内按预约估算结算并清空，
+        回收任务与当日预约，避免续跑后 reserve 被“已有在飞请求”拒绝、预算被长期占用。
+
         要求任务处于 interrupted/partial/failed。存在 outcome_unknown 在飞请求时，
         必须 acknowledge_unknown=True 才允许继续（提示可能已计费）。
 
@@ -973,9 +982,12 @@ class SemanticStore:
                 raise SemanticConflict(f"任务状态 {task.status} 不可恢复")
             if run.in_flight and run.in_flight.get("outcome_unknown") and not acknowledge_unknown:
                 raise SemanticConflict("存在结果未知的在飞请求，需显式确认后恢复")
-            # 清掉已确认的未知在飞记录（不重发），保留既有计费台账。
-            if run.in_flight and run.in_flight.get("outcome_unknown"):
-                run.in_flight = None
+            # 残留的在飞记录（崩溃恢复标了 outcome_unknown 并已确认，或旧版本异常路径
+            # 漏结算留下的）按预约估算结算：请求可能已计费，保守记为已用量，并回收预约。
+            # 只置空不回收会让任务 reserved 和当日 daily_reserved 一直挂着，持续占用预算；
+            # 不清掉则 reserve 会因“已有在飞请求”拒绝，续跑后任务卡在 running。
+            if run.in_flight:
+                self._settle_in_flight(session, run, None)
             task.status = "queued"
             task.error = None
             run.phase = "queued"

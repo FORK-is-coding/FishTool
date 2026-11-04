@@ -13,6 +13,7 @@ import re
 from typing import Any, Dict, Iterable, List, Optional
 
 # 统一日志记录器。
+from core.exceptions import TokenLimitExceededError
 from core.logger import get_logger
 # LLM 客户端，负责受约束判定请求。
 from llm.client import LLMClient
@@ -366,6 +367,13 @@ async def classify_profiles(
         parsed = _extract_json(content)
         # 解析模型结果，异常由兜底逻辑接管。
         return _normalize_results(parsed.get("results") or [], profiles)
+    except TokenLimitExceededError as exc:
+        # 每日上限用完：同样走规则兜底，但在每条结果上标明原因，前端据此提示去设置页调高。
+        logger.warning("真人筛选 LLM 每日 token 上限已用完，使用可解释规则兜底: %s", exc)
+        results = _normalize_results([], profiles)
+        for item in results:
+            item["fallback_reason"] = "daily_token_limit"
+        return results
     except Exception as exc:
         # LLM 不可用不阻断业务，降级为可解释规则判定。
         logger.warning("真人筛选 LLM 不可用，使用可解释规则兜底: %s", exc)
