@@ -7,11 +7,12 @@ from __future__ import annotations
 
 import asyncio
 import mimetypes
+import time
 from pathlib import Path
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
-from astrbot.api.message_components import Node, Nodes, Plain
+from astrbot.api.message_components import File, Node, Nodes, Plain
 from astrbot.api.star import Context, Star, StarTools
 from astrbot.api.web import error_response, file_response, json_response, request, stream_response
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
@@ -40,6 +41,15 @@ mimetypes.add_type("font/woff2", ".woff2")
 mimetypes.add_type("image/svg+xml", ".svg")
 
 PLUGIN_DIR = Path(__file__).resolve().parent
+
+#: 自诊摘要末尾固定附的一句：协议端先返回成功、再异步下载失败时插件感知不到，只能提前说明。
+FILE_HINT = "PDF 报告随后发送；如果没收到文件，见插件 README『聊天指令 → 收不到文件』。"
+FILE_FALLBACK_TEXT = (
+    "PDF 发送失败：协议端读不到插件生成的文件。AstrBot 与 NapCat 分开部署时，请在 AstrBot 配置 "
+    "callback_api_base（填 NapCat 能访问到的 AstrBot 地址），或把 AstrBot 的 data 目录以相同路径挂载到 "
+    "NapCat。报告已保存在插件的 exports 目录，24 小时内有效。"
+)
+FONT_DEGRADED_HINT = "注意：未找到可用的中文字体，PDF 版式已降级。请在插件配置的『自诊报告字体』里填写 .ttf / .ttc 路径。"
 #: POST 隧道标记：bridge 只有 GET/POST 且 POST 不能带 query，bridge-shim.js 用它还原 PUT/PATCH/DELETE。
 TUNNEL_KEY = "__fishtool_tunnel"
 
@@ -320,8 +330,56 @@ class FishToolPlugin(Star):
             return str(exc)
 
     def _font_label(self) -> str:
-        """`状态` 里显示的自诊报告字体；PDF 模块接入前固定显示“未启用”。"""
-        return "未启用（自诊指令尚未接入）"
+        """`状态` 里显示的自诊报告字体（有缓存，反复调用只检查一次文件）。"""
+        from .fishtool_adapter.report_pdf import font_label
+
+        return font_label(self.chat, logger)
+
+    def _render_diagnosis_pdf(self, html_text: str, data: dict) -> tuple[bytes, list[str]]:
+        """同步：字体 → 图表 → PDF。放在 asyncio.to_thread 里跑，排版和 .ttc 解析会占用几秒 CPU。"""
+        from .fishtool_adapter import report_charts, report_pdf
+
+        fonts = report_pdf.resolve_fonts(self.chat, logger)
+        charts = None
+        if self.chat["report_charts"]:
+            charts = report_charts.build_chart_flowables(
+                data.get("self_data") or {}, data.get("benchmark"), report_pdf.body_width_pt(), fonts, logger,
+            )
+        notes = [FONT_DEGRADED_HINT] if fonts.degraded else []
+        return report_pdf.build(html_text, fonts, charts=charts), notes
+
+    async def _run_diagnosis(self, key: str, umo: str, uid: str) -> None:
+        """自诊后台任务：解析 UID → 自诊 → 主题 HTML → PDF → 发摘要 → 发文件（失败退回提示）。"""
+        from .fishtool_adapter.report_pdf import ReportPdfError, parse_meta, report_filename
+
+        try:
+            try:
+                resolved = await self.cmds.resolve_uid(uid)
+                html_text, data = await self.cmds.diagnosis(resolved)
+                pdf_bytes, notes = await asyncio.to_thread(self._render_diagnosis_pdf, html_text, data)
+                name = report_filename(parse_meta(html_text), time.strftime("%Y%m%d"))
+                _, saved = await asyncio.to_thread(self.exports.save_and_path, pdf_bytes, name, ".pdf")
+            except (CommandError, ReportPdfError, ValueError) as exc:
+                await self._send_text(umo, f"自诊失败：{exc}")
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 后台任务必须兜底，否则用户收不到任何回复
+            logger.error(f"[fishtool] {key} 执行失败: {exc}", exc_info=True)
+            await self._send_text(umo, f"自诊失败（内部错误），详情见 AstrBot 日志：{type(exc).__name__}")
+            return
+        finally:
+            self.jobs.release(key)
+
+        if self._closed:
+            return
+        summary = "\n".join([self.cmds.diagnosis_summary(data, resolved), *notes, FILE_HINT])
+        await self._send_text(umo, summary)
+        try:
+            await self.context.send_message(umo, MessageChain([File(name=name, file=str(saved))]))
+        except Exception as exc:  # noqa: BLE001 - 协议端读不到文件时退回文字提示
+            logger.warning(f"[fishtool] 自诊 PDF 发送到 {umo} 失败: {exc}")
+            await self._send_text(umo, FILE_FALLBACK_TEXT)
 
     @filter.command_group("fishtool", alias={"ft"})
     def fishtool(self):
@@ -436,6 +494,31 @@ class FishToolPlugin(Star):
             yield event.plain_result(f"退订失败：{exc}")
             return
         yield event.plain_result("已退订，本会话不再收到告警推送" if removed else "本会话未订阅告警推送")
+
+    @fishtool.command("自诊")
+    async def cmd_diagnosis(self, event: AstrMessageEvent, uid: str = ""):
+        """生成账号自诊报告并以 PDF 发到本会话（仅管理员；不填 UID 用 B站登录账号）"""
+        gate = self._gate(event, "diag", G.ADMIN)
+        if gate == G.DENIED:
+            yield event.plain_result(self._denied_text(event))
+        if gate != G.OK:
+            return
+        if uid:
+            try:
+                uid = self.cmds.check_uid(uid)
+            except CommandError as exc:
+                yield event.plain_result(str(exc))
+                return
+        # 不填 UID 时登录态检查（会请求 B 站）放进后台任务，“正在生成”能马上回复
+        key = f"diag:{uid or 'self'}"
+        if not self.jobs.claim(key):
+            yield event.plain_result("这个账号的报告正在生成，完成后会发到发起的会话")
+            return
+        task = self.jobs.spawn(self._run_diagnosis(key, event.unified_msg_origin, uid), name=f"fishtool-{key}")
+        if task is None:
+            self.jobs.release(key)
+            return
+        yield event.plain_result("正在生成自诊报告（抓取账号数据 + AI 调研），约需 1～3 分钟，完成后发到这里")
 
     async def api_proxy(self, sub: str):
         if self._closed:

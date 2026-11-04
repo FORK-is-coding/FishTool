@@ -427,6 +427,62 @@ def test_parse_bvid_list():
         FishToolCommands.parse_bvid_list(",".join(f"BV{i}" for i in range(21)))
 
 
+DIAG = (200, {"success": True, "data": {
+    "self_data": {"uid": 1, "basic_info": {"name": "鱼<b>"}, "fan_stats": {"follower": 12345},
+                  "video_stats": {"total_count": 42, "avg_play": 29394}},
+    "benchmark": {"has_benchmark": False}, "benchmark_status": "not_requested",
+    "ai_report": {"success": True, "commentary": "建议稳定更新。"},
+}})
+
+
+def test_resolve_uid_explicit_and_from_login():
+    cmds, _, client = make(routes={"/api/auth/status": LOGGED_IN})
+    assert run(cmds.resolve_uid(" 42 ")) == "42"
+    assert not client.calls
+    assert run(cmds.resolve_uid("")) == "123"
+
+
+def test_resolve_uid_requires_login():
+    cmds, _, _ = make(routes={"/api/auth/status": (200, {"success": True, "logged_in": False})})
+    with pytest.raises(CommandError, match="未登录"):
+        run(cmds.resolve_uid(""))
+
+
+def test_diagnosis_reuses_result_for_report_html():
+    cmds, _, client = make(routes={
+        "/api/analysis/self-diagnosis": DIAG,
+        "/api/analysis/report-html": (200, {"success": True, "data": {"html": "<main class='report'>x</main>"}}),
+    }, ecfg={"long_request_timeout_s": 1800, "request_timeout_s": 120})
+    html, data = run(cmds.diagnosis("1"))
+    diag_call, html_call = client.calls
+    assert diag_call["json"] == {"uid": 1} and diag_call["timeout"] == 1800
+    sent = html_call["json"]
+    assert sent["self_data"] == DIAG[1]["data"]["self_data"]  # 原样传回：引擎不重抓、不再调 LLM
+    assert sent["ai_report"]["commentary"] == "建议稳定更新。"
+    assert "charts" not in sent  # 不传截图，引擎不生成截图图表章节
+    assert html and data["benchmark_status"] == "not_requested"
+
+
+@pytest.mark.parametrize("routes,msg", [
+    ({"/api/analysis/self-diagnosis": (200, {"success": True, "data": {}})}, "没有返回账号数据"),
+    ({"/api/analysis/self-diagnosis": DIAG,
+      "/api/analysis/report-html": (200, {"success": True, "data": {"html": "  "}})}, "没有返回报告内容"),
+    ({"/api/analysis/self-diagnosis": (500, {"detail": "LLM 超时"})}, "500"),
+])
+def test_diagnosis_errors(routes, msg):
+    cmds, _, _ = make(routes=routes)
+    with pytest.raises(CommandError, match=msg):
+        run(cmds.diagnosis("1"))
+
+
+def test_diagnosis_summary():
+    text = FishToolCommands.diagnosis_summary(DIAG[1]["data"], "1")
+    assert text.splitlines()[0] == "【账号自诊】鱼<b>（UID 1）"
+    assert "粉丝 12,345，投稿 42，平均播放 29,394" in text and "运营点评：建议稳定更新。" in text
+    failed = FishToolCommands.diagnosis_summary({"self_data": {}, "ai_report": {"success": False, "message": "未配置模型"}}, "2")
+    assert "粉丝 暂无" in failed and "AI 调研未生成：未配置模型" in failed
+
+
 def test_hotspot_empty_snapshot():
     cmds, _, _ = make(routes={"/api/hotspot/discovery/latest": (200, {"success": True, "data": {
         "snapshot": {"keywords": [], "videos": []},

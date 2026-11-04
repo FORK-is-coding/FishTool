@@ -36,6 +36,13 @@ def test_resolve_rejects_bad_ids(tmp_path, bad):
     assert ExportStore(tmp_path, log).resolve(bad) is None
 
 
+def test_save_and_path_returns_absolute_resolvable_path(tmp_path):
+    store = ExportStore(tmp_path / "exports", log)
+    file_id, path = store.save_and_path(b"%PDF", "a.pdf", ".pdf")
+    assert path.is_absolute() and path.read_bytes() == b"%PDF"
+    assert store.resolve(file_id)[0] == path
+
+
 def test_expired_files_cleaned_on_save(tmp_path):
     store = ExportStore(tmp_path, log)
     old_id, _ = store.save(b"old", "old.pdf", ".pdf")

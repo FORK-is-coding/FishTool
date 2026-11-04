@@ -234,6 +234,67 @@ class FishToolCommands:
             lines.append("本轮没有可展示的热搜词或视频")
         return "\n".join(lines)
 
+    # ------------------------------------------------------------------ self-diagnosis
+    async def resolve_uid(self, uid: str = "") -> str:
+        """填了就校验；没填就用 B 站登录账号的 UID（/auth/status 的 user.uid，bilibili/auth.py get_user_info）。"""
+        if (uid or "").strip():
+            return self.check_uid(uid)
+        body = await self.login_status()
+        user = body.get("user") if isinstance(body.get("user"), dict) else {}
+        if not body.get("logged_in") or user.get("uid") in (None, ""):
+            raise CommandError("当前未登录 B 站账号：请先到面板扫码登录，或直接写 UID，例如 /fishtool 自诊 123456")
+        return self.check_uid(str(user["uid"]))
+
+    async def diagnosis(self, uid: str) -> tuple[str, dict]:
+        """跑一次账号自诊并取主题 HTML。
+
+        1. ``/api/analysis/self-diagnosis``（长请求：抓账号数据 + 一次 LLM 调研）。
+        2. ``/api/analysis/report-html``：把第 1 步的结果原样传回，引擎直接复用、不重抓也不再调 LLM
+           （analysis._resolve_report_data）；不传 charts，引擎就不生成截图图表章节，由插件画矢量图。
+
+        Returns:
+            (主题 HTML, self-diagnosis 的 data)
+        """
+        uid = self.check_uid(uid)
+        data = _data(await self._call("POST", "/api/analysis/self-diagnosis", long=True, json={"uid": int(uid)}))
+        self_data = data.get("self_data") if isinstance(data.get("self_data"), dict) else None
+        if not self_data:
+            raise CommandError("自诊没有返回账号数据，请稍后重试或到面板查看引擎日志")
+        payload = {
+            "uid": int(uid),
+            "self_data": self_data,
+            "benchmark_data": data.get("benchmark"),
+            "benchmark_status": data.get("benchmark_status"),
+            "ai_report": data.get("ai_report"),
+        }
+        html_body = _data(await self._call("POST", "/api/analysis/report-html", json=payload))
+        html_text = html_body.get("html")
+        if not isinstance(html_text, str) or not html_text.strip():
+            raise CommandError("引擎没有返回报告内容")
+        return html_text, data
+
+    @staticmethod
+    def diagnosis_summary(data: dict, uid: str) -> str:
+        """随 PDF 一起发的文字摘要。"""
+        self_data = data.get("self_data") if isinstance(data.get("self_data"), dict) else {}
+        basic = self_data.get("basic_info") if isinstance(self_data.get("basic_info"), dict) else {}
+        fans = self_data.get("fan_stats") if isinstance(self_data.get("fan_stats"), dict) else {}
+        videos = self_data.get("video_stats") if isinstance(self_data.get("video_stats"), dict) else {}
+
+        def num(value) -> str:
+            return f"{value:,}" if isinstance(value, (int, float)) and not isinstance(value, bool) else "暂无"
+
+        name = shorten(basic.get("name") or "", 30)
+        lines = [f"【账号自诊】{name}（UID {uid}）" if name else f"【账号自诊】UID {uid}"]
+        lines.append(f"粉丝 {num(fans.get('follower'))}，投稿 {num(videos.get('total_count'))}，"
+                     f"平均播放 {num(videos.get('avg_play'))}")
+        ai = data.get("ai_report") if isinstance(data.get("ai_report"), dict) else {}
+        if ai.get("success") and ai.get("commentary"):
+            lines.append(f"运营点评：{shorten(ai['commentary'], 120)}")
+        elif ai and not ai.get("success"):
+            lines.append(f"AI 调研未生成：{shorten(ai.get('message') or '模型不可用', 80)}")
+        return "\n".join(lines)
+
     async def unread_alerts(self, limit: int = 50) -> list[dict]:
         """断线补发用：最近的未读告警（新到旧）。引擎未运行时抛 CommandError。"""
         body = await self._call("GET", "/api/comment/alerts", query={"is_read": "false", "limit": limit})

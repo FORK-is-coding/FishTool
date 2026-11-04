@@ -51,6 +51,11 @@ class ExportStore:
         Raises:
             ValueError: 内容超过上限或类型不受支持。
         """
+        file_id, _ = self.save_and_path(data, filename, ext)
+        return file_id, filename
+
+    def save_and_path(self, data: bytes, filename: str, ext: str) -> tuple[str, Path]:
+        """同 ``save``，但返回文件的绝对路径（聊天里发文件要用本地路径）。"""
         if ext not in CONTENT_TYPES:
             raise ValueError(f"不支持的导出类型：{ext}")
         if len(data) > MAX_BYTES:
@@ -58,9 +63,10 @@ class ExportStore:
         self.root.mkdir(parents=True, exist_ok=True)
         self._cleanup()
         file_id = secrets.token_urlsafe(18)
-        (self.root / f"{file_id}{ext}").write_bytes(data)
+        path = (self.root / f"{file_id}{ext}").resolve()
+        path.write_bytes(data)
         (self.root / f"{file_id}.name").write_text(filename, "utf-8")
-        return file_id, filename
+        return file_id, path
 
     def resolve(self, file_id: str) -> tuple[Path, str] | None:
         """按 id 找到导出文件与下载文件名；不存在返回 None。"""
