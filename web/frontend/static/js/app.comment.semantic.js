@@ -236,6 +236,10 @@
         state.preflight = preflight;
         state.preference = preference || null;
         state.task = latest || null;
+        // 任务在我们没轮询它的时候进入终态（切去别的 BV 再切回来、或他人取消）：
+        // 旧 request_key 已随终态失效，不重置的话“重新分析”会复用旧 key，
+        // 后端幂等返回旧任务，看起来像按钮没反应。进行中任务的 key 保持不动。
+        if (state.task && !isActiveStatus(state.task.status)) resetRequestKey();
         renderOverview();
         // 有最近任务且处于进行中：接管轮询（不重复发起模型请求）。
         if (state.task && isActiveStatus(state.task.status)) {
@@ -324,8 +328,7 @@
         if (task && isActiveStatus(task.status)) {
             area.append(makeBtn('取消', 'btn-secondary', onCancel));
         }
-        if (task && (task.status === 'interrupted' || task.status === 'partial'
-            || task.status === 'failed')) {
+        if (task && canResume(task)) {
             area.append(makeBtn('继续执行', 'btn-primary', onResume, !configured));
         }
     }
@@ -403,14 +406,64 @@
         }
     }
 
+    // 停止原因（后端 coverage.stop_reason）→ 任务区说明。可续跑的原因才显示“继续执行”。
+    const STOP_REASON_NOTES = {
+        task_budget: '部分完成：本次任务的 token 预算已用完，可点“继续执行”。',
+        attempt_budget: '部分完成：本次任务的模型调用次数已用完，可点“继续执行”。',
+        daily_budget: '部分完成：今日语义折叠预算已用完，明天可点“继续执行”。',
+        global_daily_limit: '部分完成：今日 AI 用量已达每日上限，可在配置页调高“每日 token 上限”后点“继续执行”，或明天再继续。',
+        rate_limited: '部分完成：模型服务限频，稍后可点“继续执行”。',
+        provider_unavailable: '部分完成：模型服务暂时不可用，稍后可点“继续执行”。',
+        provider_quota: '部分完成：模型服务的账户余额或配额不足，充值后可点“继续执行”。',
+        rounds_exhausted: '部分完成：跨批比较已跑完设定的轮数，仍有少量候选对未比较，结果可能漏并。继续执行不会有新的比较。',
+        degraded: '部分完成：有批次因模型返回内容无法使用而按各自独立处理，结果可能漏并。继续执行不会重做这些批次。',
+    };
+    const RESUMABLE_STOP_REASONS = ['task_budget', 'attempt_budget', 'daily_budget',
+        'global_daily_limit', 'rate_limited', 'provider_unavailable', 'provider_quota'];
+
+    function stopReasonNote(task) {
+        if (!task || task.status !== 'partial') return '';
+        const reason = (task.coverage || {}).stop_reason;
+        // 旧版本落库的任务没有 stop_reason：沿用原来的笼统说明。
+        return STOP_REASON_NOTES[reason] || '部分完成：受预算 / 组大小限制，仍有候选对未比较，结果可能漏并。';
+    }
+
+    // “继续执行”只对能产生新进度的任务显示：中断、失败，或因可续跑原因停下的部分完成。
+    // 旧版本落库、没有 stop_reason 的 partial 任务保持原行为（显示）。
+    // 这些失败原因续跑也不会好：先去配置页改，再重新分析。
+    const NON_RESUMABLE_FAILURES = ['failed:auth', 'failed:model_not_found', 'failed:not_configured',
+        'failed:identity_changed'];
+
+    function canResume(task) {
+        if (task.status === 'interrupted') return true;
+        if (task.status === 'failed') {
+            const failure = (task.coverage || {}).stop_reason;
+            return NON_RESUMABLE_FAILURES.indexOf(failure) === -1;
+        }
+        if (task.status !== 'partial') return false;
+        const reason = (task.coverage || {}).stop_reason;
+        return !reason || RESUMABLE_STOP_REASONS.indexOf(reason) !== -1;
+    }
+
     // 同一 BV 的发起 request_key 稳定复用：双击/重试不产生第二个计费任务；
-    // 仅当任务进入终态（失败/取消）或切换 BV 时才换新 key 允许明确重试。
+    // 任务进入终态（完成/部分完成/失败/取消）或切换 BV 时换新 key，允许明确重新发起。
+    let requestKeySeq = 0;
+
     function stableRequestKey(bvid) {
         if (!state.requestKey || state.requestKeyBvid !== bvid) {
-            state.requestKey = `${bvid}-${Date.now()}`;
+            // 递增序号兜底：同一毫秒内重建 key 也不会撞（测试假时钟下 Date.now 可能不变）。
+            requestKeySeq += 1;
+            state.requestKey = `${bvid}-${Date.now()}-${requestKeySeq}`;
             state.requestKeyBvid = bvid;
         }
         return state.requestKey;
+    }
+
+    // 任务结束后释放 request_key：否则完成或部分完成后点“重新分析”会复用同一个 key，
+    // 快照没变时 store 按幂等直接返回旧任务，看起来像按钮没反应。
+    function resetRequestKey() {
+        state.requestKey = null;
+        state.requestKeyBvid = '';
     }
 
     async function createTask(bvid, seq) {
@@ -542,6 +595,7 @@
             if (isTerminalWithResult(task.status)) {
                 state.polling = false;
                 state.pollStalled = false;
+                resetRequestKey();
                 loadResult(taskId, 1, seq);
                 return;
             }
@@ -549,6 +603,7 @@
                 || task.status === 'interrupted') {
                 state.polling = false;
                 state.pollStalled = false;
+                resetRequestKey();
                 return;
             }
             await sleep(pollInterval(startedAt));
@@ -592,9 +647,8 @@
             if (budget.daily_settled !== undefined) html += ` · 今日累计 ${text(budget.daily_settled, 0)}`;
             html += '</p>';
         }
-        if (task.status === 'partial') {
-            html += '<p class="semantic-hint">部分完成：受预算 / 组大小限制，仍有候选对未比较，结果可能漏并。</p>';
-        }
+        const stopNote = stopReasonNote(task);
+        if (stopNote) html += `<p class="semantic-hint">${escapeHtml(stopNote)}</p>`;
         if (state.pollStalled && task.status === 'running') {
             html += '<p class="semantic-warn">任务已超过 10 分钟没有新进展，可能卡在模型请求上；页面会继续跟进，也可以取消后重试。</p>';
         }
@@ -917,7 +971,7 @@
         // 测试 / 调试入口：暴露内部状态与关键函数（不改变运行行为）。
         window.__semanticPanel = {
             state, selectBvid, renderResult, stopPolling, init, onLoadClick, submitDecision,
-            resumePollingIfActive,
+            resumePollingIfActive, onStart,
         };
     }
 })();

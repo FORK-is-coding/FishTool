@@ -49,11 +49,41 @@ from .contracts import (
     SemanticConflict,
     SemanticError,
     SemanticProviderError,
+    SemanticResumableStop,
     SemanticValidationError,
+    STOP_DEGRADED,
+    STOP_ROUNDS_EXHAUSTED,
     estimate_request_tokens,
+    stop_reason_for_scope,
 )
 
 logger = logging.getLogger(__name__)
+
+#: 重试与续跑都无益的服务商错误：任务直接 failed 并写明原因。
+_FATAL_PROVIDER_CATEGORIES = (
+    ProviderErrorCategory.AUTH,
+    ProviderErrorCategory.MODEL_NOT_FOUND,
+    ProviderErrorCategory.NOT_CONFIGURED,
+)
+
+
+_FATAL_MESSAGES = {
+    ProviderErrorCategory.AUTH: "API Key 无效或无权限，请到配置页检查",
+    ProviderErrorCategory.MODEL_NOT_FOUND: "模型不存在，请到配置页检查模型名",
+    ProviderErrorCategory.NOT_CONFIGURED: "模型未配置",
+}
+
+
+class _TaskFatal(SemanticError):
+    """内部信号：服务商错误不可恢复，_run 据 category 把任务标 failed。"""
+
+    def __init__(self, category: str) -> None:
+        super().__init__(f"模型调用不可恢复: {category}")
+        self.category = category
+
+
+#: 跨批阶段写进 coverage.reason 的降级原因（先写先得）。用于从旧 checkpoint 推断 degraded。
+_CROSS_DEGRADED_REASONS = ("cross_degraded", "oversize", "verify_unverified")
 
 #: crossphase 有界轮数上界(最小实现:1 个基础窗 + 1 次环移轮,给跨窗口代表候选
 #: 一次同窗机会;不追求组合全覆盖,未复核对仍如实标 partial)。
@@ -62,6 +92,22 @@ MAX_CROSS_ROUNDS = 2
 # --------------------------------------------------------------------------
 # 纯函数辅助
 # --------------------------------------------------------------------------
+
+def _stop_reason(scope: Optional[str], *, degraded: bool, partial: bool) -> Optional[str]:
+    """按优先级给出任务结束时的 stop_reason（coverage.stop_reason）。
+
+    预算类与服务商类停止（有 scope）> 降级（degraded）> 轮数用完（partial 但都不是）。
+    不能沿用 coverage.reason：它是先写先得，phase1 一旦写了 phase1_degraded，
+    后面的预算停止就被盖住了。正常完成返回 None。
+    """
+    if scope:
+        return stop_reason_for_scope(scope)
+    if degraded:
+        return STOP_DEGRADED
+    if partial:
+        return STOP_ROUNDS_EXHAUSTED
+    return None
+
 
 def _clamp_limit(limit: Optional[int]) -> int:
     """把请求 limit 收敛到 [1, MAX_LIMIT]，缺省回落 DEFAULT_LIMIT。"""
@@ -380,6 +426,10 @@ class SemanticService:
                 # 并发取消/版本栅栏/身份变更:任务已被 cancel_task 等旁路处置为终态,
                 # 不可再覆写(cancelled 不可被 worker 改写),静默收尾。
                 logger.info("语义任务 %s 被并发处置而停止: %s", task_id, exc)
+            except _TaskFatal as exc:
+                logger.warning("语义任务 %s 因不可恢复的模型错误失败: %s", task_id, exc.category)
+                self._mark_failed_safe(task_id, exc.category, _FATAL_MESSAGES.get(
+                    exc.category, "模型调用失败"))
             except SemanticError as exc:
                 logger.warning("语义任务 %s 结束于语义错误: %r", task_id, exc)
                 self._mark_failed_safe(task_id, "semantic_error", "语义折叠失败")
@@ -427,6 +477,14 @@ class SemanticService:
             latest = self.store.get_task(task_id)
             return self.store.settle_attempt(task_id, latest["revision"], usage_tokens)
 
+    def _void(self, task_id: str, revision: int) -> Dict[str, Any]:
+        """撤销当前在飞预约(请求确定未发出)。并发冲突时按最新 revision 再撤销一次。"""
+        try:
+            return self.store.void_attempt(task_id, revision)
+        except SemanticConflict:
+            latest = self.store.get_task(task_id)
+            return self.store.void_attempt(task_id, latest["revision"])
+
     def _settle_quiet(self, task_id: str, revision: int,
                       usage_tokens: Optional[int]) -> None:
         """尽力结算(取消、契约外异常路径):仅记账,吞异常(debug 留痕),不改变调用方语义。"""
@@ -466,17 +524,40 @@ class SemanticService:
                 self._settle_quiet(task_id, revision, None)
                 raise
             except SemanticProviderError as exc:
-                # 传输/参数层失败:已记账(settle),按分类决定是否有界重试。
+                category = exc.category
+                if category == ProviderErrorCategory.TOKEN_LIMIT:
+                    # 全局每日上限在发请求之前拦下(LLMClient._check_token_limit 在 post 之前):
+                    # 撤销预约,不计费不计次,当前单元保持未完成,任务以可续跑的 partial 停下。
+                    state = self._void(task_id, revision)
+                    self._stop_if_not_running(state)
+                    raise SemanticResumableStop(
+                        "全局每日 AI 用量已达上限", scope="global_daily") from exc
+                # 其余传输/参数层失败:请求可能已发出,已记账(settle)。
                 state = self._settle(task_id, revision, None)
                 revision = state["revision"]
                 self._stop_if_not_running(state)  # 并发取消 => 抛 Conflict,不再续发
                 last_exc = exc
-                if exc.category == ProviderErrorCategory.UNSUPPORTED_TEMPERATURE and not omit_temperature:
+                if category == ProviderErrorCategory.UNSUPPORTED_TEMPERATURE and not omit_temperature:
                     omit_temperature = True  # 下一轮省略 temperature 重试
                     continue
-                if exc.category == ProviderErrorCategory.NETWORK:
-                    continue  # 未知网络:在剩余 BATCH_ATTEMPTS 内有界重试
-                break  # auth/model_not_found/token_limit 等:重试无益,停
+                if category in (ProviderErrorCategory.NETWORK, ProviderErrorCategory.SERVER):
+                    # 未知网络 / 5xx:在剩余 BATCH_ATTEMPTS 内有界重试;最后一次仍是 5xx 时
+                    # 停下等用户续跑,不把整个单元永久降级为“各自独立”。
+                    if _try + 1 < BATCH_ATTEMPTS:
+                        continue
+                    if category == ProviderErrorCategory.SERVER:
+                        raise SemanticResumableStop(
+                            "模型服务暂时不可用", scope="provider_unavailable") from exc
+                    break
+                if category == ProviderErrorCategory.RATE_LIMIT:
+                    raise SemanticResumableStop("模型服务限频", scope="rate_limited") from exc
+                if category == ProviderErrorCategory.QUOTA:
+                    raise SemanticResumableStop(
+                        "模型服务余额或配额不足", scope="provider_quota") from exc
+                if category in _FATAL_PROVIDER_CATEGORIES:
+                    # 鉴权失败 / 模型不存在 / 未配置:重试与续跑都无益,任务直接失败。
+                    raise _TaskFatal(category) from exc
+                break  # UNKNOWN 等:保持原行为,本单元降级为各自独立
             except SemanticValidationError as exc:
                 # 拿到了响应但不合法(截断/拒答/ID 非法等):已记账,有界重试。
                 state = self._settle(task_id, revision, None)
@@ -550,10 +631,12 @@ class SemanticService:
             state = self.store.get_task(task_id)
             self.store.update_task(task_id, state["revision"],
                                    status="completed", phase="done",
-                                   coverage={"eligible": 0, "partial": False})
+                                   coverage={"eligible": 0, "partial": False,
+                                             "stop_reason": None})
             return
 
         budget_hit = False
+        stop_scope: Optional[str] = None  # 预算 / 可续跑停止的 scope,决定 stop_reason
         provider = self._new_provider()
         async with provider:
             # ---------- phase1：批内分组 ----------
@@ -561,11 +644,12 @@ class SemanticService:
                 revision, groups, related, batch_count, phase1_partial = \
                     await self._run_phase1(task_id, revision, provider,
                                            eligible, video_title, checkpoint)
-            except SemanticBudgetExceeded:
-                # 预算耗尽:用已 checkpoint 的 phase1 结果发布 partial。
+            except SemanticBudgetExceeded as exc:
+                # 预算耗尽 / 可续跑停止:用已 checkpoint 的 phase1 结果发布 partial。
                 revision, groups, related, batch_count, phase1_partial = \
                     self._phase1_from_checkpoint(task_id)
                 budget_hit = True
+                stop_scope = exc.scope or "task"
 
             # ---------- crossphase：跨批候选原成员复核 ----------
             coverage: Dict[str, Any]
@@ -592,8 +676,9 @@ class SemanticService:
                     revision, groups, related, coverage = await self._run_cross(
                         task_id, revision, provider, snapshot, eligible,
                         groups, related, batch_count, phase1_partial)
-                except SemanticBudgetExceeded:
+                except SemanticBudgetExceeded as exc:
                     # 兜底:_run_cross 自己会捕获预算异常并返回覆盖率,正常走不到这里。
+                    stop_scope = exc.scope or "task"
                     coverage = {
                         "batches": batch_count, "windows_attempted": 0, "windows_reviewed": 0,
                         "total_pairs": None, "pairs_reviewed": 0, "pairs_unvisited": None,
@@ -615,19 +700,35 @@ class SemanticService:
             raise SemanticConflict("发布前发现任务已非 running,停止(不发布)")
         state = self.store.publish_groups(
             task_id, latest["revision"], publishable, related_groups=related)
+        coverage = dict(coverage)
+        coverage["stop_reason"] = _stop_reason(
+            stop_scope or coverage.pop("stop_scope", None),
+            # budget_hit 时 stop_scope 必非空，_stop_reason 的 scope 分支已短路，
+            # degraded 取值在那种情况下不影响结果。
+            degraded=bool(phase1_partial) or bool(coverage.get("degraded")),
+            partial=partial)
+        coverage.pop("stop_scope", None)
         self.store.update_task(
             task_id, state["revision"],
             status="partial" if partial else "completed",
             phase="done", coverage=coverage)
 
     def _fail(self, task_id: str, revision: int, reason: str, message: str) -> None:
-        """把任务标 failed（安全原因码 + 脱敏消息，绝不回原始模型/服务端报文）。"""
+        """把任务标 failed（安全原因码 + 脱敏消息，绝不回原始模型/服务端报文）。
+
+        revision 参数仅作调用方意向记录：实际 CAS 用读到的最新 revision，
+        避免读-写之间预约结算已推进版本导致无谓冲突。"""
         # Task.error 是 Text 列(非 JSON):必须传安全**字符串**,不能传 dict(否则
         # StatementError/ProgrammingError 落库失败 -> 任务永久 running)。原因码与脱敏
         # 消息编成单行字符串,绝不含原始模型/服务端报文。
         try:
-            self.store.update_task(task_id, revision, status="failed",
-                                   error=f"{reason}: {message}")
+            # coverage.stop_reason 记为 failed:<原因码>：前端只读这个字段决定说明与按钮。
+            current = self.store.get_task(task_id)
+            coverage = dict(current.get("coverage") or {})
+            coverage.pop("stop_scope", None)
+            coverage["stop_reason"] = f"failed:{reason}"
+            self.store.update_task(task_id, current["revision"], status="failed",
+                                   error=f"{reason}: {message}", coverage=coverage)
         except SemanticConflict as exc:
             # 已终态/被旁路(如并发 cancel):不可覆写终态,debug 留痕(不静默吞)。
             logger.debug("标记任务 %s failed 时命中 CAS 冲突(已终态): %r", task_id, exc)
@@ -813,6 +914,21 @@ class SemanticService:
             working = {g["representative_id"]: g for g in cross_cp["working"]}
         if cross_cp.get("coverage"):
             coverage = dict(cross_cp["coverage"])
+            # 只描述“上一次为什么停下”的字段不能带进这次运行：续跑后正常完成却仍显示
+            # 限频 / 预算停止。reason 是先写先得，也要清掉重算；partial 由本次覆盖率重算。
+            # degraded（窗口降级）是本任务已发生的事实，保留。
+            coverage.pop("stop_scope", None)
+            # 旧版本（本 PR 之前）写的 checkpoint 没有 degraded 键：从当时已有的字段推出来，
+            # 否则之前有窗口超大组 / 复核无结果的任务续跑后会被报成 completed。
+            # 已知盲区：旧版本轮末可能先写 reason="cross_pairs_unvisited"（先写先得），把其后
+            # 发生的窗口降级盖掉；这种形态从旧字段推不出降级，续跑后会显示“轮数用完”而非
+            # “有窗口降级”——仅说明文案偏差，终态与分组结果不受影响，不加启发式误判。
+            if not coverage.get("degraded") and (
+                    int(coverage.get("oversize_skipped") or 0) > 0
+                    or coverage.get("reason") in _CROSS_DEGRADED_REASONS):
+                coverage["degraded"] = True
+            coverage["reason"] = "phase1_degraded" if phase1_partial else None
+            coverage["partial"] = bool(phase1_partial) or bool(coverage.get("degraded"))
         reviewed_pairs = {tuple(p) for p in (cross_cp.get("reviewed_pairs") or [])}
         if "singletons" in cross_cp:
             # 已在前一轮被合并进组的单条不能在续跑时复活成单条(否则会被重复比较、计费)。
@@ -875,6 +991,7 @@ class SemanticService:
                             # 本窗口未取得可用响应:不把其对计入 reviewed(不虚报),标 partial。
                             coverage["partial"] = True
                             coverage["reason"] = coverage["reason"] or "cross_degraded"
+                            coverage["degraded"] = True
                             done_windows.add(w_idx)
                             revision = self._persist_cross(
                                 task_id, revision, working, coverage, reviewed_pairs,
@@ -911,9 +1028,11 @@ class SemanticService:
                             coverage["oversize_skipped"] += 1
                             coverage["partial"] = True
                             coverage["reason"] = coverage["reason"] or "oversize"
+                            coverage["degraded"] = True
                         elif outcome == "unverified":
                             coverage["partial"] = True
                             coverage["reason"] = coverage["reason"] or "verify_unverified"
+                            coverage["degraded"] = True
                         # "rejected":模型明确不合并,完整判定,不降级。
                         current = {"index": w_idx, "proposals": proposals, "next": k + 1}
                         if k + 1 < len(proposals):
@@ -935,10 +1054,11 @@ class SemanticService:
                 revision = self._persist_cross(
                     task_id, revision, working, coverage, reviewed_pairs, singletons)
                 plan, done_windows = None, set()
-        except SemanticBudgetExceeded:
-            # 跨批途中预算耗尽:标 partial、据**已真实复核**的对结算覆盖,不虚报。
+        except SemanticBudgetExceeded as exc:
+            # 跨批途中预算耗尽 / 可续跑停止:标 partial、据**已真实复核**的对结算覆盖,不虚报。
             coverage["partial"] = True
             coverage["reason"] = coverage["reason"] or "budget"
+            coverage["stop_scope"] = exc.scope or "task"
             # 异常跨越了 _grouped_call 的返回点:同一单元里先前尝试的 reserve/settle
             # 已推进 store 的 revision,本地值是旧的。必须重读,否则写 checkpoint 时
             # CAS 冲突抛 SemanticConflict,被 _run 当作"并发处置"吞掉,任务永久 running。

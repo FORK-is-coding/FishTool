@@ -223,7 +223,11 @@ async function run(testCase) {
     raceHtml = area.innerHTML;
   }
 
+  // 动作区按钮：renderActions 用 createElement + append，记录最后一次渲染的按钮文字。
+  const actionsEl = getEl('semantic-actions');
+  const actionLabels = actionsEl.children.map(n => n._html);
   return {
+    actionLabels,
     bodyHtml: getEl('semantic-body').innerHTML,
     taskHtml: getEl('semantic-task-area').innerHTML,
     raceHtml,
@@ -580,6 +584,42 @@ def test_cross_coverage_hidden_when_no_cross_pairs(coverage):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="本机无 node")
+@pytest.mark.parametrize("stop_reason, note, resumable", [
+    ("task_budget", "token 预算已用完", True),
+    ("attempt_budget", "调用次数已用完", True),
+    ("daily_budget", "今日语义折叠预算已用完", True),
+    ("global_daily_limit", "配置页调高“每日 token 上限”", True),
+    ("rate_limited", "模型服务限频", True),
+    ("provider_unavailable", "模型服务暂时不可用", True),
+    ("provider_quota", "余额或配额不足", True),
+    ("rounds_exhausted", "继续执行不会有新的比较", False),
+    ("degraded", "继续执行不会重做这些批次", False),
+    (None, "受预算 / 组大小限制", True),  # 旧版本落库的任务没有 stop_reason
+])
+def test_partial_task_shows_stop_reason_note_and_resume_only_when_useful(stop_reason, note, resumable):
+    result = _completed_result_dto(100, 1)
+    responses = _base_responses(result, 1)
+    coverage = {"partial": True}
+    if stop_reason is not None:
+        coverage["stop_reason"] = stop_reason
+    responses["/latest"]["data"].update({"status": "partial", "coverage": coverage})
+    out = _run_node([{"bvid": "BV1dto", "responses": responses}])[0]
+    assert note in out["taskHtml"]
+    assert ("继续执行" in out["actionLabels"]) is resumable
+    assert "重新分析" in out["actionLabels"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="本机无 node")
+@pytest.mark.parametrize("status", ["interrupted", "failed"])
+def test_interrupted_and_failed_still_offer_resume(status):
+    result = _completed_result_dto(100, 1)
+    responses = _base_responses(result, 1)
+    responses["/latest"]["data"].update({"status": status, "coverage": {}})
+    out = _run_node([{"bvid": "BV1dto", "responses": responses}])[0]
+    assert "继续执行" in out["actionLabels"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="本机无 node")
 def test_budget_uses_store_token_field_names():
     result = _completed_result_dto(100, 1)
     responses = _base_responses(result, 1)
@@ -602,3 +642,38 @@ def test_newer_result_request_wins_over_late_success_and_failure(late_outcome):
     assert "NEWEST_RESULT" in out["raceHtml"]
     assert "STALE_RESULT" not in out["raceHtml"]
     assert "STALE_FAILURE" not in out["raceHtml"]
+
+
+# ---------------------------------------------------------------------------
+# PR 1 审查：不可续跑的失败不显示“继续执行”；前后端可续跑原因列表一致
+# ---------------------------------------------------------------------------
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="本机无 node")
+@pytest.mark.parametrize("stop_reason, resumable", [
+    ("failed:auth", False),
+    ("failed:model_not_found", False),
+    ("failed:not_configured", False),
+    ("failed:identity_changed", False),
+    ("failed:internal_error", True),
+    ("failed:semantic_error", True),
+    (None, True),  # 旧版本落库的失败任务
+])
+def test_failed_task_resume_only_when_retry_can_help(stop_reason, resumable):
+    result = _completed_result_dto(100, 1)
+    responses = _base_responses(result, 1)
+    coverage = {} if stop_reason is None else {"stop_reason": stop_reason}
+    responses["/latest"]["data"].update({"status": "failed", "coverage": coverage,
+                                         "error": "auth: API Key 无效"})
+    out = _run_node([{"bvid": "BV1dto", "responses": responses}])[0]
+    assert ("继续执行" in out["actionLabels"]) is resumable
+    assert "重新分析" in out["actionLabels"]
+
+
+def test_resumable_stop_reasons_match_backend():
+    """前端 RESUMABLE_STOP_REASONS 与 contracts 一致：后端新增原因时，这里会提醒同步前端。"""
+    from modules.comment.semantic.contracts import RESUMABLE_STOP_REASONS
+    src = _read(_SEMANTIC_JS)
+    block = re.search(r"const RESUMABLE_STOP_REASONS = \[(.*?)\];", src, re.S)
+    assert block, "前端缺少 RESUMABLE_STOP_REASONS"
+    frontend = set(re.findall(r"'([a-z_]+)'", block.group(1)))
+    assert frontend == set(RESUMABLE_STOP_REASONS)

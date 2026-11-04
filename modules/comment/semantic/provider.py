@@ -58,6 +58,18 @@ def _read_api_key() -> Optional[str]:
     return config.get_secret("llm_api_key") or config.get("llm.api_key")
 
 
+#: 服务商余额 / 配额用尽的报文特征（小写匹配；不回显原文）。
+#: 只收明确表示“余额 / 配额用尽”的说法。不收 "billing" 这类泛词：鉴权失败的报文里也常出现
+#: billing 链接，会把 401/403 误判成余额不足，让用户去充值而不是检查 API Key。
+#: 也不收裸 "quota exceeded"：Gemini 分钟级限频报文是 "Quota exceeded for metric:
+#: generate_requests_per_minute..."，子串匹配会把 429 限频误判成余额不足。
+_QUOTA_MARKERS = (
+    "insufficient_quota", "insufficient quota", "insufficient balance", "insufficient_balance",
+    "exceeded your current quota", "quota_exceeded",
+    "余额不足", "账户余额不足", "欠费", "arrearage",
+)
+
+
 def _classify_api_error(err: LLMAPIError) -> str:
     """把 LLMAPIError 归类为脱敏的 ProviderErrorCategory。
 
@@ -76,6 +88,10 @@ def _classify_api_error(err: LLMAPIError) -> str:
         return C.UNSUPPORTED_TEMPERATURE
     if "model_not_found" in text or "模型不存在" in str(err) or status == 404:
         return C.MODEL_NOT_FOUND
+    # 余额 / 配额用尽必须排在 429 之前：OpenAI 余额用尽返回的就是 429 + insufficient_quota，
+    # 当成限频会让用户“稍后再试”，而等多久都不会恢复。401 不看报文特征，一律是鉴权失败。
+    if status == 402 or (status != 401 and any(k in text for k in _QUOTA_MARKERS)):
+        return C.QUOTA
     if status == 429 or "rate limit" in text or "too many requests" in text:
         return C.RATE_LIMIT
     if status in (401, 403) or "unauthor" in text or "api key" in text \

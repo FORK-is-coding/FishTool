@@ -166,6 +166,22 @@ class FakeStore:
         self.calls.append("settle")
         return dict(self._task)
 
+    def void_attempt(self, task_id, expected_revision) -> Dict[str, Any]:
+        """与真实 store 同语义：撤销在飞预约，退回尝试数与请求数，不计 settled。"""
+        b = self._task["budget"]
+        if b["in_flight"] is None:
+            return dict(self._task)
+        self._check_rev(expected_revision)
+        est = b["in_flight"]["estimated_tokens"]
+        b["reserved_tokens"] -= est
+        b["daily_reserved"] -= est
+        b["attempt_count"] -= 1
+        b["request_count"] -= 1
+        b["in_flight"] = None
+        self._task["revision"] += 1
+        self.calls.append("void")
+        return dict(self._task)
+
     # ----- 终态/恢复 -----
     def cancel_task(self, task_id, expected_revision) -> Dict[str, Any]:
         if self._task["status"] in ("cancelled",):
@@ -1525,3 +1541,577 @@ def test_cross_checkpoint_from_older_version_still_resumes_by_round():
         mod.BATCH_SIZE = old
     assert final["status"] in ("completed", "partial")
     assert final["phase"] == "done"
+
+
+# ==========================================================================
+# PR 1：停止原因（coverage.stop_reason）与服务商错误处理
+# ==========================================================================
+from modules.comment.semantic.contracts import (  # noqa: E402
+    RESUMABLE_STOP_REASONS,
+    STOP_ATTEMPT_BUDGET,
+    STOP_DEGRADED,
+    STOP_GLOBAL_DAILY_LIMIT,
+    STOP_PROVIDER_QUOTA,
+    STOP_PROVIDER_UNAVAILABLE,
+    STOP_RATE_LIMITED,
+    STOP_ROUNDS_EXHAUSTED,
+    STOP_TASK_BUDGET,
+)
+
+
+def _provider_error(category):
+    return SemanticProviderError("模型调用失败", category=category)
+
+
+def _real_store_task(bvid: str, n: int):
+    """真实 SemanticStore（默认隔离临时库）+ 已同意的偏好。"""
+    from modules.comment.semantic.store import SemanticStore
+
+    _seed_video_comments(bvid, n)
+    store = SemanticStore()
+    pref = store.preference(bvid)
+    store.set_preference(bvid, pref["revision"],
+                         consent_version=CONSENT_VERSION, model_identity=dict(IDENTITY))
+    return store
+
+
+def _drive_real(store, bvid, handler, *, batch_size=2, request_key="rk-pr1", resume=False):
+    """在真实 store 上跑一次任务；resume=True 时第一次结束后换用 handler2 续跑。"""
+    import modules.comment.semantic.service as mod
+
+    service = svc.SemanticService(store=store, provider_factory=lambda: FakeProvider(handler=handler))
+    old = mod.BATCH_SIZE
+    mod.BATCH_SIZE = batch_size
+    try:
+        async def scenario():
+            state = await service.start(bvid, 200, CONSENT_VERSION, request_key)
+            await _drain(service)
+            return service.status(state["task_id"]), state["task_id"]
+
+        return run(scenario()), service
+    finally:
+        mod.BATCH_SIZE = old
+
+
+@pytest.mark.parametrize("category, expected", [
+    (ProviderErrorCategory.TOKEN_LIMIT, STOP_GLOBAL_DAILY_LIMIT),
+    (ProviderErrorCategory.RATE_LIMIT, STOP_RATE_LIMITED),
+    (ProviderErrorCategory.QUOTA, STOP_PROVIDER_QUOTA),
+])
+def test_provider_stop_is_resumable_and_resume_completes_all_batches(category, expected):
+    """全局上限 / 429 / 余额不足：任务以 partial 停下、写明 stop_reason，当前批保持未完成；
+    续跑后所有批都补上，没有被永久降级的批（原实现会把剩下的批全部降级为各自独立）。"""
+    bvid = f"BVpr1{category[:4]}"
+    store = _real_store_task(bvid, 6)
+    calls = {"n": 0, "fail": True}
+
+    def handler(items, title, phase, omit):
+        calls["n"] += 1
+        if calls["fail"] and phase == PHASE_BATCH and calls["n"] == 2:
+            raise _provider_error(category)
+        return _empty()
+
+    (stopped, task_id), service = _drive_real(store, bvid, handler, request_key=f"rk-{category}")
+    assert stopped["status"] == "partial"
+    assert stopped["coverage"]["stop_reason"] == expected
+    assert expected in RESUMABLE_STOP_REASONS
+    marks = store.get_task(task_id)["checkpoint"]["phase1"]["batches"]
+    assert not any(m.get("degraded") for m in marks.values())
+    assert stopped["budget"]["in_flight"] is None
+
+    calls["fail"] = False
+    import modules.comment.semantic.service as mod
+    old = mod.BATCH_SIZE
+    mod.BATCH_SIZE = 2
+    try:
+        async def resume():
+            await service.resume(task_id, stopped["revision"], acknowledge_unknown=True)
+            await _drain(service)
+            return service.status(task_id)
+
+        final = run(resume())
+    finally:
+        mod.BATCH_SIZE = old
+    marks = store.get_task(task_id)["checkpoint"]["phase1"]["batches"]
+    assert len(marks) == 3
+    assert all(m["status"] == "done" and not m.get("degraded") for m in marks.values())
+    assert final["coverage"]["stop_reason"] != expected
+
+
+def test_global_daily_limit_voids_the_unsent_attempt():
+    """全局每日上限在发请求前拦下：这次预约被撤销，不计入用量、尝试数和请求数。"""
+    bvid = "BVpr1void"
+    store = _real_store_task(bvid, 4)
+    calls = {"n": 0}
+
+    def handler(items, title, phase, omit):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise _provider_error(ProviderErrorCategory.TOKEN_LIMIT)
+        return {"data": {"equivalent_groups": [], "related_groups": [], "uncertain_ids": []},
+                "usage_tokens": 7, "usage_estimated": False}
+
+    (stopped, _), _ = _drive_real(store, bvid, handler, request_key="rk-void")
+    budget = stopped["budget"]
+    assert stopped["coverage"]["stop_reason"] == STOP_GLOBAL_DAILY_LIMIT
+    assert budget["attempt_count"] == 1 and budget["request_count"] == 1
+    assert budget["settled_tokens"] == 7  # 只有第 1 次真实调用的用量
+    assert budget["reserved_tokens"] == 0
+    assert budget["daily_reserved"] == 0 and budget["daily_settled"] == 7
+
+
+def test_server_error_retries_once_then_succeeds():
+    """5xx 第一次失败、第二次成功：两次调用，批正常完成，不停下。"""
+    bvid = "BVpr1srv1"
+    store = _real_store_task(bvid, 2)
+    calls = {"n": 0}
+
+    def handler(items, title, phase, omit):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _provider_error(ProviderErrorCategory.SERVER)
+        return _empty()
+
+    (final, _), _ = _drive_real(store, bvid, handler, batch_size=30, request_key="rk-srv1")
+    assert calls["n"] == 2
+    assert final["status"] == "completed"
+    assert final["coverage"]["stop_reason"] is None
+
+
+def test_server_error_twice_stops_resumable():
+    """5xx 重试后仍失败：停下等续跑（provider_unavailable），不永久降级。"""
+    bvid = "BVpr1srv2"
+    store = _real_store_task(bvid, 4)
+
+    def handler(items, title, phase, omit):
+        raise _provider_error(ProviderErrorCategory.SERVER)
+
+    (stopped, task_id), _ = _drive_real(store, bvid, handler, request_key="rk-srv2")
+    assert stopped["status"] == "partial"
+    assert stopped["coverage"]["stop_reason"] == STOP_PROVIDER_UNAVAILABLE
+    marks = store.get_task(task_id)["checkpoint"]["phase1"]["batches"]
+    assert not any(m.get("degraded") for m in marks.values())
+
+
+@pytest.mark.parametrize("category, prefix", [
+    (ProviderErrorCategory.AUTH, "auth"),
+    (ProviderErrorCategory.MODEL_NOT_FOUND, "model_not_found"),
+])
+def test_fatal_provider_error_fails_task_with_reason(category, prefix):
+    """鉴权失败 / 模型不存在：重试与续跑都无益，任务直接 failed 并写明原因。"""
+    bvid = f"BVpr1fat{prefix[:3]}"
+    store = _real_store_task(bvid, 2)
+    calls = {"n": 0}
+
+    def handler(items, title, phase, omit):
+        calls["n"] += 1
+        raise _provider_error(category)
+
+    (final, _), _ = _drive_real(store, bvid, handler, batch_size=30, request_key=f"rk-{prefix}")
+    assert final["status"] == "failed"
+    assert final["error"].startswith(prefix)
+    assert "配置页" in final["error"]
+    assert calls["n"] == 1  # 不重试
+    assert final["budget"]["in_flight"] is None
+
+
+@pytest.mark.parametrize("limit_key, limit_value, expected", [
+    ("max_attempts", 2, STOP_ATTEMPT_BUDGET),
+    ("task_token_budget", 1, STOP_TASK_BUDGET),
+])
+def test_budget_stop_reason_from_scope(monkeypatch, limit_key, limit_value, expected):
+    """调用次数用完：attempt_budget；任务 token 预算用完：task_budget（真实 store 抛出的 scope）。"""
+    import modules.comment.semantic.service as mod
+
+    bvid = f"BVpr1{limit_key[:6]}"
+    store = _real_store_task(bvid, 6)
+    monkeypatch.setattr(mod, "DEFAULT_LIMITS", {**mod.DEFAULT_LIMITS, limit_key: limit_value})
+    (final, _), _ = _drive_real(store, bvid, lambda *a: _empty(), request_key=f"rk-{limit_key}")
+    assert final["status"] == "partial"
+    assert final["coverage"]["stop_reason"] == expected
+
+
+def test_budget_stop_wins_over_earlier_degradation():
+    """phase1 先有批次降级、之后预算停下：stop_reason 取预算（原 coverage.reason 会停在 phase1_degraded）。"""
+    snap = _snapshot(6)
+    store = FakeStore(snap, max_attempts=4)  # 第 1 批 2 次重试都降级，第 2 批 2 次后 reserve 超限
+    calls = {"n": 0}
+
+    def handler(items, title, phase, omit):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise SemanticValidationError("截断", reason="not_stop")
+        return _empty()
+
+    service = _service(store, FakeProvider(handler=handler))
+    _run_with_batch_size(service, store, 2)
+    cov = service.status("t1")["coverage"]
+    assert cov["stop_reason"] == STOP_ATTEMPT_BUDGET
+
+
+def test_degraded_without_budget_stop_is_not_resumable_reason():
+    """只有降级、没有预算停止：stop_reason=degraded（续跑也不会重做降级的批）。"""
+    snap = _snapshot(4)
+    store = FakeStore(snap, max_attempts=200)
+    calls = {"n": 0}
+
+    def handler(items, title, phase, omit):
+        calls["n"] += 1
+        if phase == PHASE_BATCH and calls["n"] <= 2:
+            raise SemanticValidationError("截断", reason="not_stop")
+        return _empty()
+
+    service = _service(store, FakeProvider(handler=handler))
+    _run_with_batch_size(service, store, 2)
+    final = service.status("t1")
+    assert final["status"] == "partial"
+    assert final["coverage"]["stop_reason"] == STOP_DEGRADED
+    assert STOP_DEGRADED not in RESUMABLE_STOP_REASONS
+
+
+def test_rounds_exhausted_when_budget_is_ample():
+    """预算充足但跨批两轮跑完仍有未比较对：stop_reason=rounds_exhausted。"""
+    snap = _snapshot(8)
+    store = FakeStore(snap, max_attempts=10000, task_budget=10 ** 9, daily_budget=10 ** 9)
+    service = _service(store, FakeProvider())
+    import modules.comment.semantic.service as mod
+    old_chunk = mod._chunk_items
+    mod._chunk_items = lambda items, title, phase: [items[i:i + 2] for i in range(0, len(items), 2)]
+    try:
+        _run_with_batch_size(service, store, 2)
+    finally:
+        mod._chunk_items = old_chunk
+    final = service.status("t1")
+    assert final["status"] == "partial"
+    assert final["coverage"]["pairs_unvisited"] > 0
+    assert final["coverage"]["stop_reason"] == STOP_ROUNDS_EXHAUSTED
+
+
+def test_completed_task_has_no_stop_reason():
+    store = FakeStore(_snapshot(2))
+    service = _service(store, FakeProvider())
+    _run_with_batch_size(service, store, 30)
+    final = service.status("t1")
+    assert final["status"] == "completed"
+    assert final["coverage"]["stop_reason"] is None
+    assert "stop_scope" not in final["coverage"]
+
+
+def test_cross_phase_rate_limit_keeps_window_plan_for_resume():
+    """跨批阶段遇到 429：可续跑停止也走预算分支，窗口计划落盘，续跑不重做已完成窗口。"""
+    import modules.comment.semantic.service as mod
+
+    snap = _snapshot(12)
+    store = FakeStore(snap, max_attempts=10000, task_budget=10 ** 9, daily_budget=10 ** 9)
+    cross_calls: List[List[str]] = []
+    state = {"fail_on": 3}
+
+    def handler(items, title, phase, omit):
+        if phase == PHASE_CROSS and not any(i.get("members") is None for i in items):
+            cross_calls.append([i["id"] for i in items])
+            if state["fail_on"] and len(cross_calls) == state["fail_on"]:
+                raise _provider_error(ProviderErrorCategory.RATE_LIMIT)
+        return _empty()
+
+    service = _service(store, FakeProvider(handler=handler))
+    old = mod.BATCH_SIZE
+    mod.BATCH_SIZE = 2
+    try:
+        async def scenario():
+            await service.start("BV1", 200, CONSENT_VERSION, "rk-pr1-cross")
+            await _drain(service)
+            stopped = service.status("t1")
+            assert store.get_task("t1")["checkpoint"]["cross"].get("plan")  # 窗口计划已落盘
+            first = list(cross_calls)
+            state["fail_on"] = None
+            await service.resume("t1", stopped["revision"], acknowledge_unknown=True)
+            await _drain(service)
+            return stopped, first, cross_calls[len(first):]
+
+        stopped, first, after = run(scenario())
+    finally:
+        mod.BATCH_SIZE = old
+    assert stopped["status"] == "partial"
+    assert stopped["coverage"]["stop_reason"] == STOP_RATE_LIMITED
+    assert not any(w in first[:2] for w in after)  # 停下前已完成的窗口续跑时不重做
+    assert first[2] in after  # 被 429 打断的那个窗口续跑时补上
+
+
+# ==========================================================================
+# PR 1 审查：续跑后停止原因不沿用上一次；失败写 failed:<原因>
+# ==========================================================================
+
+def test_cross_429_then_resume_does_not_keep_rate_limited():
+    """跨批阶段 429 停下，续跑跑完：stop_reason 按这次结果重算，不能还是 rate_limited。
+
+    审查发现：coverage 从 checkpoint 读回时带着上一次的 stop_scope，续跑完成后仍显示“限频”。
+    """
+    import modules.comment.semantic.service as mod
+
+    store = FakeStore(_snapshot(12), max_attempts=10000, task_budget=10 ** 9, daily_budget=10 ** 9)
+    state = {"fail": True, "cross": 0}
+
+    def handler(items, title, phase, omit):
+        if phase == PHASE_CROSS and not any(i.get("members") is None for i in items):
+            state["cross"] += 1
+            if state["fail"] and state["cross"] == 2:
+                raise SemanticProviderError("429", category=ProviderErrorCategory.RATE_LIMIT)
+        return _empty()
+
+    service = _service(store, FakeProvider(handler=handler))
+    old = mod.BATCH_SIZE
+    mod.BATCH_SIZE = 2
+    try:
+        async def scenario():
+            await service.start("BV1", 200, CONSENT_VERSION, "rk-review-429")
+            await _drain(service)
+            first = service.status("t1")
+            state["fail"] = False
+            await service.resume("t1", first["revision"], acknowledge_unknown=True)
+            await _drain(service)
+            return first, service.status("t1")
+
+        first, final = run(scenario())
+    finally:
+        mod.BATCH_SIZE = old
+    assert first["coverage"]["stop_reason"] == "rate_limited"
+    # 12 条、窗口 30：跨批两轮跑完仍有未比较的对 -> 轮数用完，而不是限频
+    assert final["coverage"]["stop_reason"] == "rounds_exhausted"
+    assert "stop_scope" not in final["coverage"]
+    assert final["coverage"]["reason"] != "budget"
+
+
+def test_cross_429_then_resume_with_full_coverage_ends_completed():
+    """候选全在一个窗口里：续跑后全覆盖，任务 completed、stop_reason 为 None。"""
+    import modules.comment.semantic.service as mod
+
+    store = FakeStore(_snapshot(4), max_attempts=10000, task_budget=10 ** 9, daily_budget=10 ** 9)
+    state = {"fail": True}
+
+    def handler(items, title, phase, omit):
+        if phase == PHASE_CROSS and state["fail"]:
+            raise SemanticProviderError("429", category=ProviderErrorCategory.RATE_LIMIT)
+        return _empty()
+
+    service = _service(store, FakeProvider(handler=handler))
+    # 批内按 2 条切成 2 批进入跨批阶段；跨批窗口放得下全部 4 个候选（只有 1 个窗口、1 轮），
+    # 续跑后能全覆盖。
+    import pytest as _pytest
+    mp = _pytest.MonkeyPatch()
+    mp.setattr(mod, "_chunk_items",
+               lambda items, title, phase: [items[i:i + 2] for i in range(0, len(items), 2)]
+               if phase == PHASE_BATCH else [items])
+    old = mod.BATCH_SIZE
+    mod.BATCH_SIZE = 2
+    try:
+        async def scenario():
+            await service.start("BV1", 200, CONSENT_VERSION, "rk-review-full")
+            await _drain(service)
+            first = service.status("t1")
+            state["fail"] = False
+            await service.resume("t1", first["revision"], acknowledge_unknown=True)
+            await _drain(service)
+            return first, service.status("t1")
+
+        first, final = run(scenario())
+    finally:
+        mod.BATCH_SIZE = old
+        mp.undo()
+    assert first["status"] == "partial" and first["coverage"]["stop_reason"] == "rate_limited"
+    assert final["status"] == "completed"
+    assert final["coverage"]["stop_reason"] is None
+    assert final["coverage"]["partial"] is False
+
+
+def test_token_limit_on_fake_store_voids_and_stops():
+    """FakeStore 也实现了 void_attempt：全局上限停下时请求不计入尝试数。"""
+    store = FakeStore(_snapshot(4), max_attempts=10000)
+
+    def handler(items, title, phase, omit):
+        raise SemanticProviderError("limit", category=ProviderErrorCategory.TOKEN_LIMIT)
+
+    service = _service(store, FakeProvider(handler=handler))
+    _run_with_batch_size(service, store, 2)
+    final = service.status("t1")
+    assert final["status"] == "partial"
+    assert final["coverage"]["stop_reason"] == "global_daily_limit"
+    assert final["budget"]["attempt_count"] == 0
+    assert "void" in store.calls
+
+
+@pytest.mark.parametrize("category, reason", [
+    (ProviderErrorCategory.AUTH, "failed:auth"),
+    (ProviderErrorCategory.MODEL_NOT_FOUND, "failed:model_not_found"),
+])
+def test_fatal_provider_error_writes_failed_stop_reason(category, reason):
+    store = FakeStore(_snapshot(4), max_attempts=10000)
+
+    def handler(items, title, phase, omit):
+        raise SemanticProviderError("x", category=category)
+
+    service = _service(store, FakeProvider(handler=handler))
+    _run_with_batch_size(service, store, 2)
+    final = service.status("t1")
+    assert final["status"] == "failed"
+    assert final["coverage"]["stop_reason"] == reason
+
+
+def test_unexpected_crash_writes_failed_internal_stop_reason():
+    store = FakeStore(_snapshot(4), max_attempts=10000)
+
+    def handler(items, title, phase, omit):
+        raise RuntimeError("boom")
+
+    service = _service(store, FakeProvider(handler=handler))
+    _run_with_batch_size(service, store, 2)
+    final = service.status("t1")
+    assert final["status"] == "failed"
+    assert final["coverage"]["stop_reason"] == "failed:internal_error"
+
+
+# ---------------------------------------------------------------------------
+# PR 1 复审：本 PR 之前写的跨批 checkpoint 没有 degraded 键，续跑不能报成 completed
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("legacy_coverage", [
+    {"oversize_skipped": 1, "reason": "oversize"},
+    {"oversize_skipped": 0, "reason": "verify_unverified"},
+    {"oversize_skipped": 0, "reason": "cross_degraded"},
+])
+def test_resume_legacy_cross_checkpoint_keeps_degraded(legacy_coverage):
+    """#65 版本写的 cross checkpoint：只有 oversize_skipped / reason，没有 degraded 键。
+
+    跨批已全部复核（rounds_done == max_rounds），续跑没有新窗口可做；之前确有窗口降级，
+    结果必须仍是 partial / degraded，不能因为本次没再降级就报 completed。
+    """
+    snap = _snapshot(4)
+    store = FakeStore(snap, max_attempts=200)
+    service = _service(store, FakeProvider())
+    store.create_task(snap, IDENTITY, {}, "rk-legacy")
+    pairs = [["c0", "c1"], ["c0", "c2"], ["c0", "c3"], ["c1", "c2"], ["c1", "c3"], ["c2", "c3"]]
+    coverage = {"batches": 2, "candidates": 4, "total_pairs": 6, "rounds_done": 2,
+                "windows_attempted": 2, "windows_reviewed": 2, "pairs_reviewed": 6,
+                "pairs_unvisited": 0, "partial": True, **legacy_coverage}
+    store.force(status="interrupted", checkpoint={
+        "phase1": {"batches": {
+            "0": {"ids": ["c0", "c1"], "status": "done", "equivalent_groups": [],
+                  "related_groups": [], "degraded": False},
+            "1": {"ids": ["c2", "c3"], "status": "done", "equivalent_groups": [],
+                  "related_groups": [], "degraded": False}}, "total": 2},
+        "cross": {"rounds_done": 2, "working": [], "coverage": coverage,
+                  "reviewed_pairs": pairs},
+    })
+    import modules.comment.semantic.service as mod
+    old = mod.BATCH_SIZE
+    mod.BATCH_SIZE = 2
+    try:
+        async def scenario():
+            await service.resume("t1", store._task["revision"], acknowledge_unknown=True)
+            await _drain(service)
+            return service.status("t1")
+
+        final = run(scenario())
+    finally:
+        mod.BATCH_SIZE = old
+    assert final["status"] == "partial"
+    assert final["coverage"]["stop_reason"] == STOP_DEGRADED
+
+
+# ---------------------------------------------------------------------------
+# PR 1 复审：同一次运行里跨批窗口降级 -> stop_reason=degraded；先降级后被限频停下，
+# 续跑完成时仍是 degraded（续跑前 reason 被重置，只能靠 degraded 键）
+# ---------------------------------------------------------------------------
+
+def _cross_handler(kind, state):
+    """按“不同的窗口”计数（同一窗口的重试不算新窗口）。
+
+    第 1 个跨批窗口按 kind 降级（cross_degraded：两次尝试都返回不可用内容；
+    verify_unverified / oversize：提议合并但复核不通过）；第一次运行时第 2 个窗口返回 429。
+    """
+    def handler(items, title, phase, omit):
+        ids = [i["id"] for i in items]
+        if phase != PHASE_CROSS:
+            return _empty()
+        is_verify = any(i.get("members") is None for i in items)
+        if is_verify:
+            if kind == "verify_unverified":
+                raise SemanticValidationError("复核无结果", reason="bad")
+            return _eg(ids[0], ids)
+        key = tuple(ids)
+        if key not in state["seen"]:
+            state["seen"].append(key)
+        order = state["seen"].index(key)
+        if state["fail_second"] and order == 1:
+            raise SemanticProviderError("429", category=ProviderErrorCategory.RATE_LIMIT)
+        if order == 0:
+            if kind == "cross_degraded":
+                raise SemanticValidationError("截断", reason="truncated")
+            return _eg(ids[0], ids[:2])
+        return _empty()
+    return handler
+
+
+@pytest.mark.parametrize("kind", ["cross_degraded", "verify_unverified", "oversize"])
+def test_cross_window_degraded_then_429_resume_still_degraded(monkeypatch, kind):
+    import modules.comment.semantic.service as mod
+
+    state = {"seen": [], "fail_second": True}
+    store = FakeStore(_snapshot(12), max_attempts=10000, task_budget=10 ** 9, daily_budget=10 ** 9)
+    service = _service(store, FakeProvider(handler=_cross_handler(kind, state)))
+    monkeypatch.setattr(mod, "BATCH_SIZE", 2)
+    if kind == "oversize":
+        monkeypatch.setattr(mod, "MAX_GROUP_SIZE", 1)
+
+    async def scenario():
+        await service.start("BV1", 200, CONSENT_VERSION, "rk-deg")
+        await _drain(service)
+        first = service.status("t1")
+        state["fail_second"] = False
+        await service.resume("t1", first["revision"], acknowledge_unknown=True)
+        await _drain(service)
+        return first, service.status("t1")
+
+    first, final = run(scenario())
+    assert first["coverage"]["stop_reason"] == "rate_limited"
+    assert final["status"] == "partial"
+    assert final["coverage"]["stop_reason"] == STOP_DEGRADED
+
+
+@pytest.mark.parametrize("kind", ["cross_degraded", "verify_unverified", "oversize"])
+def test_cross_window_degraded_same_run_stop_reason(monkeypatch, kind):
+    """同一次运行里某跨批窗口降级、其余窗口正常完成（全程无停止/续跑）：
+    结束时 stop_reason 必须是 degraded，不能退化成 rounds_exhausted。
+    这条路径只有发布时的 coverage["degraded"] 能提供依据（reason 不进 _stop_reason），
+    少了窗口降级时的 degraded 标记就会答错。"""
+    import modules.comment.semantic.service as mod
+
+    state = {"seen": [], "fail_second": False}
+    store = FakeStore(_snapshot(12), max_attempts=10000, task_budget=10 ** 9, daily_budget=10 ** 9)
+    service = _service(store, FakeProvider(handler=_cross_handler(kind, state)))
+    monkeypatch.setattr(mod, "BATCH_SIZE", 2)
+    if kind == "oversize":
+        monkeypatch.setattr(mod, "MAX_GROUP_SIZE", 1)
+
+    async def scenario():
+        await service.start("BV1", 200, CONSENT_VERSION, "rk-deg-samerun")
+        await _drain(service)
+        return service.status("t1")
+
+    final = run(scenario())
+    assert final["status"] == "partial"
+    assert final["coverage"]["stop_reason"] == STOP_DEGRADED
+
+
+def test_zero_eligible_items_completes_with_null_stop_reason():
+    snap = _snapshot(0)
+    store = FakeStore(snap)
+    service = _service(store, FakeProvider())
+
+    async def scenario():
+        await service.start("BV1", 200, CONSENT_VERSION, "rk-zero")
+        await _drain(service)
+        return service.status("t1")
+
+    final = run(scenario())
+    assert final["status"] == "completed"
+    assert "stop_reason" in final["coverage"] and final["coverage"]["stop_reason"] is None
