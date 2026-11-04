@@ -45,11 +45,11 @@ def engine_cfg(raw: dict | None) -> dict:
 
 
 #: 聊天指令与告警推送的默认配置（_conf_schema.json 的 chat 段）。
+#: 推送订阅不在这里：存在 remote/subscriptions.json（见 subscriptions.py）。
 DEFAULT_CHAT_CFG = {
     "enable": True,
     "restricted_scope": "admin",
     "cooldown_seconds": 10,
-    "notify_sessions": [],
     "notify_min_level": "high",
     "notify_merge_seconds": 120,
     "report_font_cjk": "",
@@ -87,21 +87,6 @@ def _as_str(value) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
-def _sessions(value) -> list[dict]:
-    """只保留 ``{"umo": 非空字符串, "self_id": 字符串}`` 形式的订阅，按 umo 去重。"""
-    result: list[dict] = []
-    seen: set[str] = set()
-    for item in value if isinstance(value, list) else []:
-        if not isinstance(item, dict):
-            continue
-        umo = _as_str(item.get("umo"))
-        if not umo or umo in seen:
-            continue
-        seen.add(umo)
-        result.append({"umo": umo, "self_id": _as_str(item.get("self_id"))})
-    return result
-
-
 def chat_cfg(raw: dict | None) -> dict:
     """把插件配置里的 chat 段与默认值合并，并把非法值收敛为默认值。
 
@@ -122,7 +107,6 @@ def chat_cfg(raw: dict | None) -> dict:
         "enable": _as_bool(raw.get("enable"), d["enable"]),
         "restricted_scope": scope if scope in RESTRICTED_SCOPES else d["restricted_scope"],
         "cooldown_seconds": _as_int(raw.get("cooldown_seconds"), d["cooldown_seconds"], minimum=0, maximum=3600),
-        "notify_sessions": _sessions(raw.get("notify_sessions")),
         "notify_min_level": level if level in ALERT_LEVELS else d["notify_min_level"],
         "notify_merge_seconds": _as_int(raw.get("notify_merge_seconds"), d["notify_merge_seconds"], minimum=1, maximum=3600),
         "report_font_cjk": _as_str(raw.get("report_font_cjk")),

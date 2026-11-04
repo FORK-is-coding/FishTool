@@ -10,17 +10,22 @@ import mimetypes
 from pathlib import Path
 
 from astrbot.api import AstrBotConfig, logger
+from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools
 from astrbot.api.web import error_response, file_response, json_response, request, stream_response
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
+from .fishtool_adapter import gate as G
 from .fishtool_adapter.client import EngineClient
-from .fishtool_adapter.constants import PLUGIN_NAME, engine_cfg
+from .fishtool_adapter.commands import FishToolCommands
+from .fishtool_adapter.constants import PLUGIN_NAME, chat_cfg, engine_cfg
+from .fishtool_adapter.errors import CommandError
 from .fishtool_adapter.events import EventRelay
 from .fishtool_adapter.exports import ExportStore, safe_filename
 from .fishtool_adapter.paths import DataLayout
 from .fishtool_adapter.proxy import EngineProxy, envelope
 from .fishtool_adapter.runtime_env import EngineEnvError, ensure_engine_env, remove_engine_env
+from .fishtool_adapter.subscriptions import SubscriptionStore
 from .fishtool_adapter.supervisor import EngineSupervisor
 
 # 视图资源带 X-Content-Type-Options: nosniff，MIME 由 mimetypes 判断；部分 Windows 注册表把 .js
@@ -45,6 +50,7 @@ class FishToolPlugin(Star):
         super().__init__(context, config)
         self.cfg = config if config is not None else {}
         self.ecfg = engine_cfg(self.cfg.get("engine") if hasattr(self.cfg, "get") else None)
+        self.chat = chat_cfg(self.cfg.get("chat") if hasattr(self.cfg, "get") else None)
         self._closed = False
         self._boot_task: asyncio.Task | None = None
         self.layout = DataLayout(
@@ -57,6 +63,9 @@ class FishToolPlugin(Star):
         self.proxy = EngineProxy(self.sup, self.client, self.ecfg, logger)
         self.relay = EventRelay(self.sup, logger)
         self.exports = ExportStore(self.layout.exports_dir, logger)
+        self.subs = SubscriptionStore(self.layout.subscriptions_file, logger)
+        self.cmds = FishToolCommands(self.sup, self.client, self.ecfg, logger)
+        self.gate = G.Gate(self.chat, is_subscribed=self.subs.contains)
 
         p = f"/{PLUGIN_NAME}"  # 路由必须带插件名前缀（plugin-pages.md）
         reg = context.register_web_api
@@ -241,6 +250,62 @@ class FishToolPlugin(Star):
         path, name = found
         ctype = "text/html; charset=utf-8" if path.suffix == ".html" else "text/plain; charset=utf-8"
         return file_response(path, filename=name, content_type=ctype)
+
+    # ------------------------------------------------------------------ chat commands
+    def _gate(self, event: AstrMessageEvent, name: str, level: str) -> str:
+        if self._closed:
+            return G.OFF
+        return self.gate.check(
+            name=name,
+            level=level,
+            umo=event.unified_msg_origin,
+            is_admin=event.is_admin(),
+        )
+
+    @staticmethod
+    def _denied_text(event: AstrMessageEvent) -> str:
+        return G.DENIED_TEXT.format(sid=event.get_sender_id())
+
+    async def _safe(self, coro) -> str:
+        """只把 CommandError 转成用户可读文字；其他异常交给调用方或框架兜底。"""
+        try:
+            return await coro
+        except CommandError as exc:
+            return str(exc)
+
+    def _font_label(self) -> str:
+        """`状态` 里显示的自诊报告字体；PDF 模块接入前固定显示“未启用”。"""
+        return "未启用（自诊指令尚未接入）"
+
+    @filter.command_group("fishtool", alias={"ft"})
+    def fishtool(self):
+        """FishTool B站运营工具箱"""
+
+    @fishtool.command("状态")
+    async def cmd_status(self, event: AstrMessageEvent):
+        """引擎、B站登录态、常驻监控与报告字体状态"""
+        if self._gate(event, "status", G.PUBLIC) != G.OK:
+            return
+        yield event.plain_result(await self._safe(self.cmds.status_text(self._font_label())))
+
+    # 数量参数声明成 str：AstrBot 按默认值类型转换参数（core/star/filter/command.py），声明成 int 时
+    # 用户输错会收到框架的“参数 limit 类型错误”；这里统一交给 commands.clamp 收敛到默认值。
+    @fishtool.command("热点")
+    async def cmd_hotspot(self, event: AstrMessageEvent, limit: str = "10"):
+        """最近一轮热点发现的热搜词和视频（数量 1~30）"""
+        if self._gate(event, "hotspot", G.PUBLIC) != G.OK:
+            return
+        yield event.plain_result(await self._safe(self.cmds.hotspot_text(limit)))
+
+    @fishtool.command("告警")
+    async def cmd_alerts(self, event: AstrMessageEvent, limit: str = "5", level: str = "all"):
+        """最近未读告警（数量 1~20，级别 all/high/medium/low）"""
+        gate = self._gate(event, "alerts", G.RESTRICTED)
+        if gate == G.DENIED:
+            yield event.plain_result(self._denied_text(event))
+        if gate != G.OK:
+            return
+        yield event.plain_result(await self._safe(self.cmds.alerts_text(limit, level)))
 
     async def api_proxy(self, sub: str):
         if self._closed:

@@ -103,21 +103,6 @@ def test_chat_cfg_keeps_valid_values():
     assert cfg["report_font_cjk"] == "/fonts/a.ttf"
 
 
-def test_chat_cfg_sessions_filtered_and_deduplicated():
-    cfg = chat_cfg({"notify_sessions": [
-        {"umo": "qq:GroupMessage:1", "self_id": "10001"},
-        {"umo": "qq:GroupMessage:1", "self_id": "other"},
-        {"umo": "", "self_id": "x"},
-        {"self_id": "x"},
-        "qq:FriendMessage:2",
-        {"umo": " qq:FriendMessage:2 "},
-    ]})
-    assert cfg["notify_sessions"] == [
-        {"umo": "qq:GroupMessage:1", "self_id": "10001"},
-        {"umo": "qq:FriendMessage:2", "self_id": ""},
-    ]
-
-
 @pytest.mark.parametrize("raw,expect", [
     (30.0, 30),
     ("10.5", 10),
@@ -134,10 +119,11 @@ def test_chat_cfg_merge_seconds_bounds():
     assert chat_cfg({"notify_merge_seconds": 10**9})["notify_merge_seconds"] == 3600
 
 
-def test_chat_cfg_returns_new_list():
+def test_chat_cfg_returns_new_dict():
     cfg = chat_cfg(None)
-    cfg["notify_sessions"].append({"umo": "x", "self_id": ""})
-    assert DEFAULT_CHAT_CFG["notify_sessions"] == []
+    cfg["enable"] = False
+    assert DEFAULT_CHAT_CFG["enable"] is True
+    assert "notify_sessions" not in cfg  # 订阅不在配置里，见 subscriptions.py
 
 
 # ---------------------------------------------------------------- engine access

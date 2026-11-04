@@ -17,6 +17,42 @@
       "request_timeout_s": { "description": "Request timeout (seconds)" },
       "long_request_timeout_s": { "description": "Long request timeout (seconds)" },
       "block_api_key_write": { "description": "Block Open API Key callers from write and credential endpoints" }
+    },
+    "chat": {
+      "description": "Chat commands and alert push",
+      "enable": {
+        "description": "Enable chat commands",
+        "hint": "When off, /fishtool subcommands stop replying and alert push stops. AstrBot's auto-generated help for a bare /fishtool still shows."
+      },
+      "restricted_scope": {
+        "description": "Who can query alerts",
+        "hint": "Controls /fishtool 告警 and /fishtool 监控 状态. Monitoring, monitor on/off, subscribe and self-diagnosis are always admin-only (AstrBot admins_id).",
+        "labels": ["Admins only", "Admins + subscribed sessions", "Everyone"]
+      },
+      "cooldown_seconds": {
+        "description": "Cooldown for public commands (seconds)",
+        "hint": "Minimum interval for the same command in the same session; 0 disables it. Admins are exempt."
+      },
+      "notify_min_level": {
+        "description": "Minimum alert level to push",
+        "labels": ["High only", "Medium and above", "All"]
+      },
+      "notify_merge_seconds": {
+        "description": "Alert merge window (seconds)",
+        "hint": "Alerts within the window are sent as one forwarded message to reduce rate-limit risk on personal QQ accounts."
+      },
+      "report_font_cjk": {
+        "description": "Self-diagnosis report font (CJK)",
+        "hint": "Absolute path to a .ttf or .ttc (TrueType outlines) on the AstrBot host/container. Noto Sans CJK / Source Han Sans .otf files cannot be used. Empty = auto-detect system fonts; if none is found the PDF falls back to STSong and the layout degrades."
+      },
+      "report_font_latin": {
+        "description": "Self-diagnosis report font (digits and Latin, optional)",
+        "hint": "Used for cover English, page numbers and UID. Empty = use the CJK font; Bahnschrift is used automatically on Windows."
+      },
+      "report_charts": {
+        "description": "Include charts in the self-diagnosis report",
+        "hint": "When off, the PDF contains text and tables only."
+      }
     }
   },
   "views": {
