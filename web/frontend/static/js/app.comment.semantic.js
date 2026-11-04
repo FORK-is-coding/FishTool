@@ -6,8 +6,8 @@
 // - 实验性可选功能：首次使用弹模态，披露 provider/费用/外发范围与「准确性未经验证」，
 //   征得同意后才允许发起；同意绑定 model identity + CONSENT_VERSION，经 API 持久化。
 // - 不随页面加载自动计费：只有用户显式点「开始分析」才创建任务并发起模型请求。
-// - 任务进度支持取消/继续（继续需显式确认未知结果）；轮询定时器有界，
-//   页面隐藏 / 任务终态即停；切换 BV 时作废旧响应，避免陈旧结果串台。
+// - 任务进度支持取消/继续（继续需显式确认未知结果）；轮询不设总次数上限（长任务可达数小时），
+//   页面隐藏 / 任务终态即停，回到前台且任务仍在进行时恢复；切换 BV 时作废旧响应，避免陈旧结果串台。
 // - auto_fold 开关只改展示视图、经 API 持久化偏好，绝不触发任何模型请求。
 // - 分组展示代表项 + 归并理由 + 全部成员详情；未分组/被排除/不确定分别分页列全量原文。
 // - 撤销整组 / 拆分单条 / 显式允许（恢复）；不删除任何原始评论、不改旧大屏统计。
@@ -22,9 +22,16 @@
     const API_PREFIX = '/comment/semantic';
     const DEFAULT_LIMIT = 200;
     const MAX_LIMIT = 500;
+    // 轮询节奏：每次开始轮询（发起、接管、回到前台）后的前 2 分钟每 1.5 秒一次，之后每 5 秒一次。
+    // 状态 DTO 没有任务开始时间，按本轮轮询计；“无进展”计时同样随每轮轮询重新开始。
+    // 语义任务可能跑几十分钟到几小时，不设总次数上限：只要任务仍在进行就一直跟进，
+    // 由代际令牌 / BV 切换 / 页面隐藏 / 终态负责停止。
     const POLL_INTERVAL_MS = 1500;
-    // 轮询上限：约 20 分钟（后台仍可能继续，达上限后提示而不误判失败）。
-    const POLL_MAX_ATTEMPTS = 800;
+    const POLL_SLOW_INTERVAL_MS = 5000;
+    const POLL_FAST_WINDOW_MS = 2 * 60 * 1000;
+    // running 状态下这么久 revision 没变就提示“长时间无进展”（不停止轮询）。
+    // queued 不提示：语义任务全局串行，排队时 revision 本来就不会变。
+    const POLL_STALL_WARN_MS = 10 * 60 * 1000;
 
     // 面板运行态：单例，随 BV 切换重置。
     const state = {
@@ -39,6 +46,7 @@
         resultRequest: 0,          // 同视频/任务的分页和决策刷新也须按请求代际防旧回写。
         polling: false,
         pollToken: 0,             // 轮询代际：停止时 +1，使在途轮询循环自行退出
+        pollStalled: false,       // running 且长时间 revision 未变：任务区显示提示
         localToken: null,
         limit: DEFAULT_LIMIT,
         starting: false,          // 发起任务进行中（防双击双计费）
@@ -490,17 +498,26 @@
         }
     }
 
-    // ---- 轮询：有界、代际令牌防重入；BV 切换 / 页面隐藏 / 终态即停 ----
+    // ---- 轮询：代际令牌防重入；BV 切换 / 页面隐藏 / 终态即停，回到前台时恢复 ----
     function stopPolling() {
         state.polling = false;
+        state.pollStalled = false;  // 不把“无进展”提示带到下一个 BV / 下一轮轮询
         state.pollToken += 1;
+    }
+
+    function pollInterval(startedAt) {
+        return Date.now() - startedAt < POLL_FAST_WINDOW_MS ? POLL_INTERVAL_MS : POLL_SLOW_INTERVAL_MS;
     }
 
     async function startPolling(taskId, seq) {
         stopPolling();
         const token = state.pollToken;
         state.polling = true;
-        for (let attempt = 0; attempt < POLL_MAX_ATTEMPTS; attempt += 1) {
+        state.pollStalled = false;
+        const startedAt = Date.now();
+        let lastRevision = null;
+        let lastChangeAt = startedAt;
+        for (;;) {
             // 任一失效条件成立即退出：代际变更 / BV 切换 / 页面隐藏。
             if (token !== state.pollToken || seq !== state.fetchSeq) return;
             if (typeof document !== 'undefined' && document.hidden) { state.polling = false; return; }
@@ -508,27 +525,41 @@
             try {
                 resp = await fetchTaskStatus(taskId);
             } catch (error) {
-                await sleep(POLL_INTERVAL_MS);
+                await sleep(pollInterval(startedAt));
                 continue;
             }
             if (token !== state.pollToken || seq !== state.fetchSeq) return;
             const task = (resp && resp.data) || null;
-            if (!task) { await sleep(POLL_INTERVAL_MS); continue; }
+            if (!task) { await sleep(pollInterval(startedAt)); continue; }
+            const now = Date.now();
+            if (task.revision !== lastRevision || task.status !== 'running') {
+                lastRevision = task.revision;
+                lastChangeAt = now;
+            }
+            state.pollStalled = task.status === 'running' && now - lastChangeAt >= POLL_STALL_WARN_MS;
             state.task = task;
             renderOverview();
             if (isTerminalWithResult(task.status)) {
                 state.polling = false;
+                state.pollStalled = false;
                 loadResult(taskId, 1, seq);
                 return;
             }
             if (task.status === 'failed' || task.status === 'cancelled'
                 || task.status === 'interrupted') {
                 state.polling = false;
+                state.pollStalled = false;
                 return;
             }
-            await sleep(POLL_INTERVAL_MS);
+            await sleep(pollInterval(startedAt));
         }
-        state.polling = false;
+    }
+
+    // 页面回到前台：当前 BV 的任务若仍在进行，就重新接管轮询（隐藏时已停）。
+    function resumePollingIfActive() {
+        if (state.polling || !state.task || !state.task.task_id) return;
+        if (!isActiveStatus(state.task.status)) return;
+        startPolling(state.task.task_id, state.fetchSeq);
     }
 
     // 任务进度区：阶段 / 进度 / 覆盖 / 预算 / 错误（只读展示）。
@@ -567,6 +598,9 @@
         }
         if (task.status === 'partial') {
             html += '<p class="semantic-hint">部分完成：受预算 / 组大小限制，仍有候选对未比较，结果可能漏并。</p>';
+        }
+        if (state.pollStalled && task.status === 'running') {
+            html += '<p class="semantic-warn">任务已超过 10 分钟没有新进展，可能卡在模型请求上；页面会继续跟进，也可以取消后重试。</p>';
         }
         if (task.error) {
             const errMsg = (task.error && (task.error.message || task.error.reason)) || task.error;
@@ -812,10 +846,11 @@
         }
     }
 
-    // 页面隐藏时停止轮询（可见时若任务仍进行中由下次 selectBvid / 用户操作恢复）。
+    // 页面隐藏时停止轮询，回到前台时若任务仍在进行就恢复轮询。
     if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
         document.addEventListener('visibilitychange', () => {
             if (document.hidden) stopPolling();
+            else resumePollingIfActive();
         });
     }
 
@@ -855,6 +890,7 @@
         // 测试 / 调试入口：暴露内部状态与关键函数（不改变运行行为）。
         window.__semanticPanel = {
             state, selectBvid, renderResult, stopPolling, init, onLoadClick, submitDecision,
+            resumePollingIfActive,
         };
     }
 })();

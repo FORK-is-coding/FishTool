@@ -529,6 +529,12 @@ class TokenLimitExceededError(LLMError):
         self.used = used  # 保存已使用量
         self.limit = limit  # 保存限制值
 
+    @property
+    def user_message(self) -> str:
+        """给用户看的提示：说明是每日上限而不是配置问题，并指出在哪里调整。"""
+        return (f"今日 AI 用量已达每日上限（{self.used}/{self.limit} tokens），"
+                "可在配置页调高“每日 token 上限”，或明天再试。")
+
 
 # ============ 业务逻辑异常 ============
 # 用于应用层的业务逻辑验证和错误处理

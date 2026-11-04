@@ -100,6 +100,41 @@ def test_seed_defaults_fills_missing_keys_without_overwriting(tmp_path: Path, en
     assert (config_dir / "budget.yaml").read_text("utf-8") == "user: true\n"
 
 
+def test_seed_defaults_then_load_migrates_legacy_daily_token_limit(tmp_path: Path, engine_python: str):
+    """老用户升级：数据根 config.yaml 仍是旧默认 100000。
+
+    seed_defaults 用当前仓库的 config.yaml 补缺失键后，ConfigManager 加载必须把上限迁移成新默认值。
+    仓库模板若带迁移标记，标记会先被补进用户配置，迁移随即跳过（曾经的缺陷）。
+    """
+    import shutil
+
+    import yaml
+
+    engine_root = tmp_path / "engine"
+    (engine_root / "config").mkdir(parents=True)
+    shutil.copyfile(REPO_ROOT / "config" / "config.yaml", engine_root / "config" / "config.yaml")
+    config_dir = tmp_path / "data" / "config"
+    config_dir.mkdir(parents=True)
+    legacy = yaml.safe_load((REPO_ROOT / "config" / "config.yaml").read_text("utf-8"))
+    legacy["llm"]["daily_token_limit"] = 100000
+    legacy["llm"].pop("daily_token_limit_migrated", None)
+    (config_dir / "config.yaml").write_text(yaml.safe_dump(legacy, allow_unicode=True), "utf-8")
+
+    code = (
+        "import importlib.util,sys,pathlib;"
+        f"s=importlib.util.spec_from_file_location('l', r'{LAUNCHER}');m=importlib.util.module_from_spec(s);s.loader.exec_module(m);"
+        f"m.seed_defaults(pathlib.Path(r'{engine_root}'), pathlib.Path(r'{config_dir}'));"
+        f"sys.path.insert(0, r'{REPO_ROOT}');"
+        "from core.config import ConfigManager;"
+        f"print(ConfigManager(config_dir=r'{config_dir}').get('llm.daily_token_limit'))"
+    )
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1"}
+    env.pop("PYTHONPATH", None)
+    proc = subprocess.run([engine_python, "-c", code], capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip().splitlines()[-1] == "2000000"
+
+
 def test_lock_rejects_second_holder(tmp_path: Path, engine_python: str):
     """同一数据根第二个 launcher 拿不到锁。"""
     code = (

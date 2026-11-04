@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from core.logger import get_logger
-from core.exceptions import LLMError
+from core.exceptions import LLMError, TokenLimitExceededError
 from llm.client import LLMClient
 
 logger = get_logger(__name__)
@@ -59,6 +59,15 @@ class AIDiagnosisReporter:
                 "commentary": parsed["commentary"],
                 "highlights": parsed["highlights"],
                 "model": client.model,
+                "generated_at": datetime.now().isoformat(),
+            }
+        except TokenLimitExceededError as exc:
+            # 每日上限用完不是配置问题，别让用户去改大模型配置。
+            logger.warning("[AI自诊] 每日 token 上限已用完: %s", exc)
+            return {
+                "success": False,
+                "message": exc.user_message,
+                "error": str(exc),
                 "generated_at": datetime.now().isoformat(),
             }
         except Exception as exc:

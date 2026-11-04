@@ -47,7 +47,7 @@ from bilibili.api import BilibiliAPI
 # 从 llm.client 导入符号
 from llm.client import LLMClient
 # 从 core.exceptions 导入符号
-from core.exceptions import LLMNotConfiguredError
+from core.exceptions import LLMNotConfiguredError, TokenLimitExceededError
 # 从 core.logger 导入符号
 from core.logger import get_logger
 # 从 core.database 导入符号
@@ -256,6 +256,9 @@ class TopicGenerator:
             logger.info(f"LLM生成了 {len(topics)} 个选题")
             return topics
             
+        except TokenLimitExceededError:
+            # 每日上限是可预期的状态，由调用方记 warning 并回退，不在这里打 ERROR 堆栈。
+            raise
         except Exception as e:
             logger.error(f"LLM生成选题失败: {e}", exc_info=True)
             # 抛出异常中断流程
@@ -450,6 +453,10 @@ class TopicGenerator:
             except LLMNotConfiguredError:
                 logger.warning("LLM未配置，切换到降级方案")
                 warning = 'LLM未配置，使用了降级方案'
+            except TokenLimitExceededError as e:
+                # 每日上限不是“生成失败”：说清楚原因和调整入口，再走规则回退。
+                logger.warning(f"LLM 每日 token 上限已用完，切换到降级方案: {e}")
+                warning = f'{e.user_message}本次使用了降级方案。'
             except Exception as e:
                 # 其它模型侧错误同样统一走规则回退（修 §11.6 缺陷一）
                 logger.warning(f"LLM生成选题失败，切换到降级方案: {e}")
@@ -513,6 +520,9 @@ class TopicGenerator:
                     warning = '模型结果无效，使用了事件规则模板'
             except asyncio.CancelledError:
                 raise
+            except TokenLimitExceededError as e:
+                logger.warning(f"事件模式 LLM 每日 token 上限已用完，切换到规则模板: {e}")
+                warning = f'{e.user_message}本次使用了事件规则模板。'
             except Exception as e:
                 logger.warning(f"事件模式模型生成失败，切换到规则模板: {e}")
                 warning = '模型生成失败，使用了事件规则模板'

@@ -510,6 +510,28 @@ def test_update_llm_config_skips_empty_daily_limit(client):
     assert "daily_token_limit" not in _FakeConfig.plain["llm"]
 
 
+def test_update_llm_config_accepts_zero_daily_limit(client):
+    """0 表示不限制，必须能保存（原实现用真值判断，0 被静默忽略）。"""
+    response = client.post(
+        "/api/config/llm",
+        json={"api_key": "sk", "base_url": "https://x/v1", "model": "m", "daily_token_limit": 0},
+    )
+    assert response.status_code == 200
+    assert _FakeConfig.plain["llm"]["daily_token_limit"] == 0
+
+
+@pytest.mark.parametrize("value", [-1, 1_000_000_001, 1.5, "100", True])
+def test_update_llm_config_rejects_invalid_daily_limit(client, value):
+    """非法上限返回 422，密钥与地址也不写入（请求整体被拒）。"""
+    response = client.post(
+        "/api/config/llm",
+        json={"api_key": "sk", "base_url": "https://x/v1", "model": "m", "daily_token_limit": value},
+    )
+    assert response.status_code == 422
+    assert _FakeConfig.secrets == {}
+    assert _FakeConfig.saved == 0
+
+
 def test_update_llm_config_failure_returns_500(client, monkeypatch):
     """写盘异常应转 500。"""
 
@@ -561,6 +583,46 @@ def test_llm_usage_empty_returns_zero(client):
     assert body["total_tokens"] == 0
     assert body["total_requests"] == 0
     assert body["daily_usage"] == []
+    assert body["today"]["total_tokens"] == 0
+
+
+def test_llm_usage_reports_today_against_configured_limit(client, db):
+    """today 只统计今天（按 LLMUsage.date，与限额检查同口径），并带当前上限与剩余。"""
+    from datetime import date, timedelta
+
+    today = date.today()
+    session = db.get_session()
+    try:
+        session.add_all([
+            LLMUsage(date=today.isoformat(), model="m", prompt_tokens=100, completion_tokens=50,
+                     total_tokens=150, request_count=1, module="hotspot"),
+            LLMUsage(date=(today - timedelta(days=1)).isoformat(), model="m", prompt_tokens=900,
+                     completion_tokens=0, total_tokens=900, request_count=1, module="hotspot"),
+        ])
+        session.commit()
+    finally:
+        session.close()
+    _FakeConfig.plain = {"llm": {"daily_token_limit": 1000}}
+
+    today_usage = client.get("/api/config/llm/usage").json()["today"]
+
+    assert today_usage == {"total_tokens": 150, "limit": 1000, "remaining": 850}
+
+
+def test_llm_usage_today_unlimited_has_no_remaining(client):
+    """上限为 0（不限制）时 remaining 为 None。"""
+    _FakeConfig.plain = {"llm": {"daily_token_limit": 0}}
+    today_usage = client.get("/api/config/llm/usage").json()["today"]
+    assert today_usage["limit"] == 0
+    assert today_usage["remaining"] is None
+
+
+def test_llm_usage_today_uses_default_when_limit_missing(client):
+    """未配置上限时按新默认值（200 万）显示。"""
+    from core.config import LLM_DAILY_TOKEN_LIMIT_DEFAULT
+
+    today_usage = client.get("/api/config/llm/usage").json()["today"]
+    assert today_usage["limit"] == LLM_DAILY_TOKEN_LIMIT_DEFAULT
 
 
 def test_llm_usage_failure_returns_500(client, monkeypatch):
@@ -600,6 +662,85 @@ def test_update_single_config_failure_returns_500(client, monkeypatch):
     monkeypatch.setattr(config_module, "ConfigManager", boom)
     response = client.put("/api/config/", json={"key": "a", "value": 1})
     assert response.status_code == 500
+
+
+@pytest.mark.parametrize("value", [0, 1, 2_000_000, 1_000_000_000])
+def test_put_daily_limit_accepts_valid_values(client, value):
+    """配置页“保存上限”走 PUT /：0（不限制）到 10 亿的整数都能保存。"""
+    response = client.put("/api/config/", json={"key": "llm.daily_token_limit", "value": value})
+    assert response.status_code == 200
+    assert _FakeConfig.plain["llm"]["daily_token_limit"] == value
+    assert _FakeConfig.saved == 1
+
+
+def test_put_daily_limit_writes_migration_marker(client):
+    """经配置页保存的上限（包括恰好 100000）要带迁移标记，下次启动不能被当作旧默认值改掉。"""
+    response = client.put("/api/config/", json={"key": "llm.daily_token_limit", "value": 100000})
+    assert response.status_code == 200
+    assert _FakeConfig.plain["llm"] == {"daily_token_limit": 100000, "daily_token_limit_migrated": 1}
+
+
+def test_post_llm_with_daily_limit_writes_migration_marker(client):
+    client.post("/api/config/llm", json={"api_key": "sk", "base_url": "https://x/v1", "model": "m",
+                                         "daily_token_limit": 100000})
+    assert _FakeConfig.plain["llm"]["daily_token_limit_migrated"] == 1
+
+
+def test_post_llm_without_daily_limit_does_not_write_marker(client):
+    client.post("/api/config/llm", json={"api_key": "sk", "base_url": "https://x/v1", "model": "m"})
+    assert "daily_token_limit_migrated" not in _FakeConfig.plain["llm"]
+
+
+def test_saved_legacy_value_survives_restart(tmp_path, monkeypatch):
+    """端到端：真实 ConfigManager 上经 PUT 保存 100000，重启后仍是 100000。"""
+    import sys
+
+    from core.config import ConfigManager as RealConfigManager
+
+    cfg_dir = tmp_path / "cfg"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.yaml").write_text("llm:\n  daily_token_limit: 300000\n", encoding="utf-8")
+    monkeypatch.setattr(config_module, "ConfigManager",
+                        lambda *a, **k: RealConfigManager(config_dir=str(cfg_dir)))
+    runtime = SimpleNamespace(reload=lambda: None)
+    monkeypatch.setattr(sys.modules["core.config"], "config", runtime)
+
+    import llm.client as llm_module
+
+    async def _noop():
+        return None
+
+    monkeypatch.setattr(llm_module, "reset_llm_client", _noop)
+    app = FastAPI()
+    app.include_router(config_module.router, prefix="/api/config")
+    response = TestClient(app).put("/api/config/", json={"key": "llm.daily_token_limit", "value": 100000})
+    assert response.status_code == 200
+
+    assert RealConfigManager(config_dir=str(cfg_dir)).get("llm.daily_token_limit") == 100000
+
+
+@pytest.mark.parametrize("value", [-1, 1_000_000_001, 1.5, "100", True, None, [1]])
+def test_put_daily_limit_rejects_invalid_values(client, value):
+    """非法上限返回 422，不写入、不落盘。"""
+    response = client.put("/api/config/", json={"key": "llm.daily_token_limit", "value": value})
+    assert response.status_code == 422
+    assert "每日 token 上限" in response.json()["detail"]
+    assert _FakeConfig.plain == {}
+    assert _FakeConfig.saved == 0
+
+
+def test_put_daily_limit_validates_padded_key(client):
+    """键名带空格时同样校验（与受保护键的 strip 口径一致）。"""
+    response = client.put("/api/config/", json={"key": " llm.daily_token_limit ", "value": -5})
+    assert response.status_code == 422
+    assert _FakeConfig.saved == 0
+
+
+def test_put_daily_limit_padded_key_writes_clean_path(client):
+    """带空格的上限键：写入用 strip 后的键，不写出 ' llm' 这类脏路径。"""
+    response = client.put("/api/config/", json={"key": " llm.daily_token_limit ", "value": 5})
+    assert response.status_code == 200
+    assert _FakeConfig.plain == {"llm": {"daily_token_limit": 5, "daily_token_limit_migrated": 1}}
 
 
 @pytest.mark.parametrize("key", ["llm.api_base", " llm.api_base ", "llm", "llm.api_key", "secrets.llm_api_key"])

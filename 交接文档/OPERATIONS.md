@@ -26,7 +26,7 @@ PDF 导出还依赖系统安装 `wkhtmltopdf`；没有它时 Markdown 导出仍�
 - `bilibili.cookie_check_interval`：默认 1800 秒。
 - `crawler.timeout/retry_times/concurrent_limit/enable_checkpoint`。
 - `monitor.enable/check_interval/alert_keywords/alert_thresholds`。
-- `llm.api_base/model/temperature/max_tokens/daily_token_limit`；API Key 应通过加密 secrets 保存。
+- `llm.api_base/model/temperature/max_tokens/daily_token_limit`；API Key 应通过加密 secrets 保存。`daily_token_limit` 是所有 AI 功能共用的每日 token 上限，默认 200 万，0 表示不限制，可在配置页修改。
 - `export.output_dir/formats`、`desktop_pet.websocket_port`。
 
 不要手工编辑 `.secrets` 密文，也不要更换 `.key` 后继续使用旧 `.secrets` 或旧 Cookie 密文。
