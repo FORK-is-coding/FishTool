@@ -22,7 +22,7 @@ from .fishtool_adapter.commands import FishToolCommands
 from .fishtool_adapter.constants import PLUGIN_NAME, chat_cfg, engine_cfg
 from .fishtool_adapter.errors import CommandError
 from .fishtool_adapter.events import EventRelay
-from .fishtool_adapter.exports import ExportStore, safe_filename
+from .fishtool_adapter.exports import ExportStore, content_type_for, safe_filename
 from .fishtool_adapter.jobs import JobRunner
 from .fishtool_adapter.notifier import SEND_GAP_S, AlertNotifier
 from .fishtool_adapter.paths import DataLayout
@@ -265,8 +265,7 @@ class FishToolPlugin(Star):
         if not found:
             return error_response("文件不存在或已过期", status_code=404)
         path, name = found
-        ctype = "text/html; charset=utf-8" if path.suffix == ".html" else "text/plain; charset=utf-8"
-        return file_response(path, filename=name, content_type=ctype)
+        return file_response(path, filename=name, content_type=content_type_for(path))
 
     # ------------------------------------------------------------------ chat commands
     def _gate(self, event: AstrMessageEvent, name: str, level: str) -> str:
