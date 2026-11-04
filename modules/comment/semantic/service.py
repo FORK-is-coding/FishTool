@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from core.config import config
@@ -193,7 +194,8 @@ def _content_by_id(snapshot: Dict[str, Any]) -> Dict[str, str]:
 _ESTIMATE_SECONDS_PER_CALL = (10, 30)
 
 
-def _start_estimate(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+def _start_estimate(snapshot: Dict[str, Any],
+                    median_call_ms: Optional[int] = None) -> Dict[str, Any]:
     """开始前粗估：按当前快照的合格条数推算调用次数、token 与耗时区间。
 
     跨批候选数要等 phase1 分组后才知道，所以只给区间：下限为只跑批内（无跨批
@@ -213,15 +215,79 @@ def _start_estimate(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     content_bytes = sum(len((it.get("content") or "").encode("utf-8")) for it in eligible)
     system_bytes = len(SYSTEM_PROMPT.encode("utf-8"))
     per_round_tokens = content_bytes + batches * (system_bytes + OUTPUT_TOKENS)
+    # 单次耗时：有历史实测就用最近任务的中位数，没有则用固定 10~30 秒区间。
+    if median_call_ms is not None and median_call_ms > 0:
+        per_call = (median_call_ms / 1000.0, median_call_ms / 1000.0)
+    else:
+        per_call = _ESTIMATE_SECONDS_PER_CALL
     return {
         "eligible": n,
         "calls_min": calls_min,
         "calls_max": calls_max,
         "tokens_min": per_round_tokens,
         "tokens_max": per_round_tokens * (1 + MAX_CROSS_ROUNDS),
-        "seconds_min": calls_min * _ESTIMATE_SECONDS_PER_CALL[0],
-        "seconds_max": calls_max * _ESTIMATE_SECONDS_PER_CALL[1],
+        "seconds_min": int(calls_min * per_call[0]),
+        "seconds_max": int(calls_max * per_call[1]),
         "estimated": True,
+        "median_call_ms": median_call_ms,
+    }
+
+
+#: 前几次调用之前不显示剩余时间：样本太少，剩余时间会乱跳。
+_MIN_TIMED_CALLS_FOR_ETA = 3
+
+
+def _eta_for_task(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """运行中的剩余时间估计：剩余调用数下限 × 本任务实测平均耗时。
+
+    剩余调用数只算**确定还要发生**的分组调用（批内剩余批、跨批剩余窗口），
+    合并复核的调用数事先不知道，所以 calls_left 是下限，前端显示「至少」。
+    排队（queued）不显示剩余时间；前 _MIN_TIMED_CALLS_FOR_ETA 次调用前不显示。
+    正常完成/停止（非 running）不显示。
+    """
+    budget = state.get("budget") or {}
+    status = state.get("status")
+    if status == "queued":
+        return {"phase": "queued", "queued_note": "排队中，前面还有其他语义任务"}
+    if status != "running":
+        return None
+    timed_calls = int(budget.get("timed_calls") or 0)
+    if timed_calls < _MIN_TIMED_CALLS_FOR_ETA:
+        return None
+    avg_ms = int(budget.get("elapsed_call_ms") or 0) / timed_calls
+    phase = state.get("phase") or PHASE_BATCH
+    checkpoint = state.get("checkpoint") or {}
+    phase1 = checkpoint.get("phase1") or {}
+    calls_left = 0
+    done = 0
+    total = 0
+    if phase == PHASE_BATCH:
+        total = int(phase1.get("total") or 0)
+        marks = phase1.get("batches") or {}
+        done = sum(1 for m in marks.values() if m.get("status") == "done")
+        calls_left = max(0, total - done)
+        if total > 1:
+            # 多批任务批内结束后还有跨批阶段（至少一次分组调用）；
+            # 只有一批时没有跨批阶段，剩余就是 0，不能虚报还有一次。
+            calls_left = max(1, calls_left)
+        total = max(total, done + calls_left)
+    else:
+        cross = checkpoint.get("cross") or {}
+        plan = cross.get("plan") or []
+        windows_done = set(cross.get("windows_done") or [])
+        total = len(plan)
+        done = len(windows_done)
+        calls_left = max(0, total - done)
+    remaining_ms = int(calls_left * avg_ms)
+    return {
+        "phase": phase,
+        "done": done,
+        "total": total,
+        "calls_left": calls_left,
+        "avg_call_ms": int(avg_ms),
+        "remaining_ms": remaining_ms,
+        "elapsed_ms": int(budget.get("elapsed_call_ms") or 0),
+        "at_least": True,
     }
 
 
@@ -362,7 +428,7 @@ class SemanticService:
             # 预算模式：两档数值（选择“无限制”时的确认弹窗用）+ 按当前快照的开始前
             # 粗估（调用次数/token/耗时区间）+ 全局 AI 日上限当日剩余（默认档提示用）。
             "budget_profiles": {mode: dict(p) for mode, p in BUDGET_PROFILES.items()},
-            "estimate": _start_estimate(snapshot),
+            "estimate": _start_estimate(snapshot, self.store.recent_call_ms_median()),
             "global_daily": _global_daily_remaining(),
             "preference": {
                 "auto_fold": pref.get("auto_fold"),
@@ -417,8 +483,16 @@ class SemanticService:
         return _public_state(state)
 
     def status(self, task_id: str) -> Dict[str, Any]:
-        """返回任务公开态（同步；store 读取短事务）。"""
-        return _public_state(self.store.get_task(task_id))
+        """返回任务公开态（同步；store 读取短事务）。
+
+        eta 在剔除 checkpoint 之前计算：剩余批数/窗口数只能从 checkpoint 得到。
+        """
+        raw = self.store.get_task(task_id)
+        eta = _eta_for_task(raw)
+        state = _public_state(raw)
+        if eta is not None:
+            state["eta"] = eta
+        return state
 
     def results(self, task_id: str, page: int = 1,
                 page_size: int = 50) -> Dict[str, Any]:
@@ -432,7 +506,11 @@ class SemanticService:
         settle 记账(不发布)。store 负责终态幂等与不自动退款。
         """
         state = self.store.cancel_task(task_id, expected_revision)
-        return _public_state(state)
+        eta = _eta_for_task(state)
+        public = _public_state(state)
+        if eta is not None:
+            public["eta"] = eta
+        return public
 
     async def resume(self, task_id: str, expected_revision: int,
                      acknowledge_unknown: bool = False,
@@ -455,9 +533,13 @@ class SemanticService:
         resumed = self.store.resume_task(
             task_id, expected_revision, acknowledge_unknown=acknowledge_unknown,
             upgrade_to=upgrade_to)
+        eta = _eta_for_task(resumed)
+        public = _public_state(resumed)
+        if eta is not None:
+            public["eta"] = eta
         if resumed.get("status") == "queued":
             self._schedule(resumed["task_id"])
-        return _public_state(resumed)
+        return public
 
     async def shutdown(self) -> None:
         """停机：取消本实例所有后台句柄，不发任何自动请求、不改 store 状态。
@@ -548,18 +630,20 @@ class SemanticService:
         return state["revision"], state
 
     def _settle(self, task_id: str, revision: int,
-                usage_tokens: Optional[int]) -> Dict[str, Any]:
+                usage_tokens: Optional[int], call_ms: Optional[int] = None) -> Dict[str, Any]:
         """结算当前在飞 attempt（模型调用后）。返回结算后的 state。
 
         若并发取消导致 CAS 冲突:按**最新** revision 再结算一次(仅记账,不复位
         cancelled 状态);store 允许 cancelled 下"只记账不发布"。
         返回 state 让调用方据 status 判断是否应停止(绝不在非 running 下继续发布)。
+        call_ms 只在真实发起过模型调用时传入（取消/未知异常走 _settle_quiet 不传）。
         """
         try:
-            return self.store.settle_attempt(task_id, revision, usage_tokens)
+            return self.store.settle_attempt(task_id, revision, usage_tokens, call_ms=call_ms)
         except SemanticConflict:
             latest = self.store.get_task(task_id)
-            return self.store.settle_attempt(task_id, latest["revision"], usage_tokens)
+            return self.store.settle_attempt(task_id, latest["revision"], usage_tokens,
+                                             call_ms=call_ms)
 
     def _void(self, task_id: str, revision: int) -> Dict[str, Any]:
         """撤销当前在飞预约(请求确定未发出)。并发冲突时按最新 revision 再撤销一次。"""
@@ -599,15 +683,20 @@ class SemanticService:
         for _try in range(BATCH_ATTEMPTS):
             revision, _ = self._reserve(task_id, revision, est.total_tokens)
             usage_tokens: Optional[int] = None
+            call_ms: Optional[int] = None  # 只有真实发起过模型调用才计时
+            started_ms = time.monotonic()
             try:
                 result = await provider.group(
                     items, video_title, phase=phase, omit_temperature=omit_temperature)
+                call_ms = int((time.monotonic() - started_ms) * 1000)
             except asyncio.CancelledError:
                 # 硬取消发生在模型调用中:仍结算在飞记账(不退款),再原样上抛;
-                # 绝不返回数据 => 绝不发布。
+                # 绝不返回数据 => 绝不发布。取消路径不计耗时（_settle_quiet 不传 call_ms）。
                 self._settle_quiet(task_id, revision, None)
                 raise
             except SemanticProviderError as exc:
+                # 请求已发出（非 TOKEN_LIMIT 的预检拒绝），按实测耗时结算。
+                call_ms = int((time.monotonic() - started_ms) * 1000)
                 category = exc.category
                 if category == ProviderErrorCategory.TOKEN_LIMIT:
                     # 全局每日上限在发请求之前拦下(LLMClient._check_token_limit 在 post 之前):
@@ -617,7 +706,7 @@ class SemanticService:
                     raise SemanticResumableStop(
                         "全局每日 AI 用量已达上限", scope="global_daily") from exc
                 # 其余传输/参数层失败:请求可能已发出,已记账(settle)。
-                state = self._settle(task_id, revision, None)
+                state = self._settle(task_id, revision, None, call_ms=call_ms)
                 revision = state["revision"]
                 self._stop_if_not_running(state)  # 并发取消 => 抛 Conflict,不再续发
                 last_exc = exc
@@ -644,7 +733,8 @@ class SemanticService:
                 break  # UNKNOWN 等:保持原行为,本单元降级为各自独立
             except SemanticValidationError as exc:
                 # 拿到了响应但不合法(截断/拒答/ID 非法等):已记账,有界重试。
-                state = self._settle(task_id, revision, None)
+                call_ms = int((time.monotonic() - started_ms) * 1000)
+                state = self._settle(task_id, revision, None, call_ms=call_ms)
                 revision = state["revision"]
                 self._stop_if_not_running(state)
                 last_exc = exc
@@ -655,12 +745,12 @@ class SemanticService:
                 # 残留,续跑时 reserve 抛"已有在飞请求"被当作并发处置吞掉,任务卡在 running。
                 self._settle_quiet(task_id, revision, None)
                 raise
-            # 成功路径:结算实际/预留用量,再据结算后状态判断是否应停止。
+            # 成功路径:结算实际/预留用量与实测耗时,再据结算后状态判断是否应停止。
             usage = result.get("usage_tokens")
             usage_estimated = bool(result.get("usage_estimated", False))
             if isinstance(usage, int) and usage >= 0 and not usage_estimated:
                 usage_tokens = usage  # 有效真实用量:结算实际
-            state = self._settle(task_id, revision, usage_tokens)
+            state = self._settle(task_id, revision, usage_tokens, call_ms=call_ms)
             revision = state["revision"]
             # 并发取消已把任务改为非 running:抛 Conflict 让 worker 停,结果绝不发布。
             self._stop_if_not_running(state)

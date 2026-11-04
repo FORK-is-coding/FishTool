@@ -218,6 +218,7 @@ async function main() {
     await ctx.window.__semanticPanel.onStart();
     await flush();
     out.statusAfterFirst = ctx.window.__semanticPanel.state.task && ctx.window.__semanticPanel.state.task.status;
+    out.taskHtmlAfterStart = getEl('semantic-task-area').innerHTML;
     await ctx.window.__semanticPanel.onStart();
     await flush();
     out.postedKeys = postedKeys.slice();
@@ -589,6 +590,39 @@ def test_reload_with_partial_stop_pops_if_not_reported_yet(tmp_path) -> None:
                  "budget": {"stop_seq": 1, "attempt_count": 2, "settled_tokens": 300}}]
     out = _run({"statuses": statuses, "maxStatusCalls": 0, "stopReport": {}}, tmp_path)
     assert out["stopReports"] == ["语义折叠停止报告"]
+
+
+# ---------------------------------------------------------------------------
+# PR 5：预估时间展示
+# ---------------------------------------------------------------------------
+
+def test_overview_shows_estimate_before_start(tmp_path) -> None:
+    """开始前：概览区显示粗估的调用次数与耗时区间。"""
+    statuses = [_running(1)]
+    out = _run({"statuses": statuses, "maxStatusCalls": 0, "noLatest": True}, tmp_path)
+    # harness 的预检没有 estimate：概览不应出现粗估文案（不能显示假数字）。
+    assert "预计约" not in out["taskHtml"]
+
+
+def test_running_task_shows_eta_after_three_calls(tmp_path) -> None:
+    """运行中：eta 存在时任务区显示「已用 · 预计还需（进度）」；前三次调用前不显示。"""
+    eta = {"phase": "batch", "done": 2, "total": 10, "calls_left": 8,
+           "avg_call_ms": 2000, "remaining_ms": 16000, "elapsed_ms": 8000, "at_least": True}
+    statuses = [dict(_running(1), eta=eta)]
+    out = _run({"statuses": statuses, "maxStatusCalls": 1, "noLatest": True,
+                "startTwice": True}, tmp_path)
+    assert "已用约" in out["taskHtmlAfterStart"]
+    assert "预计还需" in out["taskHtmlAfterStart"]
+    assert "（2/10）" in out["taskHtmlAfterStart"]
+
+
+def test_queued_task_shows_queue_note_instead_of_eta(tmp_path) -> None:
+    """排队时显示排队说明，不显示剩余时间。"""
+    statuses = [{"status": "queued", "phase": "queued", "revision": 1,
+                 "eta": {"phase": "queued", "queued_note": "排队中，前面还有其他语义任务"}}]
+    out = _run({"statuses": statuses, "maxStatusCalls": 0}, tmp_path)
+    assert "排队中，前面还有其他语义任务" in out["taskHtml"]
+    assert "预计还需" not in out["taskHtml"]
 
 
 def test_reload_with_already_reported_stop_does_not_pop(tmp_path) -> None:
