@@ -135,6 +135,8 @@ async function run(testCase) {
     },
     window: {},
     API_BASE: '',
+    // 同步立即执行的 setTimeout：轮询没有总次数上限，用例里的任务必须是终态或 null，
+    // 否则会一直轮询到超时。测试进行中的任务请用 test_frontend_semantic_polling.py 的假时钟夹具。
     setTimeout: (fn) => { if (typeof fn === 'function') fn(); return 0; },
     clearTimeout() {}, setInterval: () => 0, clearInterval() {},
     requestAnimationFrame() {},
