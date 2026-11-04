@@ -32,7 +32,7 @@
 """
 from fastapi import APIRouter, HTTPException
 # 从 pydantic 导入符号
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StrictInt
 # 从 typing 导入符号
 from typing import Optional, Dict, Any, List
 # 从 datetime 导入符号
@@ -43,7 +43,11 @@ import httpx
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 # 从 core.config 导入符号
-from core.config import ConfigManager
+from core.config import (
+    ConfigManager,
+    LLM_DAILY_TOKEN_LIMIT_MAX,
+    LLM_DAILY_TOKEN_LIMIT_MIGRATED_KEY,
+)
 from core.logger import get_logger
 # 从 core.database 导入符号
 from core.database import get_session, LLMUsage
@@ -58,6 +62,17 @@ logger = get_logger(__name__)
 # LLM 地址与已保存密钥是绑定关系，改地址必须走 POST /llm 同时提交密钥，
 # 否则调用方可先改 api_base 再借 /llm/models 把已保存密钥发往任意地址。
 _PROTECTED_CONFIG_KEYS = {"llm", "llm.api_base", "llm.api_key"}
+
+# 全局每日 token 上限的配置键；经 PUT /api/config/ 写入时做取值校验。
+_DAILY_LIMIT_KEY = "llm.daily_token_limit"
+# 写上限时一并写入迁移标记：用户主动保存的值（包括 100000）以后不再被当作旧默认值迁移。
+_DAILY_LIMIT_MIGRATED_KEY = f"llm.{LLM_DAILY_TOKEN_LIMIT_MIGRATED_KEY}"
+
+
+def _valid_daily_limit(value: Any) -> bool:
+    """每日上限只接受 [0, MAX] 的整数（0 表示不限制），拒绝布尔、小数和字符串。"""
+    return (not isinstance(value, bool) and isinstance(value, int)
+            and 0 <= value <= LLM_DAILY_TOKEN_LIMIT_MAX)
 
 
 def _normalize_base_url(url: str) -> str:
@@ -94,8 +109,9 @@ class LLMConfigRequest(BaseModel):
     base_url: str = "https://api.openai.com/v1"
     # 赋值并准备后续使用
     model: str = "gpt-3.5-turbo"
-    # 赋值并准备后续使用
-    daily_token_limit: Optional[int] = None
+    # 全局每日 token 上限：0 表示不限制；None 表示不修改
+    daily_token_limit: Optional[StrictInt] = Field(
+        default=None, ge=0, le=LLM_DAILY_TOKEN_LIMIT_MAX)
 
 
 class LLMModelsRequest(BaseModel):
@@ -186,7 +202,7 @@ async def get_llm_config():
     # 将结果交回调用方
     同样会对 api_key 做脱敏处理，
     # 对数据进行加工/分发
-    供前端设置页回显当前模型与地址。
+    供前端配置页回显当前模型与地址。
     # 写入配置/属性，影响后续行为
 
     返回结构：
@@ -322,9 +338,11 @@ async def update_llm_config(request: LLMConfigRequest):
         config.set('llm.api_base', request.base_url)
         config.set('llm.model', request.model)
         
-        # 每日限额可选，为空不覆盖旧值
-        if request.daily_token_limit:
+        # 每日限额可选：未传不覆盖旧值；0 是合法值（不限制），不能用真值判断
+        if request.daily_token_limit is not None:
             config.set('llm.daily_token_limit', request.daily_token_limit)
+            # 用户主动设置过：写迁移标记，防止下次启动把主动保存的 100000 当旧默认值迁移掉
+            config.set(_DAILY_LIMIT_MIGRATED_KEY, 1)
         
         # 保存配置 - 使用 save_config()
         # 所有 set 只是改内存，必须 save_config 才落盘
@@ -402,7 +420,10 @@ async def get_llm_usage(days: int = 7):
         ).filter(
             LLMUsage.created_at >= start_date
         ).first()
-        
+
+        # 今日用量与上限（与每日限额检查同口径），供配置页显示“今日已用 / 上限”
+        today_usage = _today_usage(session)
+
         # 关闭连接释放资源
         # 释放连接/窗口资源
         session.close()
@@ -430,12 +451,30 @@ async def get_llm_usage(days: int = 7):
             "daily_usage": usage_data,
             # total 可能为 None（无记录），三元表达式兜底
             "total_tokens": total.total_tokens or 0 if total else 0,
-            "total_requests": total.total_requests or 0 if total else 0
+            "total_requests": total.total_requests or 0 if total else 0,
+            "today": today_usage,
         }
-        
+
     except Exception as e:
         # 抛出异常中断流程
         raise HTTPException(status_code=500, detail=f"获取用量统计失败: {str(e)}")
+
+
+def _today_usage(session) -> Dict[str, Any]:
+    """今日全局用量与上限，口径与 LLMClient 的每日限额检查一致。
+
+    当日用量用限额检查同一个按日期字符串取记录的函数（不按 created_at），
+    上限按 LLMClient 同样的规整规则读取；上限为 0 时 remaining 为 None，表示不限制。
+    不新建 LLMClient（构造要求已配置密钥）。
+    """
+    from datetime import date
+    from llm.client import _coerce_daily_limit, _remaining, _usage_records_on
+    from core.config import LLM_DAILY_TOKEN_LIMIT_DEFAULT
+
+    limit = _coerce_daily_limit(
+        ConfigManager().get('llm.daily_token_limit', LLM_DAILY_TOKEN_LIMIT_DEFAULT))
+    used = sum(int(r.total_tokens or 0) for r in _usage_records_on(session, date.today()))
+    return {"total_tokens": used, "limit": limit, "remaining": _remaining(limit, used)}
 
 
 @router.put("/")
@@ -455,12 +494,23 @@ async def update_config(request: ConfigUpdateRequest):
     key = request.key.strip()
     if key in _PROTECTED_CONFIG_KEYS or key.split('.')[0] == 'secrets':
         raise HTTPException(status_code=400, detail="LLM 地址与密钥请通过 POST /api/config/llm 修改")
+    if key == _DAILY_LIMIT_KEY and not _valid_daily_limit(request.value):
+        raise HTTPException(
+            status_code=422,
+            detail=f"每日 token 上限必须是 0 到 {LLM_DAILY_TOKEN_LIMIT_MAX} 之间的整数（0 表示不限制）",
+        )
     try:
         # 赋值并准备后续使用
         config = ConfigManager()
         
         # set 支持点分路径自动创建嵌套结构
-        config.set(request.key, request.value)
+        if key == _DAILY_LIMIT_KEY:
+            # 校验用的是 strip 后的键，写入也必须用同一个键，否则带空格的键会写出脏路径。
+            config.set(key, request.value)
+            # 用户主动设置过：写迁移标记，防止下次启动把主动保存的 100000 当旧默认值迁移掉
+            config.set(_DAILY_LIMIT_MIGRATED_KEY, 1)
+        else:
+            config.set(request.key, request.value)
         # 落盘持久化
         config.save_config()
         # 同 update_llm_config：上面用新建实例写盘，运行中的模块级单例需 reload 才能读到新值

@@ -20,6 +20,15 @@ import logging
 # 创建日志记录器，用于输出配置管理相关的日志
 logger = logging.getLogger(__name__)
 
+# 全局每日 LLM token 上限（llm.daily_token_limit），所有 AI 功能共用。
+# 0 表示不限制；路由层拒绝负数与超过 MAX 的值。
+LLM_DAILY_TOKEN_LIMIT_DEFAULT = 2_000_000
+LLM_DAILY_TOKEN_LIMIT_MAX = 1_000_000_000
+# v0.3.0 及之前的默认值。仍停在这个值、且用户没有在 user_config.yaml 覆盖的配置，
+# 启动时迁移到新默认值一次；迁移标记防止用户之后主动改回 10 万时被再次改写。
+LLM_DAILY_TOKEN_LIMIT_LEGACY = 100_000
+LLM_DAILY_TOKEN_LIMIT_MIGRATED_KEY = "daily_token_limit_migrated"
+
 
 class ConfigManager:
     """配置管理器 - 统一管理所有配置项
@@ -134,11 +143,17 @@ class ConfigManager:
             self.save_config()
         
         # 第二步：加载用户自定义配置并合并（覆盖默认配置）
+        user_config: Dict[str, Any] = {}
         if self.user_config_path.exists():
             with open(self.user_config_path, 'r', encoding='utf-8') as f:
                 user_config = yaml.safe_load(f) or {}
-                # 深度合并：递归合并嵌套字典，而不是直接覆盖
-                self._deep_merge(self._config, user_config)
+
+        # 合并前处理主配置里的旧默认值，判断依据是 config.yaml 的原值。
+        self._migrate_llm_daily_limit(user_config)
+
+        if user_config:
+            # 深度合并：递归合并嵌套字典，而不是直接覆盖
+            self._deep_merge(self._config, user_config)
         
         # 第三步：加载敏感配置（加密存储的敏感信息）
         if self.secrets_path.exists():
@@ -157,6 +172,44 @@ class ConfigManager:
                 # 初始化为空字典，避免后续访问出错
                 self._config['secrets'] = {}
     
+    def _migrate_llm_daily_limit(self, user_config: Dict[str, Any]) -> None:
+        """把 config.yaml 中仍为旧默认值的全局每日 token 上限迁移到新默认值（只做一次）。
+
+        只有同时满足以下条件才迁移：
+        - config.yaml 的 ``llm.daily_token_limit`` 恰好等于旧默认值 100000；
+        - 没有迁移标记（标记存在说明已迁移过，用户之后改回 10 万是主动选择）；
+        - user_config.yaml 没有覆盖该键（覆盖说明是用户主动设置）。
+
+        迁移后写入标记并落盘；写盘失败只记日志，不影响启动，下次启动会再试。
+
+        Args:
+            user_config: 已读取的 user_config.yaml 内容（可能为空字典）。
+        """
+        llm = self._config.get('llm')
+        if not isinstance(llm, dict):
+            return
+        if llm.get(LLM_DAILY_TOKEN_LIMIT_MIGRATED_KEY):
+            return
+        user_llm = user_config.get('llm') if isinstance(user_config, dict) else None
+        if isinstance(user_llm, dict) and 'daily_token_limit' in user_llm:
+            return
+        current = llm.get('daily_token_limit')
+        # 只认整数 100000：bool 是 int 子类、100000.0 == 100000 为真，都要排除
+        if type(current) is not int or current != LLM_DAILY_TOKEN_LIMIT_LEGACY:
+            return
+        llm['daily_token_limit'] = LLM_DAILY_TOKEN_LIMIT_DEFAULT
+        llm[LLM_DAILY_TOKEN_LIMIT_MIGRATED_KEY] = 1
+        try:
+            self.save_config()
+        except Exception as exc:  # noqa: BLE001 - 迁移只是附带动作，任何写盘错误都不能阻断启动
+            # 失败后每个新 ConfigManager 实例都会重试，只记一行告警，不带堆栈，避免刷屏。
+            logger.warning("全局每日 token 上限迁移写盘失败，本次仅在内存中生效: %s", exc)
+            return
+        logger.info(
+            "全局每日 token 上限已从旧默认值 %s 迁移为 %s",
+            LLM_DAILY_TOKEN_LIMIT_LEGACY, LLM_DAILY_TOKEN_LIMIT_DEFAULT,
+        )
+
     def _get_default_config(self) -> Dict[str, Any]:
         """获取默认配置（内置配置项）
         
@@ -233,7 +286,10 @@ class ConfigManager:
                 "max_tokens": 2000,        # 单次请求最大token数
                 "temperature": 0.7,        # 温度参数：控制输出的随机性（0-1）
                 "batch_size": 100,         # 批量处理评论的数量
-                "daily_token_limit": 100000  # 每日token用量限制（成本控制）
+                # 每日 token 用量上限（所有 AI 功能共用，0 表示不限制）
+                "daily_token_limit": LLM_DAILY_TOKEN_LIMIT_DEFAULT,
+                # 新安装直接带迁移标记，避免再走一次旧默认值迁移
+                LLM_DAILY_TOKEN_LIMIT_MIGRATED_KEY: 1,
             },
             
             # 爬虫配置
