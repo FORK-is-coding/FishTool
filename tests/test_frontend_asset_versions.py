@@ -9,7 +9,8 @@
 - ``-v029ui20261101``：桌面端 UI 对齐 + v0.2.9 PR 改动过的脚本与样式表；
 - ``-v030``：v0.3.0 PR（版本号与 AGPL-3.0 声明）改动过的脚本；
 - ``-v031``：v0.3.1 PR（开场 BUILD 号）改动过的脚本，必须是最后一段后缀；
-- ``-budget20261104``：语义折叠预算模式 / 停止报告 / 预估时间一轮改动的资源。
+- ``-budget20261104``：语义折叠预算模式 / 停止报告 / 预估时间一轮改动的资源；
+- ``-flexgap20261105``：给语义预算模式补 flex gap 兜底，``style.flexgap.css`` 追加。
 """
 from pathlib import Path
 import re
@@ -39,6 +40,10 @@ BUMPED_V030 = {
 # v0.3.1 PR：开场 BUILD 号改为 0.3.1，app.intro.js 追加 -v031。
 BUMPED_V031 = {
     "js": ("app.intro.js",),
+}
+# flex gap 兜底补漏 PR：style.flexgap.css 新增语义预算模式两条规则，追加 -flexgap20261105。
+BUMPED_FLEXGAP_1105 = {
+    "css": ("style.flexgap.css",),
 }
 # 语义折叠（可逆）PR：新增 app.comment.semantic.js / style.comment.semantic.css，并给
 # app.comment.js 追加 -semantic20261102 后缀（挂入当前 BV 钩子，老缓存必须失效重新加载）。
@@ -80,6 +85,7 @@ def test_assets_changed_in_ui_redesign_end_with_ui_suffix() -> None:
     """视觉改版 PR 改过的脚本与样式表都带 -ui20261101；没被后续轮次改过的仍以它结尾。"""
     later = (
         set(BUMPED_V029["js"]) | set(BUMPED_V029["css"]) | set(BUMPED_SEMANTIC["js"]) | set(BUMPED_V030["js"])
+        | set(BUMPED_FLEXGAP_1105["css"])
     )
     for kind, names in BUMPED_UI_1101.items():
         versions = _versions(kind)
@@ -92,7 +98,7 @@ def test_assets_changed_in_ui_redesign_end_with_ui_suffix() -> None:
 
 def test_assets_changed_in_v029_end_with_v029_suffix() -> None:
     """桌面端 UI 对齐 + v0.2.9 PR 改过的脚本与样式表都带 -v029ui20261101；没被 v0.3.0 改过的仍以它结尾。"""
-    later = set(BUMPED_V030["js"])
+    later = set(BUMPED_V030["js"]) | set(BUMPED_FLEXGAP_1105["css"])
     for kind, names in BUMPED_V029.items():
         versions = _versions(kind)
         for name in names:
@@ -119,6 +125,16 @@ def test_assets_changed_in_v031_end_with_v031_suffix() -> None:
     for name in BUMPED_V031["js"]:
         assert name in versions, f"index.html 未引用 {name}"
         assert versions[name].endswith("-v031"), f"{name} 版本号未更新: {versions[name]}"
+
+
+
+def test_flexgap_fallback_patch_ends_with_its_suffix() -> None:
+    """flex gap 兜底补漏 PR 改过的样式表以 -flexgap20261105 结尾（只追加，不改历史后缀）。"""
+    versions = _versions("css")
+    for name in BUMPED_FLEXGAP_1105["css"]:
+        assert name in versions, f"index.html 未引用 {name}"
+        assert "-v029ui20261101" in versions[name], f"{name} 版本号未更新: {versions[name]}"
+        assert versions[name].endswith("-flexgap20261105"), f"{name} 版本号未更新: {versions[name]}"
 
 
 def test_semantic_fold_assets_carry_bumped_version() -> None:

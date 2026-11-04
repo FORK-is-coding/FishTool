@@ -10,6 +10,10 @@
 
 ## [未发布]
 
+### 语义预算模式补 flex gap 兜底
+
+- `style.flexgap.css` 为 `.semantic-budget-mode`（14px）和 `.semantic-budget-option`（4px）补上 `.no-flex-gap` 兜底规则，`style.flexgap.css` 追加缓存后缀 `-flexgap20261105`。只在不支持 flex gap 的旧内核（Chromium 83 及以下）中生效。
+
 ### 版本号升到 v0.3.1
 
 - 侧栏、欢迎页与开场动画中的可见版本号由 v0.3.0 改为 v0.3.1；`app.intro.js` 追加缓存后缀 `-v031`。
