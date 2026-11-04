@@ -26,6 +26,7 @@ from .fishtool_adapter.events import EventRelay
 from .fishtool_adapter.exports import ExportStore, content_type_for, safe_filename
 from .fishtool_adapter.jobs import JobRunner
 from .fishtool_adapter.notifier import SEND_GAP_S, AlertNotifier
+from .fishtool_adapter.replies import Reply
 from .fishtool_adapter.paths import DataLayout
 from .fishtool_adapter.proxy import EngineProxy, envelope
 from .fishtool_adapter.runtime_env import EngineEnvError, ensure_engine_env, remove_engine_env
@@ -293,10 +294,18 @@ class FishToolPlugin(Star):
     def _denied_text(event: AstrMessageEvent) -> str:
         return G.DENIED_TEXT.format(sid=event.get_sender_id())
 
-    async def _send_text(self, umo: str, text: str) -> bool:
-        """主动推送一条文本到会话；失败只记日志，由调用方决定是否退回。"""
+    @staticmethod
+    def _reply_chain(reply, self_id: str = "") -> MessageChain:
+        """Reply → 消息链：条目多或全文长时改用合并转发（方案 6.5），否则普通文本。纯字符串原样发送。"""
+        if not isinstance(reply, Reply) or not reply.use_forward():
+            return MessageChain().message(str(reply))
+        uin = self_id or "0"
+        return MessageChain([Nodes([Node(content=[Plain(text)], name="FishTool", uin=uin) for text in reply.nodes()])])
+
+    async def _send_text(self, umo: str, text) -> bool:
+        """主动推送到会话（text 可以是 Reply）；失败只记日志，由调用方决定是否退回。"""
         try:
-            await self.context.send_message(umo, MessageChain().message(text))
+            await self.context.send_message(umo, self._reply_chain(text, self.subs.self_id_for(umo)))
             return True
         except Exception as exc:  # noqa: BLE001 - 推送失败（平台断开、会话失效）不能影响其他任务
             logger.warning(f"[fishtool] 推送到 {umo} 失败: {exc}")
@@ -305,25 +314,27 @@ class FishToolPlugin(Star):
     async def _send_alert_batch(self, sessions: list[dict], alerts: list[dict], overflow: int) -> None:
         """一批告警推给所有订阅会话。1 条发普通文本，多条发合并转发（每条一个节点）。"""
         head = f"【FishTool 舆情告警】{len(alerts) + overflow} 条"
-        lines = [self.cmds.format_alert(alert) for alert in alerts]
-        if overflow:
-            lines.append(f"……另有 {overflow} 条，用 /fishtool 告警 查看")
+        tail = [f"……另有 {overflow} 条，用 /fishtool 告警 查看"] if overflow else []
+        reply = Reply(head, [self.cmds.format_alert(alert) for alert in alerts], tail)
         for index, sub in enumerate(sessions):
             if index:
                 await asyncio.sleep(SEND_GAP_S)
-            if len(lines) == 1:
-                chain = MessageChain().message(f"{head}\n{lines[0]}")
-            else:
+            # 推送：1 条发普通文本，多条就用合并转发（比指令回复的阈值更低，避免个人号连发被风控）
+            if len(alerts) + overflow > 1:
                 uin = sub.get("self_id") or "0"
-                nodes = [Node(content=[Plain(head)], name="FishTool", uin=uin)]
-                nodes += [Node(content=[Plain(line)], name="FishTool", uin=uin) for line in lines]
-                chain = MessageChain([Nodes(nodes)])
+                chain = MessageChain([Nodes([Node(content=[Plain(t)], name="FishTool", uin=uin) for t in reply.nodes()])])
+            else:
+                chain = MessageChain().message(reply.as_text())
             try:
                 await self.context.send_message(sub["umo"], chain)
             except Exception as exc:  # noqa: BLE001 - 某个会话失效不影响其他订阅
                 logger.warning(f"[fishtool] 告警推送到 {sub['umo']} 失败: {exc}")
 
-    async def _safe(self, coro) -> str:
+    def _result(self, event: AstrMessageEvent, reply):
+        """handler 里回复：长内容用合并转发，节点头像用机器人自己的 QQ 号。"""
+        return event.chain_result(self._reply_chain(reply, str(event.get_self_id() or "")).chain)
+
+    async def _safe(self, coro):
         """只把 CommandError 转成用户可读文字；其他异常交给调用方或框架兜底。"""
         try:
             return await coro
@@ -407,7 +418,7 @@ class FishToolPlugin(Star):
         """最近一轮热点发现的热搜词和视频（数量 1~30）"""
         if self._gate(event, "hotspot", G.PUBLIC) != G.OK:
             return
-        yield event.plain_result(await self._safe(self.cmds.hotspot_text(limit)))
+        yield self._result(event, await self._safe(self.cmds.hotspot_text(limit)))
 
     @fishtool.command("告警")
     async def cmd_alerts(self, event: AstrMessageEvent, limit: str = "5", level: str = "all"):
@@ -417,7 +428,7 @@ class FishToolPlugin(Star):
             yield event.plain_result(self._denied_text(event))
         if gate != G.OK:
             return
-        yield event.plain_result(await self._safe(self.cmds.alerts_text(limit, level)))
+        yield self._result(event, await self._safe(self.cmds.alerts_text(limit, level)))
 
     @fishtool.command("舆情")
     async def cmd_monitor(self, event: AstrMessageEvent, bvid: str = "", strategy: str = "normal"):

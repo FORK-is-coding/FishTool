@@ -96,6 +96,26 @@ def fonts():
     return rp.resolve_fonts({}, log)
 
 
+def test_tag_cloud_bolds_frequent_tags_with_stroke(fonts):
+    """方案 9.7.4：权重 ≥ 0.55 的标签加粗，用 PDF 文字渲染模式 2（填充 + 0.3 pt 同色描边）模拟。"""
+    from reportlab.graphics import renderPDF
+    from reportlab.graphics.shapes import Group, String
+
+    spec = rc.ChartSpec("tag_cloud", "x", ["高频", "中频", "低频"], [10.0, 6.0, 2.0])  # 权重 1.0 / 0.6 / 0.2
+    drawing = rc._tag_cloud_drawing(spec, 400, fonts)
+    bold = [n for n in drawing.contents if isinstance(n, Group)]
+    plain = [n for n in drawing.contents if isinstance(n, String)]
+    assert len(bold) == 2 and len(plain) == 1
+    assert all(n.contents[-1].textRenderMode == 2 for n in bold)
+    assert plain[0].text == "低频"
+
+    data = renderPDF.drawToString(drawing)
+    page = pypdf.PdfReader(io.BytesIO(data)).pages[0]
+    content = page.get_contents().get_data().decode("latin-1")
+    assert content.count(" 2 Tr ") == 2 and f"{rc.BOLD_STROKE_PT:g} w".lstrip("0") in content
+    assert page.extract_text().split() == ["高频", "中频", "低频"]  # 描边不会让文字重复
+
+
 def test_radar_scale_fixed_to_100(fonts):
     spec = rc.ChartSpec("engagement", "x", ["a\n1%", "b\n2%", "c\n3%"], [1.0, 2.0, 3.0])
     chart = rc._spider_drawing(spec, 240, 150, fonts).contents[0]

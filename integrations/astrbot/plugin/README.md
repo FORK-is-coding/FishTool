@@ -72,7 +72,7 @@ https://github.com/FORK-is-coding/astrbot_plugin_FishTool
 | `/fishtool 订阅` / `/fishtool 退订` | 管理员 | 本会话接收 / 不再接收评论舆情告警推送 |
 | `/fishtool 自诊 [UID]` | 管理员 | 生成账号自诊报告并以 PDF 文件发到本会话；不填 UID 用已登录的 B 站账号 |
 
-`/ft` 是 `/fishtool` 的别名；只发 `/fishtool` 会列出全部子指令。
+`/ft` 是 `/fishtool` 的别名；只发 `/fishtool` 会列出全部子指令。告警、热点、舆情的结果超过 5 条或 500 字时以**合并转发**发送，避免刷屏。
 
 - **管理员**指 AstrBot 配置里的 `admins_id`（用 `/sid` 查看自己的 ID）。舆情、监控开关、订阅、自诊会触发 LLM 调用、用你的 Cookie 抓取 B 站或把告警推到某个会话，始终只限管理员，没有开关。
 - **冷却**：公开指令在同一会话内默认 10 秒一次（`chat.cooldown_seconds`），冷却期内不回复；管理员不受限。“权限不足”的提示也按同一窗口限频：同一个人在同一会话里反复调用管理员指令，窗口内只提示一次。

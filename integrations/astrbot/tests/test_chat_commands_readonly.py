@@ -302,15 +302,25 @@ def test_alerts_query_and_format():
     cmds, _, client = make(routes={"/api/comment/alerts": (200, {"success": True, "alerts": [
         {"id": 1, "level": "high", "message": long_msg, "created_at": "2026-11-04T09:00:00"},
     ], "count": 1})})
-    text = run(cmds.alerts_text("50", "HIGH"))
+    reply = run(cmds.alerts_text("50", "HIGH"))
+    text = reply.as_text()
     assert client.calls[0]["query"] == {"is_read": "false", "limit": 20, "level": "high"}
     assert "（高级）" in text and "[高] 2026-11-04 09:00" in text
     assert len(text.splitlines()[1]) < 260
+    assert not reply.use_forward()  # 1 条、长度已截断：普通文本
+
+
+def test_alerts_many_use_forward():
+    alerts = [{"id": i, "level": "high", "message": f"m{i}"} for i in range(8)]
+    cmds, _, _ = make(routes={"/api/comment/alerts": (200, {"success": True, "alerts": alerts, "count": 8})})
+    reply = run(cmds.alerts_text(20))
+    assert reply.use_forward()
+    assert reply.nodes()[0] == "【未读告警】最近 8 条" and len(reply.nodes()) == 9
 
 
 def test_alerts_empty():
     cmds, _, client = make(routes={"/api/comment/alerts": (200, {"success": True, "alerts": [], "count": 0})})
-    assert run(cmds.alerts_text(5)) == "暂无未读告警"
+    assert run(cmds.alerts_text(5)).as_text() == "暂无未读告警"
     assert "level" not in client.calls[0]["query"]
 
 
@@ -335,7 +345,7 @@ def test_format_alert_tolerates_odd_types():
 
 def test_hotspot_no_snapshot():
     cmds, _, _ = make(routes={"/api/hotspot/discovery/latest": (200, {"success": True, "data": {"snapshot": None}})})
-    assert "尚未跑过" in run(cmds.hotspot_text(10))
+    assert "尚未跑过" in run(cmds.hotspot_text(10)).as_text()
 
 
 def test_hotspot_lists_keywords_and_videos():
@@ -348,11 +358,22 @@ def test_hotspot_lists_keywords_and_videos():
         ],
         "videos": [{"bvid": "BV1xx411c7mD", "source_details": [{"view": None}, {"view": 12345}]}],
     }}})})
-    text = run(cmds.hotspot_text(2))
-    lines = text.splitlines()
+    reply = run(cmds.hotspot_text(2))
+    lines = reply.as_text().splitlines()
     assert lines[2] == "1. 甲" and lines[3] == "2. b（热度 10）"
     assert "c" not in lines[2:4]
-    assert "BV1xx411c7mD（播放 12,345）" in text
+    assert "BV1xx411c7mD（播放 12,345）" in reply.as_text()
+    assert not reply.use_forward()  # 4 条：普通文本
+
+
+def test_hotspot_long_list_uses_forward():
+    keywords = [{"keyword": f"k{i}", "rank": i} for i in range(1, 31)]
+    cmds, _, _ = make(routes={"/api/hotspot/discovery/latest": (200, {"success": True, "data": {"snapshot": {
+        "keywords": keywords, "videos": [],
+    }}})})
+    reply = run(cmds.hotspot_text(30))
+    assert reply.use_forward()
+    assert reply.nodes()[1] == "热搜词：" and reply.nodes()[2] == "1. k1"
 
 
 MONITOR_OK = (200, {"success": True, "data": {
@@ -368,20 +389,34 @@ MONITOR_OK = (200, {"success": True, "data": {
 
 def test_monitor_video_summary_and_long_timeout():
     cmds, _, client = make(routes={"/api/comment/monitor": MONITOR_OK}, ecfg={"long_request_timeout_s": 1800})
-    text = run(cmds.monitor_video_text("BV1xx411c7mD", "FULL"))
+    reply = run(cmds.monitor_video_text("BV1xx411c7mD", "FULL"))
+    text = reply.as_text()
     call = client.calls[0]
     assert call["method"] == "POST" and call["timeout"] == 1800
     assert call["json"] == {"bvid": "BV1xx411c7mD", "strategy": "full"}
     assert "全量" in text and "采集 120 条，去重后 98 条" in text
-    assert "负面 35%" in text and "触发 7 条告警" in text and "另有 2 条" in text
+    assert "负面 35%" in text and "触发 7 条告警" in text
     assert "BV1xx411c7mD [" not in text  # 摘要标题已有 BV 号，告警行不再重复
+    # 7 条告警 > 5：改用合并转发，全部列出、不再截断成“另有 N 条”
+    assert reply.use_forward() and "另有" not in text
+    nodes = reply.nodes()
+    assert nodes[0].startswith("【舆情分析】") and "触发 7 条告警" in nodes[0]
+    assert len(nodes) == 1 + 7
+
+
+def test_monitor_video_few_alerts_plain_text():
+    data = dict(MONITOR_OK[1]["data"], alerts=MONITOR_OK[1]["data"]["alerts"][:2])
+    cmds, _, _ = make(routes={"/api/comment/monitor": (200, {"success": True, "data": data})})
+    reply = run(cmds.monitor_video_text("BV1xx411c7mD"))
+    assert not reply.use_forward()
+    assert "触发 2 条告警：" in reply.as_text()
 
 
 def test_monitor_video_not_collected():
     cmds, _, _ = make(routes={"/api/comment/monitor": (200, {"success": True, "data": {
         "success": False, "error": "未采集到评论数据，请检查B站Cookie",
     }})})
-    assert "未完成：未采集到评论数据" in run(cmds.monitor_video_text("BV1xx411c7mD"))
+    assert "未完成：未采集到评论数据" in run(cmds.monitor_video_text("BV1xx411c7mD")).as_text()
 
 
 def test_monitor_video_validates_before_call():
@@ -487,4 +522,4 @@ def test_hotspot_empty_snapshot():
     cmds, _, _ = make(routes={"/api/hotspot/discovery/latest": (200, {"success": True, "data": {
         "snapshot": {"keywords": [], "videos": []},
     }})})
-    assert "没有可展示" in run(cmds.hotspot_text(10))
+    assert "没有可展示" in run(cmds.hotspot_text(10)).as_text()

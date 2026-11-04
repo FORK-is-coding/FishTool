@@ -10,6 +10,7 @@ import time
 
 from .constants import ALERT_LEVELS
 from .errors import CommandError, EngineUnavailable
+from .replies import Reply
 
 BVID_RE = re.compile(r"^BV[0-9A-Za-z]{10}$")
 UID_RE = re.compile(r"^\d{1,20}$")
@@ -19,8 +20,6 @@ LEVEL_CHOICES = ("all",) + ALERT_LEVELS
 LOGIN_CACHE_S = 60
 #: 单条评论原文在消息里的最大长度。
 TEXT_LIMIT = 200
-#: 舆情摘要里最多列出的告警条数。
-MAX_ALERT_LINES = 5
 #: 采集策略（web/routers/comment.py 只接受 normal/full）。
 STRATEGIES = ("normal", "full")
 #: 常驻监控的操作。
@@ -191,7 +190,7 @@ class FishToolCommands:
             parts.append(f"最近错误：{shorten(snap['last_error'], 80)}")
         return "，".join(parts)
 
-    async def alerts_text(self, limit, level: str = "all") -> str:
+    async def alerts_text(self, limit, level: str = "all") -> Reply:
         level = self.check_level(level)
         limit = clamp(limit, 1, 20, 5)
         query = {"is_read": "false", "limit": limit}
@@ -202,37 +201,36 @@ class FishToolCommands:
         alerts = [a for a in (alerts or []) if isinstance(a, dict)]
         scope = "" if level == "all" else f"（{_LEVEL_LABEL[level]}级）"
         if not alerts:
-            return f"暂无未读告警{scope}"
-        lines = [f"【未读告警{scope}】最近 {len(alerts)} 条"]
-        for index, alert in enumerate(alerts, 1):
-            lines.append(f"{index}. {self.format_alert(alert)}")
-        return "\n".join(lines)
+            return Reply(f"暂无未读告警{scope}")
+        items = [f"{index}. {self.format_alert(alert)}" for index, alert in enumerate(alerts, 1)]
+        return Reply(f"【未读告警{scope}】最近 {len(alerts)} 条", items)
 
-    async def hotspot_text(self, limit) -> str:
+    async def hotspot_text(self, limit) -> Reply:
         limit = clamp(limit, 1, 30, 10)
         snap = _data(await self._call("GET", "/api/hotspot/discovery/latest")).get("snapshot")
         if not isinstance(snap, dict):
-            return "尚未跑过热点发现轮，请先在面板开启热点发现或等待下一轮采样"
+            return Reply("尚未跑过热点发现轮，请先在面板开启热点发现或等待下一轮采样")
         keywords = [k for k in (snap.get("keywords") or []) if isinstance(k, dict)]
         videos = [v for v in (snap.get("videos") or []) if isinstance(v, dict)]
         keywords.sort(key=lambda k: (k.get("rank") is None, k.get("rank") or 0))
-        lines = ["【最近一轮热点】"]
+        head = "【最近一轮热点】"
         captured = snap.get("captured_epoch_s")
         if isinstance(captured, (int, float)) and captured > 0:
-            lines[0] += " " + time.strftime("%m-%d %H:%M", time.localtime(captured))
+            head += " " + time.strftime("%m-%d %H:%M", time.localtime(captured))
+        items: list[str] = []
         if keywords:
-            lines.append("热搜词：")
+            items.append("热搜词：")
             for index, item in enumerate(keywords[:limit], 1):
                 name = shorten(item.get("show_name") or item.get("keyword") or "", 30)
                 heat = item.get("heat_score")
-                lines.append(f"{index}. {name}" + (f"（热度 {heat}）" if isinstance(heat, int) else ""))
+                items.append(f"{index}. {name}" + (f"（热度 {heat}）" if isinstance(heat, int) else ""))
         if videos:
-            lines.append("热门视频：")
+            items.append("热门视频：")
             for index, item in enumerate(videos[:limit], 1):
-                lines.append(f"{index}. {self._video_line(item)}")
-        if len(lines) == 1:
-            lines.append("本轮没有可展示的热搜词或视频")
-        return "\n".join(lines)
+                items.append(f"{index}. {self._video_line(item)}")
+        if not items:
+            items.append("本轮没有可展示的热搜词或视频")
+        return Reply(head, items)
 
     # ------------------------------------------------------------------ self-diagnosis
     async def resolve_uid(self, uid: str = "") -> str:
@@ -302,7 +300,7 @@ class FishToolCommands:
         return [a for a in (alerts or []) if isinstance(a, dict)]
 
     # ------------------------------------------------------------------ write commands
-    async def monitor_video_text(self, bvid: str, strategy: str = "normal") -> str:
+    async def monitor_video_text(self, bvid: str, strategy: str = "normal") -> Reply:
         """跑一次单视频评论舆情（/comment/monitor，长请求），返回摘要。"""
         bvid = self.check_bvid(bvid)
         strategy = self.check_strategy(strategy)
@@ -311,13 +309,10 @@ class FishToolCommands:
             json={"bvid": bvid, "strategy": strategy},
         )
         data = _data(body)
-        lines = [f"【舆情分析】{bvid}（{'全量' if strategy == 'full' else '快速'}）"]
+        title = f"【舆情分析】{bvid}（{'全量' if strategy == 'full' else '快速'}）"
         if not data.get("success", True):
-            lines.append(f"未完成：{shorten(data.get('error') or '未采集到评论', 160)}")
-            return "\n".join(lines)
-        collected = data.get("collected_count")
-        processed = data.get("processed_count")
-        lines.append(f"采集 {collected} 条，去重后 {processed} 条")
+            return Reply(title, [f"未完成：{shorten(data.get('error') or '未采集到评论', 160)}"])
+        overview = [f"采集 {data.get('collected_count')} 条，去重后 {data.get('processed_count')} 条"]
         sentiment = data.get("sentiment_result") if isinstance(data.get("sentiment_result"), dict) else None
         if sentiment:
             parts = []
@@ -327,19 +322,15 @@ class FishToolCommands:
                 if isinstance(value, (int, float)):
                     parts.append(f"{label} {value:.0%}")
             if parts:
-                lines.append("情感：" + "，".join(parts))
+                overview.append("情感：" + "，".join(parts))
         alerts = [a for a in (data.get("alerts") or []) if isinstance(a, dict)]
-        if alerts:
-            lines.append(f"触发 {len(alerts)} 条告警：")
-            for alert in alerts[:MAX_ALERT_LINES]:
-                lines.append(f"- {self.format_alert({**alert, 'bvid': ''})}")
-            if len(alerts) > MAX_ALERT_LINES:
-                lines.append(f"……另有 {len(alerts) - MAX_ALERT_LINES} 条，见面板")
-        else:
-            lines.append("未触发告警")
-        if data.get("warning"):
-            lines.append(f"注意：{shorten(data['warning'], 160)}")
-        return "\n".join(lines)
+        overview.append(f"触发 {len(alerts)} 条告警" + ("：" if alerts else ""))
+        tail = [f"注意：{shorten(data['warning'], 160)}"] if data.get("warning") else []
+        # 标题行已有 BV 号，告警行不再重复；条目多时由调用方改用合并转发，不再截断
+        items = [f"- {self.format_alert({**alert, 'bvid': ''})}" for alert in alerts]
+        if not alerts:
+            overview[-1] = "未触发告警"
+        return Reply("\n".join([title, *overview]), items, tail)
 
     async def resident_text(self, action: str, bvids: list[str] | None = None) -> str:
         """常驻监控：状态 / 开启 [BV 列表] / 暂停 / 停止。"""

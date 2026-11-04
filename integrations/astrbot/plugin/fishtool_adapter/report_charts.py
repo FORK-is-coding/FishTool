@@ -24,6 +24,10 @@ ENGAGEMENT_DIMS = (
 )
 #: 雷达图网格圈（百分比）；最外圈 100 同时把刻度固定为 0~100%。
 RADAR_RINGS = (25.0, 50.0, 75.0, 100.0)
+#: 词云：权重（词频 / 最高词频）达到这个值的标签加粗（前端 weight >= 0.55 用 600 字重）。
+BOLD_WEIGHT = 0.55
+#: 模拟粗体的描边宽度（pt）。
+BOLD_STROKE_PT = 0.3
 #: 词云 5 色轮换；黄色只给词频最高的那个词，避免满屏黄。
 TAG_COLORS = (INK, MUTED, "#3a3d40", FAINT)
 
@@ -218,7 +222,7 @@ def _tag_cloud_drawing(spec: ChartSpec, width: float, fonts: Fonts):
             size -= 0.5
             text_w = stringWidth(tag, fonts.cjk_bold, size)
         color = SIGNAL if index == 0 else TAG_COLORS[index % len(TAG_COLORS)]
-        items.append((tag, size, text_w, color))
+        items.append((tag, size, text_w, color, weight >= BOLD_WEIGHT))
 
     lines, line, line_w = [], [], 0.0
     for item in items:
@@ -239,11 +243,34 @@ def _tag_cloud_drawing(spec: ChartSpec, width: float, fonts: Fonts):
         row_w = sum(i[2] for i in ln) + gap * max(0, len(ln) - 1)
         x = (width - row_w) / 2
         baseline = y - row_h / 2 - max(i[1] for i in ln) * 0.35
-        for tag, size, text_w, color in ln:
-            drawing.add(String(x, baseline, tag, fontName=fonts.cjk_bold, fontSize=size, fillColor=HexColor(color)))
+        for tag, size, text_w, color, bold in ln:
+            drawing.add(_tag_string(x, baseline, tag, fonts.cjk_bold, size, HexColor(color), bold))
             x += text_w + gap
         y -= row_h + line_gap
     return drawing
+
+
+def _tag_string(x: float, y: float, text: str, font: str, size: float, color, bold: bool):
+    """词云里的一个标签。高频词（权重 ≥ 0.55，前端用 600 字重）要加粗。
+
+    插件只注册了一套字形（reportlab 不能合成 TTF 粗体），方案 9.7.4 定的做法是加一圈 0.3 pt 同色描边模拟粗体：
+    PDF 文字渲染模式 2（填充 + 描边）。graphics 的 String / Group 都没有描边属性，renderPDF 画 String 时
+    描边颜色取自渲染状态，而状态只能由带 strokeColor 的图形（Path 等）设置——所以粗体标签前面放一条
+    零长度、带同色描边的 Path，把描边状态设好，再画 textRenderMode=2 的 String。文字只画一遍，
+    pypdf 抽取不会重复；零长度路径不可见。
+    """
+    from reportlab.graphics.shapes import Group, Path, String
+
+    label = String(x, y, text, fontName=font, fontSize=size, fillColor=color)
+    if not bold:
+        return label
+    label.textRenderMode = 2
+    # Group 结束时 renderPDF 会恢复外层状态，primer 的描边不会影响后续图形。
+    # 颜色同时设置：String 的 fillColor 已经是 color，描边色由 primer 写入状态，两者一致。
+    primer = Path(strokeColor=color, strokeWidth=BOLD_STROKE_PT, fillColor=None, strokeLineJoin=1)
+    primer.moveTo(x, y)
+    primer.lineTo(x, y)
+    return Group(primer, label)
 
 
 def _panel(title: str, drawing, width: float, fonts: Fonts, note: str = ""):

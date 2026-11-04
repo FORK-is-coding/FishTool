@@ -74,6 +74,11 @@ class SubscriptionStore:
         umo = (umo or "").strip()
         return any(item["umo"] == umo for item in self._items)
 
+    def self_id_for(self, umo: str) -> str:
+        """订阅时记下的机器人 QQ 号（合并转发节点的 uin）；没有订阅记录时返回空串。"""
+        umo = (umo or "").strip()
+        return next((item["self_id"] for item in self._items if item["umo"] == umo), "")
+
     def add(self, umo: str, self_id: str = "") -> str:
         """新增或更新一条订阅。
 
