@@ -93,9 +93,26 @@ python integrations/astrbot/release_tools/verify_package.py dist/plugin --max-zi
 
 Open API Key（默认 scope 含 `plugin`）与面板登录同等可用；插件配置 `engine.block_api_key_write` 可禁止 API Key 调写接口与凭据接口。
 
+## 聊天指令
+
+`/fishtool`（别名 `/ft`）指令组注册在 `plugin/main.py`，业务逻辑放在不 import astrbot 的模块里，便于单测：
+
+| 模块 | 职责 |
+|---|---|
+| `fishtool_adapter/commands.py` | 调引擎接口并把结果格式化成文本（状态、告警、热点、舆情、常驻监控、自诊） |
+| `fishtool_adapter/gate.py` | `chat.enable` 开关、公开 / 受限 / 管理员三级权限、按会话冷却 |
+| `fishtool_adapter/jobs.py` | 长任务后台执行：按 key 去重、异常兜底回复、`terminate()` 时取消 |
+| `fishtool_adapter/notifier.py` | 告警推送：级别过滤、合并窗口、按 id 去重、ws 断线后补发 |
+| `fishtool_adapter/subscriptions.py` | 推送订阅，存 `remote/subscriptions.json`（不放插件配置：面板 list 只按字符串渲染，且保存配置会重载插件） |
+| `fishtool_adapter/report_pdf.py` / `report_charts.py` | 自诊 PDF：主题 HTML → reportlab「终端白」版式，矢量图表 |
+
+- 只改 `integrations/astrbot/`；引擎代码未动。
+- `terminate()` 顺序：取消启动任务 → 取消聊天后台任务与告警推送 → 停事件中继 → 停引擎 → 关 HTTP client。
+- `harness/smoke_commands.py`：在装了 AstrBot（≥3.12）的 Python 里加载 `main.py`，检查子指令注册与参数解析。
+- 用户文档见 `plugin/README.md`「聊天指令」。
+
 ## 已知限制（一期）
 
-- 自诊报告导出为 HTML 文件下载，用浏览器打开后“打印 → 另存为 PDF”（沙箱禁止 `print()`）。
+- 视图内的自诊报告导出为 HTML 文件下载，用浏览器打开后“打印 → 另存为 PDF”（沙箱禁止 `print()`）；聊天指令 `/fishtool 自诊` 直接发 PDF。
 - 外部链接（GitHub、B 站主页等）在视图内弹窗显示，需复制到浏览器打开（沙箱禁止弹窗）。
 - 卸载时勾选“删除数据”不会删除 `data/fishtool_runtime/`（venv），需手动删除或先调用 `_engine/clean-venv`。
-- 机器人遥控（执行案第 9 章）为二期。
