@@ -34,7 +34,9 @@ function makeElement(id) {
   const node = {
     id, _html: '', value: '', checked: false, style: {}, dataset: {}, children: [],
     classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
-    setAttribute() {}, removeAttribute() {}, getAttribute() { return null; },
+    setAttribute(k, v) { this.dataset[k] = v; },
+    removeAttribute() {},
+    getAttribute(k) { return k in this.dataset ? this.dataset[k] : null; },
     focus() {}, remove() {}, append() {}, appendChild() {}, addEventListener() {},
     querySelector() { return makeElement('q'); }, querySelectorAll() { return []; },
   };
@@ -61,6 +63,27 @@ async function main() {
     removeItem: k => storageMap.delete(k),
   };
   const docListeners = {};
+  const stopReports = [];   // 每次 mountAppModal 的标题（停止报告/同意窗都会经过）
+  const resumeBodies = [];  // 每次 POST /tasks/{id}/resume 的请求体
+  // sessionStorage 桩：每次 scenario 运行相当于一次新会话（刷新即清空）。
+  const sessionMap = new Map();
+  if (scenario.storageThrows) {
+    // 存储被禁用时 get/set 都抛错：弹窗不能因此崩掉。
+    var sessionStorageStub = {
+      getItem() { throw new Error('denied'); },
+      setItem() { throw new Error('denied'); },
+    };
+  } else {
+    var sessionStorageStub = {
+      getItem: k => (sessionMap.has(k) ? sessionMap.get(k) : null),
+      setItem: (k, v) => sessionMap.set(k, String(v)),
+    };
+  }
+  if (scenario.reportedOnce) {
+    // 模拟「同一次停止上次已经弹过」：预置同键的 sessionStorage 记录。
+    sessionMap.set('fishtool.semantic.stopReport', JSON.stringify({
+      task_id: 't1', stop_reason: scenario.reportedOnce, stop_seq: 1 }));
+  }
   const postedKeys = [];    // 每次 POST /tasks 带的 request_key
   const postedBodies = [];  // 每次 POST /tasks 的完整请求体
   const confirmCalls = [];  // 每次 showAppConfirm 的文案与选项
@@ -93,7 +116,12 @@ async function main() {
       confirmCalls.push({ msg: String(msg), opts: opts || {} });
       return scenario.confirmResult !== false;
     },
-    mountAppModal: () => (() => {}),
+    mountAppModal: (backdrop) => {
+      const aria = backdrop.getAttribute && backdrop.getAttribute('aria-label');
+      stopReports.push(aria || 'unknown');
+      return () => {};
+    },
+    sessionStorage: sessionStorageStub,
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
     encodeURIComponent, JSON, Object, Array, Number, String, Boolean, Math, Promise, RegExp, Error,
     fetch: async (url, options) => {
@@ -127,11 +155,21 @@ async function main() {
       } else if (url.indexOf('/tasks/t1/result') !== -1) {
         payload = { success: true, data: { groups: [], items: [], pagination: { page: 1, pages: 1, total: 0 },
           counts: {}, task: {} } };
+      } else if (url.indexOf('/resume') !== -1) {
+        try { resumeBodies.push(JSON.parse(options.body)); } catch (e) { resumeBodies.push(null); }
+        payload = { success: true, data: { task_id: 't1', status: 'queued', revision: 99 } };
       } else if (url.indexOf('/tasks/t1') !== -1) {
         statusCalls.push(now);
         stallHistory.push(Boolean(ctx.window.__semanticPanel && ctx.window.__semanticPanel.state.pollStalled));
         if (scenario.hideAtCall && statusCalls.length === scenario.hideAtCall) ctx.document.hidden = true;
         payload = { success: true, data: Object.assign({ task_id: 't1' }, nextStatus()) };
+        // 后台窗口只存在于「fetch 返回停止态之后、渲染之前」：在取到停止态的这次
+        // 回调里才置 hidden，轮询才来得及走到 maybeShowStopReport（下一次循环开头
+        // 的 hidden 检查还没执行）。若取 running 时就置 hidden，下一轮直接 return，
+        // 停止态永远不会被处理，测不到后台门。
+        if (scenario.hiddenFromStart && payload.data.status !== 'running') {
+          ctx.document.hidden = true;
+        }
       }
       return { ok: true, status: 200, json: async () => payload };
     },
@@ -150,6 +188,7 @@ async function main() {
     document: ctx.document, setTimeout: fakeSetTimeout, clearTimeout() {},
     setInterval: () => 0, clearInterval() {}, requestAnimationFrame: () => 0, addEventListener() {},
     localStorage: localStorageStub,
+    sessionStorage: sessionStorageStub,
   });
   ctx.globalThis = ctx;
   vm.createContext(ctx);
@@ -196,6 +235,30 @@ async function main() {
     await ctx.window.__semanticPanel.onStart();
     await flush();
     out.postedKeys = postedKeys.slice();
+  }
+  if (scenario.stopReport) {
+    // 先发起任务并轮询到停止（partial/failed），再记录是否弹窗。
+    stopAfter = 1000;
+    await ctx.window.__semanticPanel.onStart();
+    await flush();
+    out.stopReports = stopReports.slice();
+    if (scenario.stopReport.backToFront) {
+      ctx.document.hidden = false;
+      if (scenario.hiddenFromStart) {
+        // 后台期间任务才停下：轮询已在 hidden 时退出，最后一次取到的状态没有渲染进
+        // state.task（renderOverview 在 hidden 检查之后）。回前台前补成停止态。
+        ctx.window.__semanticPanel.state.task = Object.assign(
+          { task_id: 't1' }, scenario.statuses[scenario.statuses.length - 1]);
+      }
+      ctx.window.__semanticPanel.resumePollingIfActive();
+      await flush();
+      out.reportsAfterFront = stopReports.slice();
+    }
+    if (scenario.stopReport.resumeUpgrade) {
+      await ctx.window.__semanticPanel.resumeWithUnlimited(ctx.window.__semanticPanel.state.task);
+      await flush();
+      out.resumeBodies = resumeBodies.slice();
+    }
   }
   if (scenario.budgetFlow) {
     // 预算模式流程：先切档，再点“开始分析”；记录确认弹窗与 POST 请求体。
@@ -428,3 +491,111 @@ def test_switching_mode_resets_request_key(tmp_path) -> None:
     assert keys[0] != keys[1]
     assert out["postedBodies"][0]["budget_mode"] == "default"
     assert out["postedBodies"][1]["budget_mode"] == "unlimited"
+
+
+# ---------------------------------------------------------------------------
+# PR 4：停止报告弹窗（只弹一次、后台不弹、按原因给按钮）
+# ---------------------------------------------------------------------------
+
+def _stop_scenario(reason, **extra):
+    statuses = [_running(1), {"status": "partial", "phase": "done", "revision": 2,
+                              "coverage": {"stop_reason": reason,
+                                           "batches": 2, "pairs_reviewed": 1, "total_pairs": 3},
+                              "budget": {"stop_seq": 1, "attempt_count": 2,
+                                         "settled_tokens": 300, "elapsed_call_ms": 0},
+                              "groups": [{"member_ids": ["a", "b"]}]}]
+    scenario = {"statuses": statuses, "maxStatusCalls": 1000, "noLatest": True,
+                "stopReport": {}}
+    scenario.update(extra)
+    return scenario
+
+
+def test_partial_with_resumable_reason_pops_stop_report_once(tmp_path) -> None:
+    """任务停下且原因是预算用完：弹停止报告，写明原因与用量；同一次停止不重复弹。"""
+    out = _run(_stop_scenario("task_budget"), tmp_path)
+    assert out["stopReports"] == ["语义折叠停止报告"]
+
+
+def test_already_reported_stop_does_not_pop_again(tmp_path) -> None:
+    """同 (task_id, stop_reason, stop_seq) 已弹过（sessionStorage 有记录）：不再弹。"""
+    out = _run(_stop_scenario("task_budget", reportedOnce="task_budget"), tmp_path)
+    assert out["stopReports"] == []
+
+
+def test_new_stop_seq_pops_again_even_same_reason(tmp_path) -> None:
+    """同一原因但 stop_seq 已变（新的一次停止）：去重键不同，要重新弹。"""
+    scenario = _stop_scenario("task_budget", reportedOnce="task_budget")
+    scenario["statuses"][1]["budget"]["stop_seq"] = 2  # 上次弹的是 stop_seq=1
+    out = _run(scenario, tmp_path)
+    assert out["stopReports"] == ["语义折叠停止报告"]
+
+
+def test_stop_report_survives_disabled_storage(tmp_path) -> None:
+    """sessionStorage 被禁用（get/set 抛错）：弹窗仍正常显示，不抛异常。"""
+    out = _run(_stop_scenario("task_budget", storageThrows=True), tmp_path)
+    assert out["stopReports"] == ["语义折叠停止报告"]
+
+
+@pytest.mark.parametrize("status,reason", [
+    ("partial", "rounds_exhausted"),
+    ("partial", "degraded"),
+    ("failed", "failed:auth"),
+    ("completed", None),
+    ("cancelled", "cancelled"),
+])
+def test_no_stop_report_when_resume_cannot_help(tmp_path, status, reason) -> None:
+    """不可续跑的停止 / 正常完成 / 取消：不弹停止报告。"""
+    scenario = _stop_scenario(reason)
+    scenario["statuses"][1]["status"] = status
+    if reason is None:
+        del scenario["statuses"][1]["coverage"]
+    out = _run(scenario, tmp_path)
+    assert out["stopReports"] == []
+
+
+def test_stop_report_hidden_page_defers_to_foreground(tmp_path) -> None:
+    """页面在后台时不弹；回到前台且任务已停止时补弹一次。"""
+    scenario = _stop_scenario("task_budget", stopReport={"backToFront": True})
+    scenario["hiddenFromStart"] = True
+    out = _run(scenario, tmp_path)
+    assert out["stopReports"] == []
+    assert out["reportsAfterFront"] == ["语义折叠停止报告"]
+    assert out["reportsAfterFront"] == out["stopReports"] + ["语义折叠停止报告"], (
+        '后台时必须一次都没弹过，而不是弹完再补弹')
+
+
+def test_stop_report_upgrade_resume_posts_upgrade_to(tmp_path) -> None:
+    """弹窗「切换为无限制并继续」：二次确认后 resume 带 upgrade_to=unlimited。"""
+    out = _run(_stop_scenario("task_budget", stopReport={"resumeUpgrade": True}), tmp_path)
+    assert len(out["resumeBodies"]) == 1
+    assert out["resumeBodies"][0]["upgrade_to"] == "unlimited"
+    assert out["resumeBodies"][0]["acknowledge_unknown"] is True
+
+
+def test_interrupted_task_prompts_resume_on_return(tmp_path) -> None:
+    """interrupted（进程重启中断）是可续跑的停止：刷新后选中同一 BV 就提示继续。"""
+    statuses = [{"status": "interrupted", "phase": "interrupted", "revision": 3,
+                 "coverage": {"stop_reason": "interrupted"},
+                 "budget": {"stop_seq": 1, "attempt_count": 2, "settled_tokens": 300}}]
+    out = _run({"statuses": statuses, "maxStatusCalls": 0,
+                "stopReport": {}}, tmp_path)
+    assert out["stopReports"] == ["语义折叠停止报告"]
+
+
+def test_reload_with_partial_stop_pops_if_not_reported_yet(tmp_path) -> None:
+    """刷新后任务已停止且没弹过：加载时就该弹（不能只靠 visibilitychange 补弹）。"""
+    statuses = [{"status": "partial", "phase": "done", "revision": 2,
+                 "coverage": {"stop_reason": "task_budget"},
+                 "budget": {"stop_seq": 1, "attempt_count": 2, "settled_tokens": 300}}]
+    out = _run({"statuses": statuses, "maxStatusCalls": 0, "stopReport": {}}, tmp_path)
+    assert out["stopReports"] == ["语义折叠停止报告"]
+
+
+def test_reload_with_already_reported_stop_does_not_pop(tmp_path) -> None:
+    """刷新后任务已停止且已弹过：加载时不重复弹（去重键拦住）。"""
+    statuses = [{"status": "partial", "phase": "done", "revision": 2,
+                 "coverage": {"stop_reason": "task_budget"},
+                 "budget": {"stop_seq": 1, "attempt_count": 2, "settled_tokens": 300}}]
+    out = _run({"statuses": statuses, "maxStatusCalls": 0,
+                "reportedOnce": "task_budget", "stopReport": {}}, tmp_path)
+    assert out["stopReports"] == []
