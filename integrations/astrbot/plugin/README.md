@@ -75,7 +75,7 @@ https://github.com/FORK-is-coding/astrbot_plugin_FishTool
 `/ft` 是 `/fishtool` 的别名；只发 `/fishtool` 会列出全部子指令。
 
 - **管理员**指 AstrBot 配置里的 `admins_id`（用 `/sid` 查看自己的 ID）。舆情、监控开关、订阅、自诊会触发 LLM 调用、用你的 Cookie 抓取 B 站或把告警推到某个会话，始终只限管理员，没有开关。
-- **冷却**：公开指令在同一会话内默认 10 秒一次（`chat.cooldown_seconds`），冷却期内不回复；管理员不受限。
+- **冷却**：公开指令在同一会话内默认 10 秒一次（`chat.cooldown_seconds`），冷却期内不回复；管理员不受限。“权限不足”的提示也按同一窗口限频：同一个人在同一会话里反复调用管理员指令，窗口内只提示一次。
 - **告警推送**：`/fishtool 订阅` 后，引擎检测到的告警按 `chat.notify_merge_seconds`（默认 120 秒）合并成一条消息发送，多条时为合并转发，降低个人 QQ 风控风险。订阅保存在 `data/plugin_data/astrbot_plugin_fishtool/remote/subscriptions.json`。引擎重启或断线期间的告警会在重连后补发；插件重载前后可能有少量告警重复推送。在 AstrBot 里给平台适配器改名后，旧订阅会失效，需要重新订阅。
 - 关闭 `chat.enable` 后所有子指令不再回复、告警推送停止；只发 `/fishtool` 时 AstrBot 自动生成的帮助仍会显示（框架行为）。
 

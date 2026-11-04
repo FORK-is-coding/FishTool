@@ -9,8 +9,8 @@ import time
 #: 权限级别。公开：所有人；受限：按 chat.restricted_scope；管理员：始终只限 AstrBot admins_id。
 PUBLIC, RESTRICTED, ADMIN = "public", "restricted", "admin"
 
-#: 准入结果。
-OFF, DENIED, COOLDOWN, OK = "off", "denied", "cooldown", "ok"
+#: 准入结果。DENIED 回复“权限不足”；DENIED_QUIET 也是被拒，但窗口内已提示过一次，不再回复。
+OFF, DENIED, DENIED_QUIET, COOLDOWN, OK = "off", "denied", "denied_quiet", "cooldown", "ok"
 
 #: 冷却字典条目数达到这个值时才做一次清理（删掉已过冷却期的记录），避免每次都遍历。
 _PRUNE_AT = 512
@@ -27,8 +27,9 @@ class Gate:
         self._clock = clock
         self._last: dict[tuple[str, str], float] = {}
         self._prune_at = _PRUNE_AT
+        self._denied_at: dict[tuple[str, str], float] = {}
 
-    def check(self, *, name: str, level: str, umo: str, is_admin: bool) -> str:
+    def check(self, *, name: str, level: str, umo: str, is_admin: bool, sender: str = "") -> str:
         """判断一次指令调用能否执行。
 
         Args:
@@ -36,19 +37,35 @@ class Gate:
             level: ``public`` / ``restricted`` / ``admin``。
             umo: 会话标识 ``event.unified_msg_origin``。
             is_admin: ``event.is_admin()``。
+            sender: 发送者 ID，用于“权限不足”提示的限频。
 
         Returns:
-            str: ``off`` / ``denied`` / ``cooldown`` / ``ok``。
+            str: ``off`` / ``denied`` / ``denied_quiet`` / ``cooldown`` / ``ok``。
         """
         if not self.chat.get("enable", True):
             return OFF
         if is_admin:
             return OK
-        if level == ADMIN:
-            return DENIED
-        if level == RESTRICTED and not self._restricted_allowed(umo):
-            return DENIED
+        if level == ADMIN or (level == RESTRICTED and not self._restricted_allowed(umo)):
+            return self._denied(umo, sender)
         return self._cooldown(name, umo)
+
+    def _denied(self, umo: str, sender: str) -> str:
+        """被拒：同一会话同一发送者在冷却窗口内只提示一次，之后静默（DENIED_QUIET），防止有人刷管理员指令刷屏。
+
+        用独立的记录，不占用正常指令的冷却。
+        """
+        window = self.chat.get("cooldown_seconds", 10)
+        if window <= 0:
+            return DENIED
+        now = self._clock()
+        key = (umo, sender)
+        if now - self._denied_at.get(key, float("-inf")) < window:
+            return DENIED_QUIET
+        self._denied_at[key] = now
+        if len(self._denied_at) >= _PRUNE_AT:
+            self._denied_at = {k: t for k, t in self._denied_at.items() if now - t < window}
+        return DENIED
 
     def _restricted_allowed(self, umo: str) -> bool:
         scope = self.chat.get("restricted_scope", "admin")

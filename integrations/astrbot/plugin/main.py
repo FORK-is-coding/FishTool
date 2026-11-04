@@ -286,6 +286,7 @@ class FishToolPlugin(Star):
             level=level,
             umo=event.unified_msg_origin,
             is_admin=event.is_admin(),
+            sender=str(event.get_sender_id() or ""),
         )
 
     @staticmethod
@@ -358,8 +359,11 @@ class FishToolPlugin(Star):
                 html_text, data = await self.cmds.diagnosis(resolved)
                 pdf_bytes, notes = await asyncio.to_thread(self._render_diagnosis_pdf, html_text, data)
                 name = report_filename(parse_meta(html_text), time.strftime("%Y%m%d"))
-                _, saved = await asyncio.to_thread(self.exports.save_and_path, pdf_bytes, name, ".pdf")
-            except (CommandError, ReportPdfError, ValueError) as exc:
+                try:
+                    _, saved = await asyncio.to_thread(self.exports.save_and_path, pdf_bytes, name, ".pdf")
+                except ValueError as exc:  # ExportStore：超过 32 MB 上限
+                    raise CommandError(str(exc)) from exc
+            except (CommandError, ReportPdfError) as exc:
                 await self._send_text(umo, f"自诊失败：{exc}")
                 return
         except asyncio.CancelledError:
@@ -373,8 +377,12 @@ class FishToolPlugin(Star):
 
         if self._closed:
             return
-        summary = "\n".join([self.cmds.diagnosis_summary(data, resolved), *notes, FILE_HINT])
-        await self._send_text(umo, summary)
+        try:
+            head = self.cmds.diagnosis_summary(data, resolved)
+        except Exception as exc:  # noqa: BLE001 - 摘要只是附带信息，出错不能挡住 PDF
+            logger.error(f"[fishtool] {key} 生成摘要失败: {exc}", exc_info=True)
+            head = f"【账号自诊】UID {resolved}"
+        await self._send_text(umo, "\n".join([head, *notes, FILE_HINT]))
         try:
             await self.context.send_message(umo, MessageChain([File(name=name, file=str(saved))]))
         except Exception as exc:  # noqa: BLE001 - 协议端读不到文件时退回文字提示

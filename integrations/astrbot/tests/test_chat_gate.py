@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from fishtool_adapter.constants import chat_cfg
-from fishtool_adapter.gate import ADMIN, COOLDOWN, DENIED, OFF, OK, PUBLIC, RESTRICTED, Gate
+from fishtool_adapter.gate import ADMIN, COOLDOWN, DENIED, DENIED_QUIET, OFF, OK, PUBLIC, RESTRICTED, Gate
 
 
 class Clock:
@@ -78,6 +78,34 @@ def test_cooldown_zero_disables():
     gate = make(cooldown_seconds=0)
     assert check(gate) == OK
     assert check(gate) == OK
+
+
+def test_denied_reply_rate_limited_per_sender():
+    clock = Clock()
+    gate = make(clock=clock)
+    assert gate.check(name="monitor", level=ADMIN, umo="g1", is_admin=False, sender="u1") == DENIED
+    # 同一人在冷却窗口内再刷管理员指令（换指令也一样）：静默
+    assert gate.check(name="diag", level=ADMIN, umo="g1", is_admin=False, sender="u1") == DENIED_QUIET
+    # 另一个人、另一个会话各自提示一次
+    assert gate.check(name="monitor", level=ADMIN, umo="g1", is_admin=False, sender="u2") == DENIED
+    assert gate.check(name="monitor", level=ADMIN, umo="g2", is_admin=False, sender="u1") == DENIED
+    clock.now += 10
+    assert gate.check(name="monitor", level=ADMIN, umo="g1", is_admin=False, sender="u1") == DENIED
+
+
+def test_denied_quiet_does_not_consume_command_cooldown():
+    clock = Clock()
+    gate = make(clock=clock, restricted_scope="subscribed")
+    gate.check(name="alerts", level=RESTRICTED, umo="g1", is_admin=False, sender="u1")
+    gate.check(name="alerts", level=RESTRICTED, umo="g1", is_admin=False, sender="u1")
+    # 公开指令的冷却不受影响
+    assert gate.check(name="status", level=PUBLIC, umo="g1", is_admin=False, sender="u1") == OK
+
+
+def test_denied_not_rate_limited_when_cooldown_zero():
+    gate = make(cooldown_seconds=0)
+    for _ in range(3):
+        assert gate.check(name="x", level=ADMIN, umo="g", is_admin=False, sender="u") == DENIED
 
 
 def test_denied_does_not_consume_cooldown():
