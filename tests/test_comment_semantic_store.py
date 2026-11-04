@@ -1154,3 +1154,149 @@ def test_get_task_unknown_raises(store):
     s, _ = store
     with pytest.raises(SemanticNotFound):
         s.get_task(999999)
+
+
+# ---------------------------------------------------------------------------
+# PR 1：void_attempt / 续跑预检 / 取消已中断任务时的预约
+# ---------------------------------------------------------------------------
+
+def _usage_row(manager, day):
+    from core.database import SemanticDailyUsage
+    session = manager.get_session()
+    try:
+        row = session.query(SemanticDailyUsage).filter_by(date=day).first()
+        return None if row is None else (row.reserved_tokens, row.settled_tokens, row.request_count)
+    finally:
+        session.close()
+
+
+def test_void_attempt_returns_reservation_attempt_and_request(store):
+    """请求确定没发出：撤销预约，尝试数、请求数退回，不计 settled，当日行同步回收。"""
+    s, m = store
+    state, _ = new_task(s, m)
+    r = s.update_task(state["task_id"], 0, status="running")
+    reserved = s.reserve_attempt(state["task_id"], r["revision"], 300)
+    day = reserved["budget"]["in_flight"]["reserve_date"]
+    assert _usage_row(m, day) == (300, 0, 1)
+
+    voided = s.void_attempt(state["task_id"], reserved["revision"])
+    b = voided["budget"]
+    assert b["in_flight"] is None
+    assert b["reserved_tokens"] == 0 and b["settled_tokens"] == 0
+    assert b["attempt_count"] == 0 and b["request_count"] == 0
+    assert _usage_row(m, day) == (0, 0, 0)
+    assert voided["revision"] == reserved["revision"] + 1
+
+
+def test_void_attempt_idempotent_and_cas(store):
+    s, m = store
+    state, _ = new_task(s, m)
+    r = s.update_task(state["task_id"], 0, status="running")
+    reserved = s.reserve_attempt(state["task_id"], r["revision"], 100)
+    with pytest.raises(SemanticConflict):
+        s.void_attempt(state["task_id"], reserved["revision"] - 1)
+    voided = s.void_attempt(state["task_id"], reserved["revision"])
+    again = s.void_attempt(state["task_id"], 0)  # 无在飞：幂等，不校验 revision
+    assert again["revision"] == voided["revision"]
+    assert again["budget"]["attempt_count"] == 0
+
+
+def _stop_partial(s, task_id, revision):
+    running = s.update_task(task_id, revision, status="running")
+    return s.update_task(task_id, running["revision"], status="partial")
+
+
+@pytest.mark.parametrize("limits, scope", [
+    ({"max_attempts": 1}, "attempts"),
+    ({"task_token_budget": 500}, "task"),
+    ({"daily_token_budget": 500}, "daily"),
+])
+def test_resume_rejects_when_budget_already_exhausted(store, limits, scope):
+    """续跑前预检：必然超限时直接 429（SemanticBudgetExceeded 带 scope），任务状态不变。"""
+    s, m = store
+    vid = seed_video(m)
+    seed_comment(m, 100, "a", vid)
+    seed_comment(m, 101, "b", vid)
+    snap = make_snapshot(s)
+    state = s.create_task(snap, IDENTITY, limits, request_key=uuid.uuid4().hex)
+    r = s.update_task(state["task_id"], 0, status="running")
+    reserved = s.reserve_attempt(state["task_id"], r["revision"], 400)
+    settled = s.settle_attempt(state["task_id"], reserved["revision"], 400)
+    stopped = s.update_task(state["task_id"], settled["revision"], status="partial")
+
+    with pytest.raises(SemanticBudgetExceeded) as excinfo:
+        s.resume_task(state["task_id"], stopped["revision"])
+    assert excinfo.value.scope == scope
+    cur = s.get_task(state["task_id"])
+    assert cur["status"] == "partial"
+    assert cur["revision"] == stopped["revision"]
+
+
+def test_resume_allowed_when_budget_remains(store):
+    s, m = store
+    state, _ = new_task(s, m)
+    stopped = _stop_partial(s, state["task_id"], 0)
+    resumed = s.resume_task(state["task_id"], stopped["revision"])
+    assert resumed["status"] == "queued"
+
+
+def test_cancel_interrupted_task_releases_leaked_reservation(store):
+    """#63 的已知遗留：已中断的任务被取消时，残留在飞预约按估算结算，当日预约不再挂着。"""
+    s, m = store
+    state, _ = new_task(s, m)
+    r = s.update_task(state["task_id"], 0, status="running")
+    reserved = s.reserve_attempt(state["task_id"], r["revision"], 250)
+    day = reserved["budget"]["in_flight"]["reserve_date"]
+    s.recover_interrupted()
+    cur = s.get_task(state["task_id"])
+    assert cur["status"] == "interrupted"
+
+    cancelled = s.cancel_task(state["task_id"], cur["revision"])
+    b = cancelled["budget"]
+    assert cancelled["status"] == "cancelled"
+    assert b["in_flight"] is None
+    assert b["reserved_tokens"] == 0 and b["settled_tokens"] == 250
+    assert _usage_row(m, day)[0] == 0
+
+
+def test_cancel_running_task_leaves_in_flight_to_worker(store):
+    """运行中的任务：在飞请求可能还在路上，由 worker 自己结算，取消时不动它。"""
+    s, m = store
+    state, _ = new_task(s, m)
+    r = s.update_task(state["task_id"], 0, status="running")
+    reserved = s.reserve_attempt(state["task_id"], r["revision"], 250)
+    cancelled = s.cancel_task(state["task_id"], reserved["revision"])
+    assert cancelled["budget"]["in_flight"] is not None
+    assert cancelled["budget"]["reserved_tokens"] == 250
+
+
+# ---------------------------------------------------------------------------
+# PR 1 审查：终止路径写 stop_reason；续跑清掉上一次的停止原因
+# ---------------------------------------------------------------------------
+
+def test_cancel_writes_stop_reason_cancelled(store):
+    s, m = store
+    state, _ = new_task(s, m)
+    cancelled = s.cancel_task(state["task_id"], 0)
+    assert cancelled["coverage"]["stop_reason"] == "cancelled"
+
+
+def test_recover_interrupted_writes_stop_reason_interrupted(store):
+    s, m = store
+    state, _ = new_task(s, m)
+    s.update_task(state["task_id"], 0, status="running")
+    s.recover_interrupted()
+    cur = s.get_task(state["task_id"])
+    assert cur["status"] == "interrupted"
+    assert cur["coverage"]["stop_reason"] == "interrupted"
+
+
+def test_resume_clears_previous_stop_reason(store):
+    s, m = store
+    state, _ = new_task(s, m)
+    running = s.update_task(state["task_id"], 0, status="running")
+    stopped = s.update_task(state["task_id"], running["revision"], status="partial",
+                            coverage={"partial": True, "stop_reason": "rate_limited"})
+    resumed = s.resume_task(state["task_id"], stopped["revision"])
+    assert resumed["status"] == "queued"
+    assert "stop_reason" not in resumed["coverage"]

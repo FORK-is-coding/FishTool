@@ -594,6 +594,63 @@ def test_group_rate_limit_classified(monkeypatch):
     assert ei.value.category == ProviderErrorCategory.RATE_LIMIT
 
 
+@pytest.mark.parametrize("status, detail", [
+    (402, "payment required"),
+    # OpenAI 余额用尽：429 + insufficient_quota，必须判为余额不足而不是限频
+    (429, '{"error":{"code":"insufficient_quota","message":"You exceeded your current quota"}}'),
+    (400, "账户余额不足，请充值"),
+    (403, "Arrearage: account is in arrears"),
+])
+def test_group_quota_classified_before_rate_limit(monkeypatch, status, detail):
+    """余额 / 配额用尽 -> category=QUOTA（等待不会恢复），且不回显原始报文。"""
+    monkeypatch.setattr(prov, "_read_api_key", lambda: "sk-x")
+    client = _FakeClient(error=_api_error("API请求失败", status=status, detail=detail))
+    p = _make_provider(client)
+
+    async def _run():
+        async with p as prov_in:
+            await prov_in.group([{"id": "c0", "content": "a"}])
+
+    with pytest.raises(SemanticProviderError) as ei:
+        asyncio.run(_run())
+    assert ei.value.category == ProviderErrorCategory.QUOTA
+    assert detail not in str(ei.value)
+
+
+def test_group_plain_429_still_rate_limit(monkeypatch):
+    """普通 429（没有余额特征）仍是限频。"""
+    monkeypatch.setattr(prov, "_read_api_key", lambda: "sk-x")
+    client = _FakeClient(error=_api_error("API请求失败", status=429,
+                                          detail="Too Many Requests, please slow down"))
+    p = _make_provider(client)
+
+    async def _run():
+        async with p as prov_in:
+            await prov_in.group([{"id": "c0", "content": "a"}])
+
+    with pytest.raises(SemanticProviderError) as ei:
+        asyncio.run(_run())
+    assert ei.value.category == ProviderErrorCategory.RATE_LIMIT
+
+
+def test_group_gemini_minute_quota_is_rate_limit_not_quota(monkeypatch):
+    """Gemini 分钟级限频报文含 "Quota exceeded for metric: ... per_minute"，
+    裸 "quota exceeded" 子串不能把它误判成余额不足（等一分钟就好，不是要去充值）。"""
+    monkeypatch.setattr(prov, "_read_api_key", lambda: "sk-x")
+    client = _FakeClient(error=_api_error(
+        "API请求失败", status=429,
+        detail='Quota exceeded for metric: generate_requests_per_minute, limit: 60'))
+    p = _make_provider(client)
+
+    async def _run():
+        async with p as prov_in:
+            await prov_in.group([{"id": "c0", "content": "a"}])
+
+    with pytest.raises(SemanticProviderError) as ei:
+        asyncio.run(_run())
+    assert ei.value.category == ProviderErrorCategory.RATE_LIMIT
+
+
 def test_group_auth_classified(monkeypatch):
     """401 -> category=AUTH。"""
     monkeypatch.setattr(prov, "_read_api_key", lambda: "sk-x")
@@ -653,3 +710,26 @@ def test_group_provider_does_not_retry_internally(monkeypatch):
     with pytest.raises(SemanticProviderError):
         asyncio.run(_run())
     assert len(client.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# PR 1 审查：billing 不是余额不足；401 一律是鉴权失败
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("status, detail", [
+    (401, "Incorrect API key provided. See https://platform.openai.com/account/billing"),
+    (403, "You do not have access. Manage billing at https://example.com/billing"),
+    (401, "insufficient_quota"),  # 401 不看报文特征
+])
+def test_group_auth_with_billing_text_is_not_quota(monkeypatch, status, detail):
+    monkeypatch.setattr(prov, "_read_api_key", lambda: "sk-x")
+    client = _FakeClient(error=_api_error("API请求失败", status=status, detail=detail))
+    p = _make_provider(client)
+
+    async def _run():
+        async with p as prov_in:
+            await prov_in.group([{"id": "c0", "content": "a"}])
+
+    with pytest.raises(SemanticProviderError) as ei:
+        asyncio.run(_run())
+    assert ei.value.category == ProviderErrorCategory.AUTH

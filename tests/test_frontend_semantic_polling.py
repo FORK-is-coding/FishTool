@@ -54,6 +54,8 @@ async function main() {
   const elements = {};
   const getEl = id => (elements[id] = elements[id] || makeElement(id));
   const docListeners = {};
+  const postedKeys = [];    // 每次 POST /tasks 带的 request_key
+  let latestOverride;       // 定义后 /latest 一律返回它（用于切回时返回终态任务）
   const statusCalls = [];   // 每次 GET /tasks/{id} 的假时间
   const stallHistory = [];  // 每次轮询请求发出时，上一轮渲染留下的 pollStalled
   let statusIndex = 0;
@@ -81,17 +83,30 @@ async function main() {
     mountAppModal: () => (() => {}),
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
     encodeURIComponent, JSON, Object, Array, Number, String, Boolean, Math, Promise, RegExp, Error,
-    fetch: async (url) => {
+    fetch: async (url, options) => {
       let payload = { success: true, data: null };
-      if (url.indexOf('/preflight') !== -1) {
+      const method = (options && options.method) || 'GET';
+      if (method === 'POST' && /\/tasks$/.test(url)) {
+        // 发起任务：记录 request_key，返回 queued，之后轮询按 statuses 推进
+        try { postedKeys.push(JSON.parse(options.body).request_key); } catch (e) { postedKeys.push(null); }
+        payload = { success: true, data: { task_id: 't1', status: 'queued', revision: 0 } };
+        return { ok: true, status: 200, json: async () => payload };
+      }
+      if (url.indexOf('/local-token') !== -1) {
+        payload = { success: true, data: { token: 't' } };
+      } else if (url.indexOf('/preflight') !== -1) {
         payload = { success: true, data: { counts: { raw_total: 3, selected: 3, eligible: 3 },
           scope: { limit: 200 }, model_configured: true,
           provider_identity: { api_base: 'https://x', model: 'm' }, consent_needed: false,
           consent_version: 'semantic-fold-v1', limits: {} } };
       } else if (url.indexOf('/preferences') !== -1) {
-        payload = { success: true, data: { auto_fold: true, revision: 0 } };
+        payload = { success: true, data: { auto_fold: true, revision: 0,
+          consent_version: 'semantic-fold-v1', model_identity: { api_base: 'https://x', model: 'm' } } };
       } else if (url.indexOf('/latest') !== -1) {
-        payload = { success: true, data: Object.assign({ task_id: 't1' }, scenario.statuses[0]) };
+        payload = { success: true, data: url.indexOf('BVother') !== -1 ? null
+          : latestOverride !== undefined ? latestOverride
+          : scenario.noLatest ? null
+          : Object.assign({ task_id: 't1' }, scenario.statuses[0]) };
       } else if (url.indexOf('/tasks/t1/result') !== -1) {
         payload = { success: true, data: { groups: [], items: [], pagination: { page: 1, pages: 1, total: 0 },
           counts: {}, task: {} } };
@@ -139,6 +154,30 @@ async function main() {
     await flush();
     out.afterShowCalls = statusCalls.length;
     out.afterShowPolling = ctx.window.__semanticPanel.state.polling;
+  }
+  if (scenario.startTwice) {
+    // 第一次发起：轮询到 statuses 的终态后，再点一次“开始 / 重新分析”。
+    stopAfter = 1000;
+    await ctx.window.__semanticPanel.onStart();
+    await flush();
+    out.statusAfterFirst = ctx.window.__semanticPanel.state.task && ctx.window.__semanticPanel.state.task.status;
+    await ctx.window.__semanticPanel.onStart();
+    await flush();
+    out.postedKeys = postedKeys.slice();
+  }
+  if (scenario.reselectTerminal) {
+    // 在 BV1poll 发起任务（保持 running，不触发终态重置），切去 BVother 再切回：
+    // /latest 返回已终态的旧任务，之后“重新分析”必须带新 request_key。
+    await ctx.window.__semanticPanel.onStart();
+    await flush();
+    await ctx.window.onCommentBvidSelected('BVother');
+    await flush();
+    latestOverride = { task_id: 't1', status: 'completed', phase: 'done', revision: 9, coverage: {} };
+    await ctx.window.onCommentBvidSelected('BV1poll');
+    await flush();
+    await ctx.window.__semanticPanel.onStart();
+    await flush();
+    out.postedKeys = postedKeys.slice();
   }
   if (scenario.stopAtEnd) {
     ctx.window.__semanticPanel.stopPolling();
@@ -267,3 +306,41 @@ def test_stall_flag_is_cleared_when_polling_stops(tmp_path) -> None:
     out = _run({"statuses": statuses, "maxStatusCalls": 300, "stopAtEnd": True}, tmp_path)
     assert out["phase1Stalled"] is True
     assert out["stalledAfterStop"] is False
+
+
+# ---------------------------------------------------------------------------
+# PR 1 复审：任务结束后“重新分析”必须带新的 request_key（否则后端幂等返回旧任务）
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("terminal", ["completed", "partial", "failed", "cancelled"])
+def test_restart_after_terminal_task_uses_new_request_key(tmp_path, terminal) -> None:
+    """发起 → 轮询到终态 → 再点“重新分析”：第二次 POST /tasks 的 request_key 必须不同。"""
+    statuses = [_running(1), {"status": terminal, "phase": "done", "revision": 2,
+                              "coverage": {"stop_reason": "rounds_exhausted"}}]
+    out = _run({"statuses": statuses, "maxStatusCalls": 1000, "noLatest": True,
+                "startTwice": True}, tmp_path)
+    assert out["statusAfterFirst"] == terminal
+    keys = out["postedKeys"]
+    assert len(keys) == 2 and keys[0] and keys[1]
+    assert keys[0] != keys[1]
+
+
+def test_restart_while_task_still_active_keeps_request_key(tmp_path) -> None:
+    """任务还在进行（没到终态）时再次提交：沿用同一个 key，后端幂等返回同一任务，不重复计费。"""
+    statuses = [_running(i) for i in range(1, 50)]
+    out = _run({"statuses": statuses, "maxStatusCalls": 3, "noLatest": True,
+                "startTwice": True}, tmp_path)
+    keys = out["postedKeys"]
+    assert len(keys) == 2
+    assert keys[0] == keys[1]
+
+
+def test_reselect_bv_with_terminal_task_uses_new_request_key(tmp_path) -> None:
+    """任务在我们没轮询它时进入终态（切去别的 BV 再切回，/latest 返回 completed）：
+    旧 request_key 已失效，“重新分析”必须带新 key，否则后端幂等返回旧任务、按钮看似没反应。"""
+    statuses = [_running(i) for i in range(1, 6)]
+    out = _run({"statuses": statuses, "maxStatusCalls": 0, "noLatest": True,
+                "reselectTerminal": True}, tmp_path)
+    keys = out["postedKeys"]
+    assert len(keys) == 2 and keys[0] and keys[1]
+    assert keys[0] != keys[1]

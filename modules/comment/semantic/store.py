@@ -777,11 +777,15 @@ class SemanticStore:
                 raise SemanticConflict("已有在飞请求未结算，串行约束拒绝并发预约")
             if int(run.attempt_count) >= int(run.max_attempts):
                 raise SemanticBudgetExceeded(
-                    f"任务尝试数耗尽: {run.attempt_count}/{run.max_attempts}"
+                    f"任务尝试数耗尽: {run.attempt_count}/{run.max_attempts}",
+                    scope="attempts", used=int(run.attempt_count), limit=int(run.max_attempts),
                 )
             # reserved 仅为尚未结算的预约；已结算的实际/估算用量同样占用预算。
             if int(run.reserved_tokens) + int(run.settled_tokens) + est > int(run.task_token_budget):
-                raise SemanticBudgetExceeded("任务 token 预算耗尽")
+                raise SemanticBudgetExceeded(
+                    "任务 token 预算耗尽", scope="task",
+                    used=int(run.reserved_tokens) + int(run.settled_tokens),
+                    limit=int(run.task_token_budget))
 
             # 一次采样同时用于预算查询和 in_flight 归属，避免午夜读写跨日。
             reserve_date = _today()
@@ -789,7 +793,9 @@ class SemanticStore:
             day_reserved = int(day.reserved_tokens) if day else 0
             day_settled = int(day.settled_tokens) if day else 0
             if day_reserved + day_settled + est > int(run.daily_token_budget):
-                raise SemanticBudgetExceeded("语义日 token 预算耗尽")
+                raise SemanticBudgetExceeded(
+                    "语义日 token 预算耗尽", scope="daily",
+                    used=day_reserved + day_settled, limit=int(run.daily_token_budget))
 
             attempt_id = uuid.uuid4().hex
             run.in_flight = {
@@ -874,6 +880,77 @@ class SemanticStore:
             session.close()
 
     @staticmethod
+    def _precheck_resume_budget(session, run: SemanticRun) -> None:
+        """续跑前检查任务尝试数、任务 token 预算、语义日预算是否已经用完。
+
+        按“再做一次最小调用”判断：最小调用估算取 OUTPUT_TOKENS(输出预留，任何一次调用都至少
+        预约这么多)。任一闸门必然超限就抛 SemanticBudgetExceeded(带 scope)，路由映射为 429。
+        """
+        if int(run.attempt_count) >= int(run.max_attempts):
+            raise SemanticBudgetExceeded(
+                "任务调用次数已用完，无法继续", scope="attempts",
+                used=int(run.attempt_count), limit=int(run.max_attempts))
+        used = int(run.reserved_tokens) + int(run.settled_tokens)
+        if used + OUTPUT_TOKENS > int(run.task_token_budget):
+            raise SemanticBudgetExceeded(
+                "任务 token 预算已用完，无法继续", scope="task",
+                used=used, limit=int(run.task_token_budget))
+        day = session.query(SemanticDailyUsage).filter_by(date=_today()).first()
+        day_used = (int(day.reserved_tokens) + int(day.settled_tokens)) if day else 0
+        if day_used + OUTPUT_TOKENS > int(run.daily_token_budget):
+            raise SemanticBudgetExceeded(
+                "今日语义预算已用完，明天可继续", scope="daily",
+                used=day_used, limit=int(run.daily_token_budget))
+
+    def void_attempt(self, task_id: int, expected_revision: int) -> Dict[str, Any]:
+        """撤销当前在飞预约：请求确定没有发出（例如全局每日上限在发请求前拦下）。
+
+        与 settle 不同：不计入已结算用量，并把本次预约占用的尝试数、请求数退回，
+        任务与当日预约都按预约所属日回收。无在飞记录时幂等返回当前状态。
+
+        Args:
+            task_id: 任务 ID。
+            expected_revision: 期望 run.revision（仅在确有在飞请求时校验）。
+
+        Returns:
+            新 State DTO（revision +1；无在飞记录时不变）。
+
+        Raises:
+            SemanticConflict: 有在飞请求但修订不匹配。
+        """
+        session = self._session()
+        try:
+            task, run = self._load_task_run(session, task_id)
+            in_flight = run.in_flight
+            if not in_flight:
+                return self._state_dto(session, task, run)
+            if int(run.revision) != int(expected_revision):
+                raise SemanticConflict(
+                    f"撤销预约修订冲突：期望 {expected_revision}，实际 {run.revision}"
+                )
+            est = int(in_flight.get("estimated_tokens", 0) or 0)
+            reserve_date = in_flight.get("reserve_date") or _today()
+            run.reserved_tokens = max(0, int(run.reserved_tokens) - est)
+            run.attempt_count = max(0, int(run.attempt_count) - 1)
+            run.request_count = max(0, int(run.request_count) - 1)
+            res_day = session.query(SemanticDailyUsage).filter_by(date=reserve_date).first()
+            if res_day is not None:
+                res_day.reserved_tokens = max(0, int(res_day.reserved_tokens) - est)
+                res_day.request_count = max(0, int(res_day.request_count) - 1)
+            run.in_flight = None
+            run.revision = int(run.revision) + 1
+            session.commit()
+            return self._state_dto(session, task, run)
+        except SemanticError:
+            session.rollback()
+            raise
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    @staticmethod
     def _settle_in_flight(session, run: SemanticRun, actual: Optional[int]) -> None:
         """在调用方事务内结算并清空 run.in_flight（不提交、不改 revision）。
 
@@ -934,6 +1011,10 @@ class SemanticStore:
                 if task is None:
                     continue
                 task.status = "interrupted"
+                # 前端只读 coverage.stop_reason：中断是可续跑的停止。
+                cov = dict(run.coverage or {})
+                cov["stop_reason"] = "interrupted"
+                run.coverage = cov
                 if run.in_flight:
                     in_flight = dict(run.in_flight)
                     in_flight["outcome_unknown"] = True
@@ -988,9 +1069,16 @@ class SemanticStore:
             # 不清掉则 reserve 会因“已有在飞请求”拒绝，续跑后任务卡在 running。
             if run.in_flight:
                 self._settle_in_flight(session, run, None)
+            # 续跑前预检：第一次预约必然超限时直接拒绝(429)，不进入“排队 -> 立刻停 -> 再弹窗”的循环。
+            # 只查 store 能确定的三道闸门；全局 AI 上限与服务商限频由续跑后的真实调用判定。
+            self._precheck_resume_budget(session, run)
             task.status = "queued"
             task.error = None
             run.phase = "queued"
+            # 续跑开始：上一次的停止原因不再成立，结束时由 service 重新计算。
+            cov = dict(run.coverage or {})
+            cov.pop("stop_reason", None)
+            run.coverage = cov
             run.revision = int(run.revision) + 1
             session.commit()
             return self._state_dto(session, task, run)
@@ -1028,9 +1116,16 @@ class SemanticStore:
                 raise SemanticConflict(
                     f"取消修订冲突：期望 {expected_revision}，实际 {run.revision}"
                 )
+            # 已不在运行的任务(interrupted / partial / failed)没有 worker 会再结算残留的在飞记录，
+            # 在这里按估算结算，否则任务与当日预约会一直挂着。运行中的任务由 worker 自己结算。
+            if run.in_flight and task.status not in ACTIVE_STATUSES:
+                self._settle_in_flight(session, run, None)
             task.status = "cancelled"
             task.completed_at = datetime.now()
             run.phase = "cancelled"
+            cov = dict(run.coverage or {})
+            cov["stop_reason"] = "cancelled"
+            run.coverage = cov
             run.revision = int(run.revision) + 1
             session.commit()
             return self._state_dto(session, task, run)
