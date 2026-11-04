@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="report-theme" content="terminal-white">
+<meta name="report-account" content="测试UP&lt;script&gt;">
+<meta name="report-uid" content="123456">
+<meta name="report-fetched-at" content="2026-11-04 10:00:00">
+<meta name="report-generated-at" content="2026-11-04 10:40:39">
+<title>B站账号诊断报告</title>
+<style>
+@page { size: A4; margin: 0; }
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: #ffffff; }
+body {
+    font-family: "Bahnschrift", "Microsoft YaHei", "DengXian", "Noto Sans SC", "Segoe UI", sans-serif;
+    color: #1d1f21;
+    font-size: 10.5pt;
+    line-height: 1.7;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+}
+
+/* ---------- 每页重复：档案脊、页眉、页脚（@page 无边距，fixed 以纸张为参照逐页重复） ---------- */
+.spine { position: fixed; left: 0; top: 0; width: 13mm; height: 297mm; background: #1d1f21; }
+.spine i { position: absolute; left: 0; right: 0; top: 14mm; height: 1.6mm; background: #f5c400; }
+.running-head {
+    position: fixed; top: 0; left: 26mm; right: 16mm; height: 14mm; line-height: 14mm;
+    border-bottom: 0.3mm solid #c9ccc8; color: #6b6f72; background: #ffffff;
+    font-size: 7.5pt; letter-spacing: 0.25em; text-transform: uppercase;
+}
+.running-head .l { float: left; }
+.running-head .r { float: right; }
+.running-foot {
+    position: fixed; bottom: 0; left: 26mm; right: 16mm; height: 12mm; line-height: 12mm;
+    border-top: 0.3mm solid #c9ccc8; color: #8a8e91; background: #ffffff;
+    font-size: 7pt; letter-spacing: 0.25em; text-transform: uppercase;
+}
+
+/* ---------- 封面：独占第一页，满版 ---------- */
+.cover {
+    position: relative; z-index: 10; width: 210mm; height: 297mm; background: #f3f4f2;
+    break-after: page; page-break-after: always; overflow: hidden;
+}
+.cover .c-spine { position: absolute; left: 0; top: 0; bottom: 0; width: 15mm; background: #1d1f21; }
+.cover .c-spine i { position: absolute; left: 0; right: 0; top: 17mm; height: 1.6mm; background: #f5c400; }
+.cover .c-spine .vt {
+    position: absolute; left: 4.6mm; top: 30mm; width: 6mm; color: #f3f4f2;
+    font-size: 7.5pt; letter-spacing: 0.35em; writing-mode: vertical-rl; text-transform: uppercase;
+}
+.cover .c-body { position: absolute; left: 15mm; right: 0; top: 0; bottom: 0; padding: 0 15mm; }
+.cover .c-top {
+    height: 17mm; line-height: 17mm; border-bottom: 0.3mm solid #c9ccc8;
+    color: #6b6f72; font-size: 7.5pt; letter-spacing: 0.3em; text-transform: uppercase;
+}
+.cover .c-top .r { float: right; }
+.cover .kicker { margin-top: 42mm; color: #6b6f72; font-size: 10pt; letter-spacing: 0.6em; }
+.cover h1.c-title {
+    margin: 5mm 0 0; padding: 0; border: 0; color: #1d1f21;
+    font-size: 50pt; font-weight: 700; line-height: 1.04; letter-spacing: -0.02em;
+}
+.cover .c-en { margin-top: 5mm; color: #6b6f72; font-size: 10pt; letter-spacing: 0.7em; text-transform: uppercase; }
+.cover .c-rule { margin-top: 12mm; width: 32mm; height: 1.1mm; background: #f5c400; }
+.cover .c-big {
+    position: absolute; right: 12mm; top: 150mm; color: #e3e5e1;
+    font-size: 200pt; font-weight: 700; line-height: 1; font-family: "Bahnschrift", "Segoe UI", sans-serif;
+}
+.cover .c-meta { position: absolute; left: 30mm; right: 15mm; bottom: 30mm; border-top: 0.6mm solid #1d1f21; }
+.cover .c-meta table { width: 100%; border-collapse: collapse; margin: 0; page-break-inside: auto; }
+.cover .c-meta td {
+    width: 33.3%; padding: 4mm 0 0; border: 0; background: transparent; vertical-align: top;
+}
+.cover .c-meta .k { color: #6b6f72; font-size: 7.5pt; letter-spacing: 0.3em; }
+.cover .c-meta .v { margin-top: 1.5mm; font-size: 15pt; font-weight: 600; font-family: "Bahnschrift", "Microsoft YaHei", sans-serif; }
+
+/* ---------- 正文 ---------- */
+.report {
+    width: 100%; margin: 0; padding: 20mm 16mm 18mm 26mm;
+    -webkit-box-decoration-break: clone; box-decoration-break: clone;
+}
+.report h1 { display: none; }  /* 标题已在封面呈现，正文不重复 */
+.report > p:first-of-type { color: #6b6f72; font-size: 9pt; }
+h2 {
+    position: relative; margin: 9mm 0 4mm; padding: 1.6mm 9mm 1.6mm 3.5mm;
+    display: inline-block; min-width: 48mm;
+    background: #1d1f21; color: #f3f4f2; font-size: 11pt; font-weight: 600; letter-spacing: 0.2em;
+    break-after: avoid; page-break-after: avoid;
+}
+h2::after {
+    content: ""; position: absolute; top: 0; right: -4mm; width: 0; height: 0;
+    border-top: 4.4mm solid transparent; border-bottom: 4.4mm solid transparent; border-left: 4mm solid #1d1f21;
+}
+h2.ai-section { background: #f5c400; color: #1d1f21; }
+h2.ai-section::after { border-left-color: #f5c400; }
+h3 {
+    margin: 5mm 0 2mm; color: #1d1f21; font-size: 10.5pt; font-weight: 600; letter-spacing: 0.08em;
+    break-after: avoid; page-break-after: avoid;
+}
+p { margin: 1.5mm 0; }
+strong { color: #1d1f21; font-weight: 600; }
+ul, ol { margin: 1.5mm 0 3mm; padding-left: 0; list-style: none; }
+li {
+    margin: 0; padding: 1.6mm 0; border-bottom: 0.25mm solid #e3e5e1;
+    break-inside: avoid; page-break-inside: avoid;
+}
+li:last-child { border-bottom: 0; }
+ol { counter-reset: n; }
+ol > li { counter-increment: n; padding-left: 8mm; position: relative; }
+ol > li::before {
+    content: counter(n, decimal-leading-zero); position: absolute; left: 0; top: 1.6mm;
+    color: #9a6b00; font-family: "Bahnschrift", "Segoe UI", sans-serif; font-weight: 600;
+}
+hr { border: 0; height: 0; margin: 3mm 0; }
+blockquote {
+    margin: 3mm 0; padding: 1.5mm 0 1.5mm 4mm; color: #3a3d40;
+    border-left: 1mm solid #f5c400; background: transparent;
+}
+blockquote p { margin: 0; }
+table {
+    width: 100%; margin: 3mm 0 5mm; border-collapse: collapse; font-size: 9.5pt;
+    break-inside: avoid; page-break-inside: avoid;
+}
+th {
+    text-align: left; padding: 2mm 2.5mm; color: #6b6f72; font-size: 8pt; font-weight: 600;
+    letter-spacing: 0.15em; border-bottom: 0.6mm solid #1d1f21; background: transparent;
+}
+td { padding: 2mm 2.5mm; border-bottom: 0.25mm solid #d9dcd8; vertical-align: top; }
+tr:nth-child(even) td { background: transparent; }
+code { padding: 0 1mm; background: #eceeea; font-family: "Bahnschrift", Consolas, monospace; font-size: 9pt; }
+pre { padding: 3mm; background: #f3f4f2; border-left: 1mm solid #1d1f21; white-space: pre-wrap; }
+a { color: #1d1f21; text-decoration: none; border-bottom: 0.3mm solid #f5c400; }
+
+/* ---------- 图表（前端合成的 data URI 图片） ---------- */
+.report-charts { margin: 4mm 0 2mm; }
+.report-chart { margin: 0 0 5mm; text-align: center; break-inside: avoid; page-break-inside: avoid; }
+.report-chart img { width: 100%; max-width: 168mm; height: auto; border: 0.3mm solid #c9ccc8; }
+.report-chart-caption { margin: 1.5mm 0 0; color: #6b6f72; font-size: 8pt; letter-spacing: 0.2em; text-align: center; }
+
+/* 屏幕预览（浏览器直接打开 HTML）时：纸张居中，逐页重复的档案脊/页眉页脚只在打印时出现 */
+@media screen {
+    body { background: #2b2b2b; }
+    .cover, .report { background: #ffffff; margin: 0 auto 8mm; }
+    .report { max-width: 210mm; }
+    .spine, .running-head, .running-foot { display: none; }
+}
+</style>
+</head>
+<body>
+<section class="cover"><div class="c-spine"><i></i><div class="vt">Rhodes · Creator · Dossier</div></div><div class="c-body"><div class="c-top">FishTool / Self-Diagnosis<span class="r">UID 123456</span></div><div class="kicker">B站账号诊断报告</div><h1 class="c-title">创作者<br>档案</h1><div class="c-en">Creator Diagnosis Report</div><div class="c-rule"></div><div class="c-big">01</div></div><div class="c-meta"><table><tr><td><div class="k">账号</div><div class="v">测试UP&lt;script&gt;</div></td><td><div class="k">UID</div><div class="v">123456</div></td><td><div class="k">数据采集</div><div class="v">2026-11-04 10:00:00</div></td></tr></table></div></section>
+<div class="spine"><i></i></div>
+<div class="running-head"><span class="l">测试UP&lt;script&gt; · UID 123456</span><span class="r">Self-Diagnosis Dossier</span></div>
+<div class="running-foot">FishTool · 生成于 2026-11-04 10:40:39</div>
+<main class="report"><h1>B站账号诊断报告</h1>
+
+<p><strong>生成时间</strong>: 2026-11-04 10:40:39<br />
+<strong>数据采集时间</strong>: 2026-11-04 10:00:00<br />
+<strong>账号UID</strong>: 123456<br />
+<strong>账号名称</strong>: 测试UP&lt;script&gt;</p>
+
+<hr />
+
+<h2>数据可得性清单</h2>
+
+<h3>已获取数据</h3>
+
+<ul>
+<li><strong>基础信息</strong>: 粉丝数、等级、认证状态</li>
+<li><strong>投稿数据</strong>: 视频列表、播放量、评论数、收藏数</li>
+<li><strong>投稿节奏</strong>: 发布频率、断更记录</li>
+<li><strong>互动指标</strong>: 粉丝触达率、评论率、收藏率（估算）</li>
+</ul>
+
+<h3>无法获取数据（仅创作者中心可见）</h3>
+
+<ul>
+<li><strong>完播率</strong>: 视频完整播放比例</li>
+<li><strong>观众画像</strong>: 年龄、性别、地域分布</li>
+<li><strong>流量来源</strong>: 推荐、搜索、粉丝等来源占比</li>
+<li><strong>实时弹幕热度</strong>: 弹幕密度曲线</li>
+</ul>
+
+<blockquote>
+  <p> <strong>提示</strong>: 以上数据需登录B站创作者中心查看</p>
+</blockquote>
+
+<hr />
+
+<h2>账号概览</h2>
+
+<ul>
+<li><strong>粉丝数</strong>: 12,345</li>
+<li><strong>关注数</strong>: 12</li>
+<li><strong>充电人数</strong>: 3</li>
+<li><strong>等级</strong>: Lv.6</li>
+</ul>
+
+<hr />
+
+<h2>投稿数据分析</h2>
+
+<ul>
+<li><strong>总投稿数</strong>: 42 个视频</li>
+<li><strong>总播放量</strong>: 1,234,567</li>
+<li><strong>总评论数</strong>: 3,456</li>
+<li><strong>总收藏数</strong>: 7,890</li>
+<li><strong>平均播放</strong>: 29,394（全部已采集投稿的全历史累计口径）</li>
+<li><strong>平均评论</strong>: 82</li>
+</ul>
+
+<p><strong> 最高播放视频</strong>:<br />
+- 标题: 最高播放 &lt;i&gt;视频&lt;/i&gt;<br />
+- 播放: 300,000<br />
+- BV号: BV1xx411c7mD</p>
+
+<hr />
+
+<h2>投稿节奏</h2>
+
+<ul>
+<li><strong>投稿频率</strong>: 1.0 视频/周</li>
+<li><strong>投稿频率</strong>: 暂无数据 视频/月</li>
+<li><strong>活跃天数</strong>: 暂无数据 天</li>
+<li><strong>最长断更</strong>: 20 天</li>
+<li><strong>近30天投稿</strong>: 4 个视频</li>
+</ul>
+
+<p> <strong>评价</strong>: 投稿频率中等，建议提升至每周2-3更</p>
+
+<hr />
+
+<h2>互动指标</h2>
+
+<ul>
+<li><p><strong>粉丝触达率</strong>: 42.1%</p>
+
+<blockquote>
+  <p>平均播放量占粉丝数的比例，反映粉丝活跃度</p>
+</blockquote></li>
+<li><p><strong>评论率</strong>: 3.1%</p>
+
+<blockquote>
+  <p>评论数占播放量的比例，反映内容互动性</p>
+</blockquote></li>
+<li><p><strong>收藏率</strong>: 暂无数据</p>
+
+<blockquote>
+  <p>收藏数占播放量的比例，反映内容价值度</p>
+</blockquote></li>
+</ul>
+
+<p> <strong>触达评价</strong>: 粉丝触达率高，说明粉丝粘性强</p>
+
+<hr />
+
+<h2 class="ai-section">AI 调研报告</h2>
+
+<p>账号定位清晰。</p>
+
+<ul>
+<li>亮点一</li>
+<li>亮点二</li>
+</ul>
+
+<h2 class="ai-section">运营点评</h2>
+
+<p>建议稳定更新。</p>
+
+<blockquote>
+  <p>test · 生成于 2026-11-04 10:01:00</p>
+</blockquote>
+
+<hr />
+
+<h2>改进建议</h2>
+
+<p> 整体表现良好，继续保持！</p>
+
+<hr />
+
+<p><em>本报告由B站运营工具箱自动生成</em></p>
+</main>
+</body>
+</html>
