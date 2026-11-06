@@ -284,7 +284,21 @@ def test_analyze_strategy_sends_identity_constrained_messages() -> None:
     assert "昵称=测试UP" in system_message["content"]
     assert "身份核对" in system_message["content"]
     assert user_message["role"] == "user"
-    assert call["kwargs"] == {"temperature": 0.7, "max_tokens": 2000}
+    # 不写死 max_tokens，交给配置 llm.max_tokens
+    assert call["kwargs"] == {"temperature": 0.7}
+
+
+def test_analyze_strategy_truncated_reply_has_own_error_code() -> None:
+    """五维分析被截断（finish_reason=length）：不当完整分析展示，error 为 output_truncated。"""
+    content = _valid_content()
+    response = {"choices": [{"message": {"content": content}, "finish_reason": "length"}]}
+    analyzer = StrategyAnalyzer(_ContractLLMClient(response=response))
+
+    result = asyncio.run(analyzer.analyze_strategy(_up_data()))
+
+    assert result["success"] is False
+    assert result["error"] == "output_truncated"
+    assert "单次输出上限" in result["message"]
 
 
 def test_analyze_strategy_daily_token_limit_has_own_error_code() -> None:

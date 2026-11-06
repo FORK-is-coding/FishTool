@@ -324,6 +324,21 @@ def test_event_mode_daily_token_limit_warning_explains_cause(env) -> None:
     assert "模型生成失败" not in result["warning"]
 
 
+def test_e35_truncated_reply_uses_event_templates_with_output_limit_warning(env) -> None:
+    """事件模式模型输出被截断：走事件规则模板，提示调大单次输出上限。"""
+    _seed_opportunity_run(env)
+    response = {"choices": [{"message": {"content": '[{"title": "半截'}, "finish_reason": "length"}]}
+    service, _generator, _llm, _tag = _build_service(env, llm=FakeLLM(response=response))
+
+    result = asyncio.run(service.generate(_event_request(count=1, use_llm=True, generation_request_id="e35-trunc")))
+
+    assert result["used_llm"] is False
+    assert result["topics"]
+    assert "单次输出上限" in result["warning"]
+    assert "事件规则模板" in result["warning"]
+    assert "模型生成失败" not in result["warning"]
+
+
 # ===========================================================================
 # E36 — Topic 事务中间 flush 失败
 # ===========================================================================
