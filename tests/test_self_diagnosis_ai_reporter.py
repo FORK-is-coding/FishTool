@@ -130,7 +130,7 @@ def test_generate_success_returns_parsed_report(monkeypatch):
 
 
 def test_generate_passes_expected_llm_parameters(monkeypatch):
-    """调用 LLM 时应带上系统提示、低温度与 token 上限。"""
+    """调用 LLM 时应带上系统提示与低温度；不写死 token 上限，交给配置 llm.max_tokens。"""
     fake = _FakeLLMClient()
     _patch_client(monkeypatch, fake)
 
@@ -139,8 +139,62 @@ def test_generate_passes_expected_llm_parameters(monkeypatch):
     call = fake.chat_calls[0]
     assert call["system"] == AIDiagnosisReporter.SYSTEM_PROMPT
     assert call["temperature"] == pytest.approx(0.35)
-    assert call["max_tokens"] == 1200
+    assert call["max_tokens"] is None
     assert "严格 JSON" in call["prompt"]
+
+
+def test_generate_request_uses_configured_max_tokens(monkeypatch):
+    """经真实 LLMClient 发出的请求体里，max_tokens 应等于配置 llm.max_tokens。"""
+    from llm import client as llm_module
+
+    class _Config:
+        values = {
+            "llm.api_base": "http://test.local/v1",
+            "llm.model": "test-model",
+            "llm.max_tokens": 3456,
+            "llm.daily_token_limit": 0,
+        }
+
+        def get(self, key, default=None):
+            return self.values.get(key, default)
+
+        def get_secret(self, key):
+            return "sk-test" if key == "llm_api_key" else None
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": GOOD_JSON}}]}
+
+    class _HTTP:
+        def __init__(self, *args, **kwargs):
+            self.payloads: list[dict] = []
+
+        async def post(self, url, json=None):
+            self.payloads.append(json)
+            return _Response()
+
+        async def aclose(self):
+            return None
+
+    http_clients: list[_HTTP] = []
+
+    def http_factory(*args, **kwargs):
+        http = _HTTP()
+        http_clients.append(http)
+        return http
+
+    monkeypatch.setattr(llm_module, "config", _Config())
+    monkeypatch.setattr(llm_module.httpx, "AsyncClient", http_factory)
+    monkeypatch.setattr(llm_module, "_db_tokens_used_on", lambda day: 0)
+    monkeypatch.setattr(ai_reporter_module, "LLMClient", llm_module.LLMClient)
+
+    result = asyncio.run(AIDiagnosisReporter().generate(SAMPLE_SELF_DATA))
+
+    assert result["success"] is True
+    assert http_clients[0].payloads[0]["max_tokens"] == 3456
 
 
 def test_generate_closes_client_after_success(monkeypatch):
