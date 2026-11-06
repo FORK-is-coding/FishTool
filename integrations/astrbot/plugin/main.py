@@ -45,10 +45,12 @@ PLUGIN_DIR = Path(__file__).resolve().parent
 
 #: 自诊摘要末尾固定附的一句：协议端先返回成功、再异步下载失败时插件感知不到，只能提前说明。
 FILE_HINT = "PDF 报告随后发送；如果没收到文件，见插件 README『聊天指令 → 收不到文件』。"
+#: callback_api_base 是 AstrBot 的系统设置，不在插件配置里；面板只显示中文名，所以提示里写出完整位置。
 FILE_FALLBACK_TEXT = (
-    "PDF 发送失败：协议端读不到插件生成的文件。AstrBot 与 NapCat 分开部署时，请在 AstrBot 配置 "
-    "callback_api_base（填 NapCat 能访问到的 AstrBot 地址），或把 AstrBot 的 data 目录以相同路径挂载到 "
-    "NapCat。报告已保存在插件的 exports 目录，24 小时内有效。"
+    "PDF 发送失败：协议端读不到插件生成的文件。AstrBot 与 NapCat 分开部署时，请在 AstrBot 面板 → "
+    "系统设置 → 常规 → 基础运行 →「对外可达的回调接口地址」（callback_api_base，不在插件配置里）"
+    "填写 NapCat 能访问到的 AstrBot 地址，或把 AstrBot 的 data 目录以相同路径挂载到 NapCat。"
+    "报告已保存在插件的 exports 目录，24 小时内有效。"
 )
 FONT_DEGRADED_HINT = "注意：未找到可用的中文字体，PDF 版式已降级。请在插件配置的『自诊报告字体』里填写 .ttf / .ttc 路径。"
 #: POST 隧道标记：bridge 只有 GET/POST 且 POST 不能带 query，bridge-shim.js 用它还原 PUT/PATCH/DELETE。
