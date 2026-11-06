@@ -536,6 +536,37 @@ class TokenLimitExceededError(LLMError):
                 "可在配置页调高“每日 token 上限”，或明天再试。")
 
 
+class LLMOutputTruncatedError(LLMError):
+    """模型输出达到单次输出上限被截断（finish_reason == "length"）。
+
+    回复不完整，不能当作结果使用。常见原因是 ``llm.max_tokens`` 太小，或者模型开着思考模式、
+    思考过程先把额度用完了。
+
+    Attributes:
+        max_tokens: 本次请求的输出上限（未知时为 None）。
+        content_chars: 截断时正文的字符数。
+        reasoning_chars: 截断时思考内容（reasoning_content）的字符数，没有时为 0。
+    """
+    def __init__(self, max_tokens: int | None, content_chars: int = 0, reasoning_chars: int = 0):
+        """异常初始化"""
+        super().__init__(
+            f"模型输出被截断（finish_reason=length，max_tokens={max_tokens}，"
+            f"正文 {content_chars} 字，思考内容 {reasoning_chars} 字）",
+            "LLM_OUTPUT_TRUNCATED",
+        )
+        self.max_tokens = max_tokens
+        self.content_chars = content_chars
+        self.reasoning_chars = reasoning_chars
+
+    @property
+    def user_message(self) -> str:
+        """给用户看的提示：说明是输出上限不够，指出在哪里调整。"""
+        hint = "；模型开着思考模式时，思考过程也计入上限" if self.reasoning_chars else ""
+        limit = f"（当前 {self.max_tokens}）" if self.max_tokens else ""
+        return (f"AI 回复超过单次输出上限{limit}被截断，结果不完整。"
+                f"可在配置页调大“单次输出上限”后重试{hint}。")
+
+
 # ============ 业务逻辑异常 ============
 # 用于应用层的业务逻辑验证和错误处理
 

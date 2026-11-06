@@ -195,6 +195,36 @@ def test_generate_topics_with_llm_handles_missing_choices() -> None:
     assert asyncio.run(generator.generate_topics_with_llm("方向", "游戏", ["a"], 5)) == []
 
 
+def test_generate_topics_with_llm_does_not_hard_code_max_tokens() -> None:
+    """请求不再写死 max_tokens，交给配置 llm.max_tokens。"""
+    import asyncio
+
+    llm = FakeLLM(response=_llm_response([{"title": "t"}]))
+    generator = _build(llm=llm)
+
+    asyncio.run(generator.generate_topics_with_llm("方向", "游戏", ["a"], 1))
+
+    assert "max_tokens" not in llm.calls[0]
+
+
+def test_truncated_reply_falls_back_with_output_limit_warning() -> None:
+    """选题 JSON 被截断（finish_reason=length）：走降级方案，提示调大单次输出上限。"""
+    import asyncio
+
+    response = {"choices": [{"message": {"content": '[{"title": "写到一半'},
+                             "finish_reason": "length"}]}
+    llm = FakeLLM(configured=True, response=response)
+    generator = _build(generator_tags={"a": 3, "b": 2}, llm=llm)
+
+    result = asyncio.run(generator.generate_topics("方向", "游戏", count=2, use_llm=True))
+
+    assert result["used_llm"] is False
+    assert len(result["topics"]) == 2
+    assert "单次输出上限" in result["warning"]
+    assert "降级方案" in result["warning"]
+    assert "LLM生成失败" not in result["warning"]
+
+
 def test_generate_topics_with_llm_propagates_upstream_error() -> None:
     """LLM 调用异常应继续向上抛出，由调用方决定降级。"""
     import asyncio

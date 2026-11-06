@@ -52,9 +52,9 @@ import re
 import logging
 
 # 从 llm.client 导入符号
-from llm.client import LLMClient
+from llm.client import LLMClient, configured_max_tokens, raise_if_truncated
 # 从 core.exceptions 导入符号
-from core.exceptions import LLMNotConfiguredError
+from core.exceptions import LLMNotConfiguredError, LLMOutputTruncatedError
 # 从 core.logger 导入符号
 from core.logger import get_logger
 
@@ -290,15 +290,18 @@ class SentimentAnalyzer:
         
         # 异常保护：局部失败不影响主流程
         try:
+            # 不写死 max_tokens：由 LLMClient 读取配置 llm.max_tokens（配置页“单次输出上限”）。
+            # 原来的 500 对思考模型几乎必然截断，截断后半截 JSON 解析失败只会被当作原文保留。
             response = await self.llm_client.chat_completion(
                 messages=[
                     {"role": "system", "content": "你是一位专业的评论分析师，擅长快速总结用户反馈的核心观点。"},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.3,
-                max_tokens=500
             )
-            
+            # 截断的总结不完整：抛出后由下方 except 记为该批 error，合并时跳过。
+            raise_if_truncated(response, max_tokens=configured_max_tokens())
+
             # 正确解析 OpenAI 格式返回：response['choices'][0]['message']['content']
             # 将结果交回调用方
             if 'choices' in response and len(response['choices']) > 0:
@@ -311,6 +314,10 @@ class SentimentAnalyzer:
             summary = self._parse_llm_summary(content)
             return summary
             
+        except LLMOutputTruncatedError as e:
+            # 可预期的状态（extract 时已记 warning），不打 ERROR 堆栈；该批记为失败，合并时跳过。
+            logger.warning(f"LLM总结被截断，跳过该批: {e}")
+            return {'error': e.user_message}
         except Exception as e:
             logger.error(f"LLM总结失败: {e}", exc_info=True)
             return {'error': str(e)}

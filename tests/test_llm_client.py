@@ -718,6 +718,75 @@ def test_simple_chat_invalid_response_raises(llm_env):
     assert "格式错误" in str(excinfo.value)
 
 
+def _completion(content="ok", finish_reason="stop", reasoning=None):
+    """构造一条 chat completion 响应。"""
+    message = {"content": content}
+    if reasoning is not None:
+        message["reasoning_content"] = reasoning
+    choice = {"message": message}
+    if finish_reason is not None:
+        choice["finish_reason"] = finish_reason
+    return {"choices": [choice]}
+
+
+@pytest.mark.parametrize("finish_reason", ["stop", None, "content_filter"])
+def test_extract_reply_returns_content_when_not_truncated(finish_reason):
+    """非 length 的结束原因（含缺失）照常返回正文，保持旧行为。"""
+    assert llm_module.extract_reply(_completion("答案", finish_reason)) == "答案"
+
+
+def test_extract_reply_raises_on_length_with_partial_content():
+    """finish_reason=length 时即使正文里有半截内容也不返回，抛截断异常并带上长度。"""
+    from core.exceptions import LLMOutputTruncatedError
+
+    with pytest.raises(LLMOutputTruncatedError) as excinfo:
+        llm_module.extract_reply(_completion('{"report": "写到一半', "length"), max_tokens=2000)
+    err = excinfo.value
+    assert err.max_tokens == 2000
+    assert err.content_chars == len('{"report": "写到一半')
+    assert err.reasoning_chars == 0
+    assert "2000" in err.user_message and "单次输出上限" in err.user_message
+    assert "思考" not in err.user_message
+
+
+def test_extract_reply_truncation_by_reasoning_mentions_thinking_mode():
+    """思考内容把额度用完、正文为空：提示里点明思考模式也计入上限。"""
+    from core.exceptions import LLMOutputTruncatedError
+
+    with pytest.raises(LLMOutputTruncatedError) as excinfo:
+        llm_module.extract_reply(_completion("", "length", reasoning="想" * 3000), max_tokens=2400)
+    assert excinfo.value.content_chars == 0
+    assert excinfo.value.reasoning_chars == 3000
+    assert "思考模式" in excinfo.value.user_message
+
+
+def test_extract_reply_never_returns_reasoning_content():
+    """reasoning_content 是草稿，正文为空时也不拿它代替正文。"""
+    reply = llm_module.extract_reply(_completion("", "stop", reasoning='{"report": "草稿"}'))
+    assert reply == ""
+
+
+@pytest.mark.parametrize("result", [{}, {"choices": []}, {"choices": [{}]}, {"choices": ["x"]}, None])
+def test_extract_reply_malformed_response_raises_api_error(result):
+    with pytest.raises(LLMAPIError):
+        llm_module.extract_reply(result)
+
+
+def test_simple_chat_raises_truncated_with_configured_max_tokens(llm_env):
+    """simple_chat 未传 max_tokens 时，截断异常里带的是配置 llm.max_tokens。"""
+    from core.exceptions import LLMOutputTruncatedError
+
+    client = _make_client()
+
+    async def _truncated(messages, **kwargs):
+        return _completion("半截", "length")
+
+    client.chat_completion = _truncated
+    with pytest.raises(LLMOutputTruncatedError) as excinfo:
+        asyncio.run(client.simple_chat("hi"))
+    assert excinfo.value.max_tokens == 2000
+
+
 def test_batch_process_isolates_single_failure(llm_env):
     """批内单条失败返回空串占位，顺序与总数保持不变。"""
     client = _make_client()

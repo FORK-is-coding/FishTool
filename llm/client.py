@@ -44,7 +44,9 @@ import logging
 import httpx
 
 # 从 core.exceptions 导入符号
-from core.exceptions import LLMError, LLMNotConfiguredError, LLMAPIError, TokenLimitExceededError
+from core.exceptions import (
+    LLMError, LLMNotConfiguredError, LLMAPIError, LLMOutputTruncatedError, TokenLimitExceededError,
+)
 # 从 core.logger 导入符号
 from core.logger import get_logger
 # 从 core.config 导入符号
@@ -101,6 +103,72 @@ def _db_tokens_used_on(day: date) -> Optional[int]:
     except Exception as e:
         logger.warning(f"读取当日Token用量失败，回退内存计数: {e}")
         return None
+
+
+def raise_if_truncated(result: Any, *, max_tokens: Optional[int] = None) -> None:
+    """响应的 finish_reason 为 length 时抛 LLMOutputTruncatedError，其余情况什么都不做。
+
+    给自己从 ``choices[0].message.content`` 取正文、并且对缺 choices 有既定处理的调用方用：
+    只补上截断检测，不改变它们对畸形响应的处理方式。
+    """
+    choices = result.get('choices') if isinstance(result, dict) else None
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return
+    choice = choices[0]
+    if choice.get('finish_reason') != 'length':
+        return
+    message = choice.get('message') if isinstance(choice.get('message'), dict) else {}
+    content = message.get('content') if isinstance(message.get('content'), str) else ''
+    reasoning = message.get('reasoning_content')
+    reasoning_chars = len(reasoning) if isinstance(reasoning, str) else 0
+    logger.warning(
+        "LLM 输出被截断: finish_reason=length max_tokens=%s 正文=%d字 思考内容=%d字",
+        max_tokens, len(content), reasoning_chars,
+    )
+    raise LLMOutputTruncatedError(max_tokens, len(content), reasoning_chars)
+
+
+def configured_max_tokens() -> Any:
+    """当前配置的单次输出上限 llm.max_tokens；不传 max_tokens 的请求按它限制输出。"""
+    return config.get('llm.max_tokens', 2000)
+
+
+def extract_reply(result: Any, *, max_tokens: Optional[int] = None) -> str:
+    """从 chat completion 响应里取出回复正文；输出被截断时抛 LLMOutputTruncatedError。
+
+    - ``finish_reason == "length"``：输出达到上限，正文不完整。不管正文里有没有半截 JSON，
+      都不能当结果用，抛截断异常。
+    - 推理模型把思考过程放在 ``message.reasoning_content``，那是草稿，不参与解析，
+      只在日志里记录长度，便于判断是不是思考把额度用完了。
+    - 其他 ``finish_reason``（stop、缺失等）照常返回正文，保持与旧行为一致。
+
+    Args:
+        result: ``chat_completion`` 返回的响应字典。
+        max_tokens: 本次请求的输出上限，只用于报错信息。
+
+    Raises:
+        LLMAPIError: 响应缺少 choices 或 message。
+        LLMOutputTruncatedError: finish_reason 为 length。
+    """
+    choices = result.get('choices') if isinstance(result, dict) else None
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        raise LLMAPIError("API返回数据格式错误")
+    choice = choices[0]
+    message = choice.get('message') if isinstance(choice.get('message'), dict) else None
+    if message is None:
+        raise LLMAPIError("API返回数据格式错误")
+    raise_if_truncated(result, max_tokens=max_tokens)
+    content = message.get('content')
+    content = content if isinstance(content, str) else ''
+    reasoning = message.get('reasoning_content')
+    reasoning_chars = len(reasoning) if isinstance(reasoning, str) else 0
+    finish_reason = choice.get('finish_reason')
+    if not content.strip():
+        # 不是截断却没有正文，多半是端点或模型异常；记下结束原因便于排查，不在这里抛错。
+        logger.warning(
+            "LLM 返回空正文: finish_reason=%s 思考内容=%d字", finish_reason, reasoning_chars,
+        )
+    return content
 
 
 class LLMClient:
@@ -491,15 +559,12 @@ class LLMClient:
             messages.append({"role": "system", "content": system})
         # 追加到列表
         messages.append({"role": "user", "content": prompt})
-        
+
+        max_tokens = kwargs.get('max_tokens')
+        if max_tokens is None:
+            max_tokens = configured_max_tokens()
         result = await self.chat_completion(messages, **kwargs)
-        
-        # 校验响应结构
-        if 'choices' not in result or len(result['choices']) == 0:
-            # 抛出异常中断流程
-            raise LLMAPIError("API返回数据格式错误")
-        
-        return result['choices'][0]['message']['content']
+        return extract_reply(result, max_tokens=max_tokens)
     
     async def batch_process(self,
                           prompts: List[str],

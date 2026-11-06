@@ -42,8 +42,10 @@ from datetime import datetime
 import logging
 
 from core.logger import get_logger
-from core.exceptions import LLMNotConfiguredError, LLMError, TokenLimitExceededError
-from llm.client import LLMClient
+from core.exceptions import (
+    LLMError, LLMNotConfiguredError, LLMOutputTruncatedError, TokenLimitExceededError,
+)
+from llm.client import LLMClient, configured_max_tokens, raise_if_truncated
 
 logger = get_logger(__name__)
 
@@ -230,15 +232,17 @@ class StrategyAnalyzer:
 
             # 调用LLM。通用OpenAI兼容端点没有统一的联网搜索参数，避免发送供应商不支持的字段。
             logger.info(f"[策略分析] 调用LLM分析: uid={target_uid}, name={target_name}")
+            # 不写死 max_tokens：由 LLMClient 读取配置 llm.max_tokens（配置页“单次输出上限”）。
             response = await self.llm_client.chat_completion(
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.7,
-                max_tokens=2000
             )
-            
+            # 五维分析写到一半被截断时，后几个维度缺失，不能当完整分析展示。
+            raise_if_truncated(response, max_tokens=configured_max_tokens())
+
             # 解析LLM返回
             # 正确解析 OpenAI 格式返回：response['choices'][0]['message']['content']
             if 'choices' in response and len(response['choices']) > 0:
@@ -287,6 +291,13 @@ class StrategyAnalyzer:
             return {
                 'success': False,
                 'error': 'token_limit',
+                'message': e.user_message,
+            }
+        except LLMOutputTruncatedError as e:
+            logger.warning(f"[策略分析] 输出被截断: {e}")
+            return {
+                'success': False,
+                'error': 'output_truncated',
                 'message': e.user_message,
             }
         except LLMError as e:
