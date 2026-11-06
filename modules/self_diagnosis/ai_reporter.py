@@ -7,10 +7,15 @@ from datetime import datetime
 from typing import Any
 
 from core.logger import get_logger
-from core.exceptions import LLMError, TokenLimitExceededError
+from core.exceptions import LLMAPIError, LLMError, TokenLimitExceededError
 from llm.client import LLMClient
 
 logger = get_logger(__name__)
+
+#: OpenAI 兼容的 JSON 模式：要求服务端只返回一个 JSON 对象（DeepSeek、通义、OpenAI 等支持）。
+JSON_RESPONSE_FORMAT = {"type": "json_object"}
+#: 端点不认识 response_format 时常见的返回码；只有这两种情况才去掉参数重试。
+_UNSUPPORTED_PARAM_STATUS = (400, 422)
 
 
 class AIDiagnosisReporter:
@@ -46,11 +51,7 @@ class AIDiagnosisReporter:
             # 低温度保证结论稳定。不传 max_tokens：由 LLMClient 读取配置 llm.max_tokens，
             # 写死的上限会让配置失效，输出被截断后 JSON 不完整、解析失败。
             client = LLMClient()
-            content = await client.simple_chat(
-                prompt,
-                system=self.SYSTEM_PROMPT,
-                temperature=0.35,
-            )
+            content = await self._chat_json(client, prompt)
             parsed = self._parse_response(content)
             # 解析成功后带上模型名与生成时间，供前端展示溯源信息。
             return {
@@ -85,6 +86,25 @@ class AIDiagnosisReporter:
                     await client.close()
                 except Exception as exc:
                     logger.warning("[AI自诊] 关闭LLM客户端失败: %s", exc)
+
+    async def _chat_json(self, client: LLMClient, prompt: str) -> str:
+        """请求模型并要求服务端返回 JSON 对象；端点不支持 JSON 模式时去掉参数重试一次。
+
+        提示词里已经要求输出 JSON，这里再用 ``response_format`` 让服务端强制约束。
+        部分 OpenAI 兼容端点不认识这个参数，会返回 400/422；这时退回只靠提示词约束。
+        其他错误（401、429、5xx、网络）原样抛出，不重试。
+        """
+        kwargs = {"system": self.SYSTEM_PROMPT, "temperature": 0.35}
+        try:
+            return await client.simple_chat(prompt, response_format=JSON_RESPONSE_FORMAT, **kwargs)
+        except LLMAPIError as exc:
+            if getattr(exc, "status_code", None) not in _UNSUPPORTED_PARAM_STATUS:
+                raise
+            logger.warning(
+                "[AI自诊] 端点拒绝 JSON 模式（HTTP %s），改为只用提示词约束重试",
+                exc.status_code,
+            )
+            return await client.simple_chat(prompt, **kwargs)
 
     def _build_payload(self, self_data: dict[str, Any]) -> dict[str, Any]:
         """筛选 LLM 所需字段，避免发送冗余接口内容。

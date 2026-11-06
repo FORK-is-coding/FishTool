@@ -41,21 +41,28 @@ class _FakeLLMClient:
     """记录调用参数的假 LLM 客户端，可注入聊天/关闭异常。"""
 
     def __init__(self, content: str = GOOD_JSON, chat_error: Exception | None = None,
-                 close_error: Exception | None = None) -> None:
+                 close_error: Exception | None = None,
+                 json_mode_error: Exception | None = None) -> None:
         self.model = "fake-model-v1"
         self.api_base = "https://fake.example/v1"
         self._content = content
         self._chat_error = chat_error
         self._close_error = close_error
+        # 只在带 response_format 的请求上抛出，模拟端点不支持 JSON 模式。
+        self._json_mode_error = json_mode_error
         self.chat_calls: list[dict] = []
         self.closed = 0
 
     async def simple_chat(self, prompt: str, system: str | None = None,
-                          temperature: float | None = None, max_tokens: int | None = None) -> str:
+                          temperature: float | None = None, max_tokens: int | None = None,
+                          response_format: dict | None = None) -> str:
         """记录参数后返回预置内容，或抛出注入异常。"""
         self.chat_calls.append(
-            {"prompt": prompt, "system": system, "temperature": temperature, "max_tokens": max_tokens}
+            {"prompt": prompt, "system": system, "temperature": temperature,
+             "max_tokens": max_tokens, "response_format": response_format}
         )
+        if response_format is not None and self._json_mode_error is not None:
+            raise self._json_mode_error
         if self._chat_error is not None:
             raise self._chat_error
         return self._content
@@ -195,6 +202,98 @@ def test_generate_request_uses_configured_max_tokens(monkeypatch):
 
     assert result["success"] is True
     assert http_clients[0].payloads[0]["max_tokens"] == 3456
+
+
+def _api_error(status_code: int) -> Exception:
+    """构造带状态码的 LLMAPIError，与 LLMClient.chat_completion 抛出的形状一致。"""
+    from core.exceptions import LLMAPIError
+
+    err = LLMAPIError(f"API请求失败: HTTP {status_code}")
+    err.status_code = status_code
+    return err
+
+
+def test_generate_requests_json_object_mode(monkeypatch):
+    """第一次请求带 response_format=json_object，让服务端强制只返回 JSON。"""
+    fake = _FakeLLMClient()
+    _patch_client(monkeypatch, fake)
+
+    result = asyncio.run(AIDiagnosisReporter().generate(SAMPLE_SELF_DATA))
+
+    assert result["success"] is True
+    assert len(fake.chat_calls) == 1
+    assert fake.chat_calls[0]["response_format"] == {"type": "json_object"}
+
+
+@pytest.mark.parametrize("status", [400, 422])
+def test_generate_retries_without_json_mode_when_endpoint_rejects_it(monkeypatch, status):
+    """端点不认识 response_format（400/422）时，去掉参数再请求一次，结果照常可用。"""
+    fake = _FakeLLMClient(json_mode_error=_api_error(status))
+    _patch_client(monkeypatch, fake)
+
+    result = asyncio.run(AIDiagnosisReporter().generate(SAMPLE_SELF_DATA))
+
+    assert result["success"] is True
+    assert [c["response_format"] for c in fake.chat_calls] == [{"type": "json_object"}, None]
+    assert fake.chat_calls[1]["system"] == AIDiagnosisReporter.SYSTEM_PROMPT
+    assert fake.chat_calls[1]["temperature"] == pytest.approx(0.35)
+
+
+@pytest.mark.parametrize("status", [401, 429, 500])
+def test_generate_does_not_retry_other_api_errors(monkeypatch, status):
+    """鉴权、限频、服务端错误与 JSON 模式无关，不去掉参数重试，直接降级。"""
+    fake = _FakeLLMClient(json_mode_error=_api_error(status))
+    _patch_client(monkeypatch, fake)
+
+    result = asyncio.run(AIDiagnosisReporter().generate(SAMPLE_SELF_DATA))
+
+    assert result["success"] is False
+    assert len(fake.chat_calls) == 1
+
+
+def test_json_mode_reaches_request_body(monkeypatch):
+    """经真实 LLMClient 发出的请求体里带 response_format，且没有混入其他内部参数。"""
+    from llm import client as llm_module
+
+    class _Config:
+        values = {"llm.api_base": "http://test.local/v1", "llm.model": "test-model",
+                  "llm.max_tokens": 2000, "llm.daily_token_limit": 0}
+
+        def get(self, key, default=None):
+            return self.values.get(key, default)
+
+        def get_secret(self, key):
+            return "sk-test" if key == "llm_api_key" else None
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": GOOD_JSON}, "finish_reason": "stop"}]}
+
+    payloads: list[dict] = []
+
+    class _HTTP:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def post(self, url, json=None):
+            payloads.append(json)
+            return _Response()
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(llm_module, "config", _Config())
+    monkeypatch.setattr(llm_module.httpx, "AsyncClient", _HTTP)
+    monkeypatch.setattr(llm_module, "_db_tokens_used_on", lambda day: 0)
+    monkeypatch.setattr(ai_reporter_module, "LLMClient", llm_module.LLMClient)
+
+    result = asyncio.run(AIDiagnosisReporter().generate(SAMPLE_SELF_DATA))
+
+    assert result["success"] is True
+    assert payloads[0]["response_format"] == {"type": "json_object"}
 
 
 def test_generate_closes_client_after_success(monkeypatch):
