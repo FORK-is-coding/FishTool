@@ -43,13 +43,13 @@ class AIDiagnosisReporter:
         )
         client = None
         try:
-            # 低温度保证结论稳定，max_tokens 控制响应规模。
+            # 低温度保证结论稳定。不传 max_tokens：由 LLMClient 读取配置 llm.max_tokens，
+            # 写死的上限会让配置失效，输出被截断后 JSON 不完整、解析失败。
             client = LLMClient()
             content = await client.simple_chat(
                 prompt,
                 system=self.SYSTEM_PROMPT,
                 temperature=0.35,
-                max_tokens=1200,
             )
             parsed = self._parse_response(content)
             # 解析成功后带上模型名与生成时间，供前端展示溯源信息。
