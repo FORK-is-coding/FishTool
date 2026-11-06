@@ -795,6 +795,14 @@
                         <small>所有 AI 功能共用，0 表示不限制。</small>
                     </div>
                     <button class="btn btn-secondary" onclick="saveLLMDailyLimit()">保存上限</button>
+                    <!-- 单次输出上限（llm.max_tokens）：没有自带上限的 AI 功能都按它限制每次回复的长度。
+                         与每日上限一样单独保存，不需要重新填写 API Key。 -->
+                    <div class="form-group" style="margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--rule);">
+                        <label for="llm-max-tokens">单次输出上限（token）：</label>
+                        <input type="number" id="llm-max-tokens" class="form-control" min="1" step="1" inputmode="numeric" placeholder="2000">
+                        <small>每次 AI 回复最多生成的 token 数。AI 自诊等功能提示“未按 JSON 返回”或输出被截断时调大；开启思考模式的模型，思考过程也计入这个上限。超过模型支持的最大值时服务商会报错。</small>
+                    </div>
+                    <button class="btn btn-secondary" onclick="saveLLMMaxTokens()">保存输出上限</button>
                 </section>
 
                 <section class="section">

@@ -10,6 +10,12 @@
 
 ## [未发布]
 
+### 配置页可调“单次输出上限”
+
+- 配置页 AI 配置卡片新增“单次输出上限（token）”，对应 `llm.max_tokens`（默认 2000），单独保存，不需要重新填写 API Key。没有自带上限的 AI 功能（如 AI 自诊）按它限制每次回复的长度；回复被截断、提示“未按 JSON 返回”时可以调大。开启思考模式的模型，思考过程也计入这个上限。
+- `PUT /api/config/` 写 `llm.max_tokens` 时只接受 1 到 100 万的整数，其他值返回 422。超过模型支持的最大值时由服务商报错，这里不按模型校验。
+- 默认值不变。
+
 ### 语义预算模式补 flex gap 兜底
 
 - `style.flexgap.css` 为 `.semantic-budget-mode`（14px）和 `.semantic-budget-option`（4px）补上 `.no-flex-gap` 兜底规则，`style.flexgap.css` 追加缓存后缀 `-flexgap20261105`。只在不支持 flex gap 的旧内核（Chromium 83 及以下）中生效。

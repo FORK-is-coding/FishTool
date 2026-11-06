@@ -24,6 +24,9 @@ logger = logging.getLogger(__name__)
 # 0 表示不限制；路由层拒绝负数与超过 MAX 的值。
 LLM_DAILY_TOKEN_LIMIT_DEFAULT = 2_000_000
 LLM_DAILY_TOKEN_LIMIT_MAX = 1_000_000_000
+# 单次请求的最大输出 token（llm.max_tokens）上限，只用于拒绝明显填错的值。
+# 实际可用的最大值取决于模型，超过时由服务商报错，这里不按模型校验。
+LLM_MAX_TOKENS_MAX = 1_000_000
 # v0.3.0 及之前的默认值。仍停在这个值、且用户没有在 user_config.yaml 覆盖的配置，
 # 启动时迁移到新默认值一次；迁移标记防止用户之后主动改回 10 万时被再次改写。
 LLM_DAILY_TOKEN_LIMIT_LEGACY = 100_000

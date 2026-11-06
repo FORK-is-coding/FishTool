@@ -680,6 +680,30 @@ def test_put_daily_limit_writes_migration_marker(client):
     assert _FakeConfig.plain["llm"] == {"daily_token_limit": 100000, "daily_token_limit_migrated": 1}
 
 
+@pytest.mark.parametrize("value", [1, 2000, 8192, 1_000_000])
+def test_put_max_tokens_accepts_valid_values(client, value):
+    """配置页“保存输出上限”走 PUT /：1 到 100 万的整数都能保存，并写到 llm.max_tokens。"""
+    response = client.put("/api/config/", json={"key": "llm.max_tokens", "value": value})
+    assert response.status_code == 200
+    assert _FakeConfig.plain["llm"]["max_tokens"] == value
+    assert _FakeConfig.saved == 1
+
+
+@pytest.mark.parametrize("value", [0, -1, 1_000_001, 1.5, "2000", True, None])
+def test_put_max_tokens_rejects_invalid_values(client, value):
+    """0、负数、超上限、小数、字符串、布尔都返回 422，不写配置。"""
+    response = client.put("/api/config/", json={"key": "llm.max_tokens", "value": value})
+    assert response.status_code == 422
+    assert _FakeConfig.saved == 0
+
+
+def test_put_max_tokens_with_padded_key_writes_clean_path(client):
+    """带空格的键也按校验后的 llm.max_tokens 写入，不写出脏路径。"""
+    response = client.put("/api/config/", json={"key": " llm.max_tokens ", "value": 4096})
+    assert response.status_code == 200
+    assert _FakeConfig.plain["llm"] == {"max_tokens": 4096}
+
+
 def test_post_llm_with_daily_limit_writes_migration_marker(client):
     client.post("/api/config/llm", json={"api_key": "sk", "base_url": "https://x/v1", "model": "m",
                                          "daily_token_limit": 100000})

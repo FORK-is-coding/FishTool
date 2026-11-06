@@ -47,6 +47,7 @@ from core.config import (
     ConfigManager,
     LLM_DAILY_TOKEN_LIMIT_MAX,
     LLM_DAILY_TOKEN_LIMIT_MIGRATED_KEY,
+    LLM_MAX_TOKENS_MAX,
 )
 from core.logger import get_logger
 # 从 core.database 导入符号
@@ -73,6 +74,16 @@ def _valid_daily_limit(value: Any) -> bool:
     """每日上限只接受 [0, MAX] 的整数（0 表示不限制），拒绝布尔、小数和字符串。"""
     return (not isinstance(value, bool) and isinstance(value, int)
             and 0 <= value <= LLM_DAILY_TOKEN_LIMIT_MAX)
+
+
+# 单次输出上限的配置键：没有显式传 max_tokens 的 AI 功能都按它限制输出长度。
+_MAX_TOKENS_KEY = "llm.max_tokens"
+
+
+def _valid_max_tokens(value: Any) -> bool:
+    """单次输出上限只接受 [1, MAX] 的整数。0 会让请求必然失败，所以不允许。"""
+    return (not isinstance(value, bool) and isinstance(value, int)
+            and 1 <= value <= LLM_MAX_TOKENS_MAX)
 
 
 def _normalize_base_url(url: str) -> str:
@@ -499,6 +510,11 @@ async def update_config(request: ConfigUpdateRequest):
             status_code=422,
             detail=f"每日 token 上限必须是 0 到 {LLM_DAILY_TOKEN_LIMIT_MAX} 之间的整数（0 表示不限制）",
         )
+    if key == _MAX_TOKENS_KEY and not _valid_max_tokens(request.value):
+        raise HTTPException(
+            status_code=422,
+            detail=f"单次输出上限必须是 1 到 {LLM_MAX_TOKENS_MAX} 之间的整数",
+        )
     try:
         # 赋值并准备后续使用
         config = ConfigManager()
@@ -509,6 +525,9 @@ async def update_config(request: ConfigUpdateRequest):
             config.set(key, request.value)
             # 用户主动设置过：写迁移标记，防止下次启动把主动保存的 100000 当旧默认值迁移掉
             config.set(_DAILY_LIMIT_MIGRATED_KEY, 1)
+        elif key == _MAX_TOKENS_KEY:
+            # 同上：写入校验过的 strip 后的键。
+            config.set(key, request.value)
         else:
             config.set(request.key, request.value)
         # 落盘持久化
