@@ -320,16 +320,76 @@ def test_token_limit_user_message_names_limit_and_settings_page():
 
 
 def test_generate_returns_degraded_result_on_llm_error(monkeypatch):
-    """LLM 调用失败时返回可展示的降级结构而非抛错。"""
-    fake = _FakeLLMClient(chat_error=RuntimeError("no api key"))
+    """LLM 调用失败时返回可展示的降级结构而非抛错；原始错误放在 error 字段。"""
+    fake = _FakeLLMClient(chat_error=RuntimeError("boom"))
     _patch_client(monkeypatch, fake)
 
     result = asyncio.run(AIDiagnosisReporter().generate(SAMPLE_SELF_DATA))
 
     assert result["success"] is False
-    assert "AI调研暂不可用" in result["message"]
-    assert result["error"] == "no api key"
+    assert "内部错误" in result["message"]
+    assert result["error"] == "boom"
     assert "generated_at" in result
+
+
+def _not_configured():
+    from core.exceptions import LLMNotConfiguredError
+    return LLMNotConfiguredError("LLM API密钥未配置")
+
+
+def _model_not_found():
+    from core.exceptions import LLMAPIError
+    err = LLMAPIError("LLM模型不存在：x。请在配置中改为 qwen-plus")
+    err.status_code = 404
+    return err
+
+
+def _network_error():
+    from core.exceptions import LLMError
+    return LLMError("请求失败: ConnectTimeout")
+
+
+@pytest.mark.parametrize("make_error, content, expected", [
+    (_not_configured, None, "大模型未配置"),
+    (lambda: _api_error(401), None, "检查 API Key"),
+    (lambda: _api_error(403), None, "检查 API Key"),
+    (_model_not_found, None, "更换模型"),
+    (lambda: _api_error(429), None, "HTTP 429"),
+    (lambda: _api_error(500), None, "HTTP 500"),
+    (_network_error, None, "网络"),
+    (None, "抱歉，我无法以 JSON 输出", "没有按要求返回 JSON"),
+    (None, "{bad json}", "没有按要求返回 JSON"),
+    (None, '{"report": "", "commentary": "c"}', "没有按要求返回 JSON"),
+    (None, '["not", "an", "object"]', "没有按要求返回 JSON"),
+])
+def test_generate_failure_message_matches_cause(monkeypatch, make_error, content, expected):
+    """每种失败给出对应提示，不再一律提示“检查大模型配置”。"""
+    fake = _FakeLLMClient(
+        chat_error=make_error() if make_error else None,
+        content=content if content is not None else GOOD_JSON,
+    )
+    _patch_client(monkeypatch, fake)
+
+    result = asyncio.run(AIDiagnosisReporter().generate(SAMPLE_SELF_DATA))
+
+    assert result["success"] is False
+    assert expected in result["message"]
+    assert "检查大模型配置" not in result["message"]
+
+
+@pytest.mark.parametrize("make_error", [
+    lambda: _api_error(429), lambda: _api_error(500), _network_error,
+])
+def test_transient_failures_do_not_send_user_to_config(monkeypatch, make_error):
+    """限频、服务端错误、网络问题与配置无关，提示里不让用户去改配置。"""
+    fake = _FakeLLMClient(chat_error=make_error())
+    _patch_client(monkeypatch, fake)
+
+    result = asyncio.run(AIDiagnosisReporter().generate(SAMPLE_SELF_DATA))
+
+    assert "配置页" not in result["message"]
+    assert "API Key" not in result["message"]
+    assert "稍后" in result["message"] or "网络" in result["message"]
 
 
 def test_generate_daily_token_limit_does_not_blame_model_config(monkeypatch):

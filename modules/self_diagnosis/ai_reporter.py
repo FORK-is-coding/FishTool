@@ -7,7 +7,13 @@ from datetime import datetime
 from typing import Any
 
 from core.logger import get_logger
-from core.exceptions import LLMAPIError, LLMError, LLMOutputTruncatedError, TokenLimitExceededError
+from core.exceptions import (
+    LLMAPIError,
+    LLMError,
+    LLMNotConfiguredError,
+    LLMOutputTruncatedError,
+    TokenLimitExceededError,
+)
 from llm.client import LLMClient
 
 logger = get_logger(__name__)
@@ -16,6 +22,13 @@ logger = get_logger(__name__)
 JSON_RESPONSE_FORMAT = {"type": "json_object"}
 #: 端点不认识 response_format 时常见的返回码；只有这两种情况才去掉参数重试。
 _UNSUPPORTED_PARAM_STATUS = (400, 422)
+
+
+class _ResponseFormatError(LLMError):
+    """模型回复不是可用的报告 JSON（没有 JSON 对象，或缺 report/commentary）。
+
+    单独成类，是为了和网络错误、超时等同样属于 LLMError 的失败区分开，给出不同的提示。
+    """
 
 
 class AIDiagnosisReporter:
@@ -62,30 +75,14 @@ class AIDiagnosisReporter:
                 "model": client.model,
                 "generated_at": datetime.now().isoformat(),
             }
-        except LLMOutputTruncatedError as exc:
-            # 输出达到单次上限被截断：内容不完整，不能拿半截 JSON 补齐后当结论展示。
-            logger.warning("[AI自诊] 调研报告被截断: %s", exc)
-            return {
-                "success": False,
-                "message": exc.user_message,
-                "error": str(exc),
-                "generated_at": datetime.now().isoformat(),
-            }
-        except TokenLimitExceededError as exc:
-            # 每日上限用完不是配置问题，别让用户去改大模型配置。
-            logger.warning("[AI自诊] 每日 token 上限已用完: %s", exc)
-            return {
-                "success": False,
-                "message": exc.user_message,
-                "error": str(exc),
-                "generated_at": datetime.now().isoformat(),
-            }
         except Exception as exc:
-            logger.warning("[AI自诊] 调研报告生成失败: %s", exc)
+            # 失败时返回可展示文案而非抛错，保证自诊大屏其余部分仍可渲染。
+            # 文案按原因区分：以前一律提示“检查大模型配置”，配置没问题的用户会白白去改配置。
+            kind, message = self._describe_failure(exc)
+            logger.warning("[AI自诊] 调研报告生成失败（%s）: %s", kind, exc)
             return {
                 "success": False,
-                # 失败时返回可展示文案而非抛错，保证自诊大屏其余部分仍可渲染。
-                "message": "AI调研暂不可用，请先检查大模型配置后重新自诊。",
+                "message": message,
                 "error": str(exc),
                 "generated_at": datetime.now().isoformat(),
             }
@@ -95,6 +92,38 @@ class AIDiagnosisReporter:
                     await client.close()
                 except Exception as exc:
                     logger.warning("[AI自诊] 关闭LLM客户端失败: %s", exc)
+
+    @staticmethod
+    def _describe_failure(exc: Exception) -> tuple[str, str]:
+        """把失败原因归类，返回 (日志里的类别, 给用户看的提示)。
+
+        只有“未配置”和“鉴权失败/模型不存在”才需要用户去改大模型配置；其余情况要么调上限，
+        要么稍后重试，要么换模型，提示里写清楚该做什么。
+        """
+        if isinstance(exc, LLMOutputTruncatedError):
+            # 内容不完整，不能拿半截 JSON 补齐后当结论展示。
+            return "输出截断", exc.user_message
+        if isinstance(exc, TokenLimitExceededError):
+            # 每日上限用完不是配置问题。
+            return "每日上限", exc.user_message
+        if isinstance(exc, LLMNotConfiguredError):
+            return "未配置", "大模型未配置，请在配置页填写 API Key、Base URL 和模型后重新自诊。"
+        if isinstance(exc, LLMAPIError):
+            status = getattr(exc, "status_code", None)
+            if status in (401, 403):
+                return "鉴权失败", f"模型接口拒绝访问（HTTP {status}），请检查 API Key 是否有效后重新自诊。"
+            if status == 429:
+                return "限频", "模型接口请求过于频繁或额度不足（HTTP 429），请稍后重新自诊。"
+            if str(exc).startswith("LLM模型不存在"):
+                return "模型不存在", "配置的模型在服务商处不存在，请在配置页更换模型后重新自诊。"
+            label = f"HTTP {status}" if status else "无状态码"
+            return "接口错误", f"模型接口返回错误（{label}），请稍后重新自诊；持续出现请查看日志。"
+        if isinstance(exc, (_ResponseFormatError, json.JSONDecodeError)):
+            return "未按JSON返回", "模型没有按要求返回 JSON，报告无法解析。请重新自诊；多次出现可在配置页换一个模型。"
+        if isinstance(exc, LLMError):
+            # LLMClient 把网络错误、超时等包装成 LLMError("请求失败: ...")。
+            return "请求失败", "请求模型时网络异常或超时，请检查网络后重新自诊。"
+        return "内部错误", "AI调研生成时出现内部错误，请重新自诊；持续出现请查看日志。"
 
     async def _chat_json(self, client: LLMClient, prompt: str) -> str:
         """请求模型并要求服务端返回 JSON 对象；端点不支持 JSON 模式时去掉参数重试一次。
@@ -157,13 +186,14 @@ class AIDiagnosisReporter:
         # 宽容匹配第一对花括号，兼容模型偶尔输出的前后缀文本。
         match = re.search(r"\{[\s\S]*\}", text)
         if not match:
-            raise LLMError("LLM未返回JSON对象")
-        # 保存 B 站接口响应，后续从中提取标题、作者和评论区标识。
+            raise _ResponseFormatError("LLM未返回JSON对象")
         data = json.loads(match.group(0))
+        if not isinstance(data, dict):
+            raise _ResponseFormatError("LLM返回的JSON不是对象")
         report = str(data.get("report") or "").strip()
         commentary = str(data.get("commentary") or "").strip()
         highlights = [str(item).strip() for item in data.get("highlights", []) if str(item).strip()][:3]
         # report 与 commentary 为空视为无效响应，触发上层降级。
         if not report or not commentary:
-            raise LLMError("LLM报告字段不完整")
+            raise _ResponseFormatError("LLM报告字段不完整")
         return {"report": report, "commentary": commentary, "highlights": highlights}
