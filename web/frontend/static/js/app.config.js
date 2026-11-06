@@ -68,6 +68,10 @@ async function loadLLMConfig() {
         if (limitInput && Number.isInteger(config.daily_token_limit)) {
             limitInput.value = String(config.daily_token_limit);
         }
+        const maxTokensInput = document.getElementById('llm-max-tokens');
+        if (maxTokensInput && Number.isInteger(config.max_tokens)) {
+            maxTokensInput.value = String(config.max_tokens);
+        }
         await loadLLMModels();
     } catch (error) {
         console.error('加载 AI 大模型配置失败:', error);
@@ -120,6 +124,26 @@ async function saveLLMDailyLimit() {
             body: JSON.stringify({ key: 'llm.daily_token_limit', value })
         });
         showAppAlert(value === 0 ? '已设置为不限制每日 token 用量' : `每日 token 上限已设置为 ${value}`);
+    } catch (error) {
+        showAppAlert(`保存失败: ${error.message}`);
+    }
+}
+
+// 单次输出上限（llm.max_tokens）单独保存：同样走 PUT /config/，后端校验取值并热重载 LLM 客户端。
+async function saveLLMMaxTokens() {
+    const input = document.getElementById('llm-max-tokens');
+    const raw = input ? input.value.trim() : '';
+    const value = Number(raw);
+    if (raw === '' || !Number.isInteger(value) || value < 1) {
+        showAppAlert('单次输出上限必须是大于 0 的整数');
+        return;
+    }
+    try {
+        await apiRequest('/config/', {
+            method: 'PUT',
+            body: JSON.stringify({ key: 'llm.max_tokens', value })
+        });
+        showAppAlert(`单次输出上限已设置为 ${value}`);
     } catch (error) {
         showAppAlert(`保存失败: ${error.message}`);
     }
