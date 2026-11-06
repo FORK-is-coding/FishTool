@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from core.logger import get_logger
-from core.exceptions import LLMAPIError, LLMError, TokenLimitExceededError
+from core.exceptions import LLMAPIError, LLMError, LLMOutputTruncatedError, TokenLimitExceededError
 from llm.client import LLMClient
 
 logger = get_logger(__name__)
@@ -60,6 +60,15 @@ class AIDiagnosisReporter:
                 "commentary": parsed["commentary"],
                 "highlights": parsed["highlights"],
                 "model": client.model,
+                "generated_at": datetime.now().isoformat(),
+            }
+        except LLMOutputTruncatedError as exc:
+            # 输出达到单次上限被截断：内容不完整，不能拿半截 JSON 补齐后当结论展示。
+            logger.warning("[AI自诊] 调研报告被截断: %s", exc)
+            return {
+                "success": False,
+                "message": exc.user_message,
+                "error": str(exc),
                 "generated_at": datetime.now().isoformat(),
             }
         except TokenLimitExceededError as exc:

@@ -348,6 +348,23 @@ def test_generate_daily_token_limit_does_not_blame_model_config(monkeypatch):
     assert fake.closed == 1  # 仍然关闭客户端
 
 
+def test_generate_truncated_output_tells_user_to_raise_output_limit(monkeypatch):
+    """输出被截断时提示调大单次输出上限，不提示去检查大模型配置。"""
+    from core.exceptions import LLMOutputTruncatedError
+
+    fake = _FakeLLMClient(chat_error=LLMOutputTruncatedError(2400, 0, 5000))
+    _patch_client(monkeypatch, fake)
+
+    result = asyncio.run(AIDiagnosisReporter().generate(SAMPLE_SELF_DATA))
+
+    assert result["success"] is False
+    assert "单次输出上限" in result["message"]
+    assert "思考模式" in result["message"]
+    assert "检查大模型配置" not in result["message"]
+    assert "finish_reason=length" in result["error"]
+    assert fake.closed == 1
+
+
 def test_generate_returns_degraded_result_on_parse_failure(monkeypatch):
     """LLM 返回非 JSON 文本时同样降级。"""
     fake = _FakeLLMClient(content="抱歉，我无法以 JSON 输出")
