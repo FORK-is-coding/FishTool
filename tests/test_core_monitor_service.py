@@ -978,3 +978,33 @@ def test_build_watch_service_explicit_budget_skips_policy(monkeypatch):
     service = monitor_module.build_watch_service(budget=injected, startup_reconcile=False)
 
     assert service.budget is injected
+
+
+def test_cookie_loop_exits_cleanly_without_reraising(db, monkeypatch, quiet_logger):
+    """正常退出（stop_event 置位）不得 reraise RuntimeError，也不得记成异常日志（#100）。"""
+    monitor = ResidentCommentMonitor(lambda: None, config=_FakeConfig())
+
+    class _Pool:
+        """首轮巡检后置位停止事件的 Cookie 池替身。"""
+
+        def __init__(self) -> None:
+            """初始化间隔与巡检计数。"""
+            self.check_interval = 30
+            self.checks = 0
+
+        async def check_all_cookies(self, session):
+            """记录一次巡检并请求停止。"""
+            self.checks += 1
+            monitor.stop_event.set()
+
+    pool = _Pool()
+    monkeypatch.setattr(monitor_module, "get_cookie_pool", lambda: pool)
+
+    # 修复前此处会因裸 raise 落入 except 分支，记一条 "Cookie常驻任务退出" 异常日志；
+    # 正常退出必须走清理分支，只留一条 info，且不得是异常级。
+    asyncio.run(asyncio.wait_for(monitor._cookie_loop(), timeout=2))
+
+    assert pool.checks == 1
+    messages = [str(call[1][0]) if call[1] else "" for call in quiet_logger.calls]
+    assert any("已停止" in message for message in messages)
+    assert [call for call in quiet_logger.calls if call[0] in ("error", "exception")] == []

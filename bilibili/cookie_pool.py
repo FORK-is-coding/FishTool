@@ -250,9 +250,18 @@ class CookiePool:
                         CookiePoolModel.sessdata == sessdata_digest(sessdata)
                     ).first()
                     if existing is None:
-                        # 关联默认账号；表里无账号时兜底 account_id=1
+                        # 关联默认账号。外键开启后不能再凭空写 account_id=1：
+                        # 首次使用时补建一个本地账号，保证父行真实存在（#82）。
                         account = db.query(Account).first()
-                        account_id = account.id if account else 1
+                        if account is None:
+                            account = Account(
+                                uid="local",
+                                username="本地账号",
+                                is_primary=True,
+                            )
+                            db.add(account)
+                            db.flush()
+                        account_id = account.id
                         # 加密后入库，与 load_from_db 的解密路径保持一致
                         try:
                             encrypted = self._cipher.encrypt(cookie_str.encode('utf-8')).decode('utf-8')

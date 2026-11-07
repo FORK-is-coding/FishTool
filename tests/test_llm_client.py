@@ -540,6 +540,46 @@ def test_chat_completion_model_not_found_gives_hint(llm_env):
     assert "模型不存在" in str(excinfo.value)
 
 
+def test_chat_completion_error_message_excludes_upstream_body(llm_env):
+    """#108：上游原始响应体不进异常消息，截断后只放 detail，状态码保持不变。
+
+    message 会经 ai_report['error'] 与 /api/analysis/self-diagnosis 响应原样交给调用方，
+    网关错误体常回显 API Key 片段与内部 trace id，不能顺带出去。
+    """
+    client = _make_client()
+    body = (
+        '{"error":{"code":"context_length_exceeded","message":"too long"},'
+        '"echo":"sk-live-abc123","trace_id":"trace-internal-42"}'
+        + "y" * 2000
+    )
+    client.client.post_error = _http_status_error(400, body)
+
+    with pytest.raises(LLMAPIError) as excinfo:
+        asyncio.run(client.chat_completion([{"role": "user", "content": "hi"}]))
+
+    err = excinfo.value
+    assert str(err) == "API请求失败: HTTP 400"
+    assert "sk-live" not in str(err)
+    assert "trace-internal-42" not in str(err)
+    assert err.status_code == 400
+    # detail 保留截断后的原始体，供上层受控归类，长度有上限
+    assert err.detail.startswith('{"error":{"code":"context_length_exceeded"')
+    assert len(err.detail) == llm_module.UPSTREAM_ERROR_DETAIL_LIMIT == 300
+
+
+def test_chat_completion_error_logs_only_status(llm_env):
+    """#108：日志里同样只有状态码，不落原始响应体。"""
+    client = _make_client()
+    client.client.post_error = _http_status_error(500, "sk-secret-in-body")
+
+    with pytest.raises(LLMAPIError):
+        asyncio.run(client.chat_completion([{"role": "user", "content": "hi"}]))
+
+    messages = [str(args[0]) for level, args, _kwargs in llm_module.logger.calls]
+    assert any("HTTP 500" in message for message in messages)
+    assert all("sk-secret-in-body" not in message for message in messages)
+
+
 def test_chat_completion_unexpected_error_wrapped(llm_env):
     """非 HTTP 异常统一包成 LLMError。"""
     client = _make_client()
@@ -675,6 +715,30 @@ def test_chat_completion_stream_status_error_on_raise_for_status(llm_env):
     with pytest.raises(LLMAPIError) as excinfo:
         asyncio.run(_collect())
     assert "流式请求失败" in str(excinfo.value)
+
+
+def test_chat_completion_stream_error_message_excludes_body(llm_env):
+    """#108（流式分支）：原始响应体同样不进 message，只截断后放 detail。"""
+    client = _make_client()
+    body = "sk-live-abc123" + "z" * 1000
+    client.client.stream_response = _AsyncLineResponse(
+        [], status_error=_http_status_error(500, body)
+    )
+
+    async def _collect():
+        """消费流（预期抛出）。"""
+        async for _ in client.chat_completion_stream([{"role": "user", "content": "hi"}]):
+            pass
+
+    with pytest.raises(LLMAPIError) as excinfo:
+        asyncio.run(_collect())
+
+    err = excinfo.value
+    assert str(err) == "流式请求失败: HTTP 500"
+    assert err.status_code == 500
+    assert err.detail.startswith("sk-live")  # detail 仍是截断后的原始体
+    assert len(err.detail) == llm_module.UPSTREAM_ERROR_DETAIL_LIMIT
+    assert "sk-live" not in str(err)
 
 
 # ---------------------------------------------------------------------------

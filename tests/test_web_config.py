@@ -127,6 +127,7 @@ class _FakeAsyncClient:
     def __init__(self, handler) -> None:
         self._handler = handler
         self.calls: list = []
+        self.kwargs: dict = {}
 
     async def __aenter__(self):
         """进入异步上下文。"""
@@ -142,14 +143,28 @@ class _FakeAsyncClient:
         return self._handler(url, headers)
 
 
-def _install_httpx(monkeypatch, handler) -> None:
-    """把 config 模块内的 httpx 换成契约级假命名空间。"""
+def _install_httpx(monkeypatch, handler) -> list:
+    """把 config 模块内的 httpx 换成契约级假命名空间。
+
+    返回按创建顺序记录的假 client 列表，供断言构造参数（例如
+    ``follow_redirects is False``）——旧版本把它吞进 ``**kwargs`` 无法验证。
+    """
+    created: list = []
+
+    def _make_client(**kwargs):
+        """记录构造参数后返回假 client。"""
+        fake = _FakeAsyncClient(handler)
+        fake.kwargs = dict(kwargs)
+        created.append(fake)
+        return fake
+
     namespace = SimpleNamespace(
-        AsyncClient=lambda **kwargs: _FakeAsyncClient(handler),
+        AsyncClient=_make_client,
         TimeoutException=_FakeTimeout,
         RequestError=_FakeRequestError,
     )
     monkeypatch.setattr(config_module, "httpx", namespace)
+    return created
 
 
 @pytest.fixture()
@@ -202,6 +217,41 @@ def test_get_all_config_masks_api_key(client):
     masked = body["config"]["llm"]["api_key_masked"]
     assert masked == "sk-12345***" + "abcdefGHIJ"[-4:]
     assert "sk-1234567890abcdefGHIJ" not in str(body)
+
+
+def test_get_all_config_hides_legacy_plaintext_key(client):
+    """历史遗留的明文 llm.api_key 不得回显，只能以脱敏串出现（#88）。"""
+    _FakeConfig.plain = {"llm": {"api_key": "sk-legacy-plaintext", "model": "gpt-x"}}
+    body = client.get("/api/config/").json()
+    llm_node = body["config"]["llm"]
+    assert "api_key" not in llm_node
+    assert llm_node["api_key_masked"].startswith("sk-legac***")
+    assert "sk-legacy-plaintext" not in str(body)
+
+
+def test_get_all_config_does_not_mutate_live_config(client):
+    """脱敏只能作用于响应副本：不得污染活配置，更不得把脱敏串写回落盘（#88）。"""
+    _FakeConfig.plain = {"llm": {"model": "gpt-x"}}
+    _FakeConfig.secrets["llm_api_key"] = "sk-1234567890abcdefGHIJ"
+
+    client.get("/api/config/")
+
+    assert "api_key_masked" not in _FakeConfig.plain.get("llm", {})
+    assert _FakeConfig.plain == {"llm": {"model": "gpt-x"}}
+    # 读取路径不应触发任何写盘
+    assert _FakeConfig.saved == 0
+
+
+def test_get_llm_config_hides_plaintext_key_and_keeps_config_intact(client):
+    """GET /llm 同样只返回脱敏串，且不修改底层配置对象（#88）。"""
+    _FakeConfig.plain = {"llm": {"api_key": "sk-legacy-plaintext", "model": "gpt-x"}}
+
+    body = client.get("/api/config/llm").json()
+
+    assert "api_key" not in body["config"]
+    assert body["config"]["api_key_masked"].startswith("sk-legac***")
+    assert "sk-legacy-plaintext" not in str(body)
+    assert _FakeConfig.plain["llm"] == {"api_key": "sk-legacy-plaintext", "model": "gpt-x"}
 
 
 def test_get_all_config_failure_returns_500(client, monkeypatch):
@@ -292,7 +342,7 @@ def test_llm_models_success_dedupes_and_sorts(client, monkeypatch):
 
 
 def test_llm_models_http_error_returns_message(client, monkeypatch):
-    """HTTP 4xx/5xx 应返回带状态码的可读失败，不泄漏响应正文。"""
+    """HTTP 4xx/5xx 应返回统一失败文案，不泄漏状态码、正文或 401/403 差异（#81）。"""
     _install_httpx(monkeypatch, lambda url, headers: _FakeResponse(401, {"error": "bad"}))
 
     body = client.post(
@@ -300,7 +350,10 @@ def test_llm_models_http_error_returns_message(client, monkeypatch):
         json={"api_key": "k", "base_url": "https://x/v1"},
     ).json()
     assert body["success"] is False
-    assert "HTTP 401" in body["message"]
+    assert body["message"] == config_module._UNREACHABLE_MESSAGE
+    # 状态码与响应正文都属于探测信号，不能出现在返回给调用方的文案里
+    assert "401" not in body["message"]
+    assert "bad" not in body["message"]
 
 
 def test_llm_models_empty_payload_reports_incompatible(client, monkeypatch):
@@ -315,19 +368,22 @@ def test_llm_models_empty_payload_reports_incompatible(client, monkeypatch):
 
 
 def test_llm_models_timeout_branch(client, monkeypatch):
-    """超时应返回可读失败。"""
+    """超时应返回统一失败文案，不暴露“超时 vs 拒绝连接”的区别（#81）。"""
 
     def handler(url, headers):
         """模拟请求超时。"""
         raise _FakeTimeout("timeout")
 
     _install_httpx(monkeypatch, handler)
+
     body = client.post(
         "/api/config/llm/models",
         json={"api_key": "k", "base_url": "https://x/v1"},
     ).json()
     assert body["success"] is False
-    assert "超时" in body["message"]
+    assert body["message"] == config_module._UNREACHABLE_MESSAGE
+    assert "超时" not in body["message"]
+    assert "timeout" not in body["message"]
 
 
 def test_llm_models_request_error_branch(client, monkeypatch):
@@ -450,9 +506,172 @@ def test_llm_models_explicit_key_allows_any_base_url(client, monkeypatch):
     assert captured["headers"]["Authorization"] == "Bearer new-key"
 
 
-# ---------------------------------------------------------------------------
-# POST /llm
-# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "file:///etc/passwd",
+        "ftp://example.com/v1",
+        "gopher://example.com/v1",
+        "api.example.com/v1",
+        "//api.example.com/v1",
+    ],
+)
+def test_llm_models_rejects_non_http_schemes(client, monkeypatch, base_url):
+    """只允许 http/https：其他协议（含无 scheme 的相对地址）一律 400 且不外发（#81）。"""
+    calls = []
+    _install_httpx(monkeypatch, lambda url, headers: calls.append(url))
+
+    response = client.post(
+        "/api/config/llm/models", json={"api_key": "k", "base_url": base_url}
+    )
+    assert response.status_code == 400
+    assert "http" in response.json()["detail"]
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://user:pass@api.example/v1",
+        "https://user@api.example/v1",
+        # 内嵌凭据即使指向本地地址也要拒绝：@ 之前的内容会掩盖真实主机
+        "http://user:pass@127.0.0.1:8080/v1",
+    ],
+)
+def test_llm_models_rejects_embedded_credentials(client, monkeypatch, base_url):
+    """拒绝 URL 内嵌凭据，避免把凭据拼进请求地址或掩盖真实主机（#81）。"""
+    calls = []
+    _install_httpx(monkeypatch, lambda url, headers: calls.append(url))
+
+    response = client.post(
+        "/api/config/llm/models", json={"api_key": "k", "base_url": base_url}
+    )
+    assert response.status_code == 400
+    assert "用户名或密码" in response.json()["detail"]
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://169.254.169.254/latest/meta-data",
+        "http://169.254.169.254",
+        "http://metadata.google.internal/computeMetadata/v1",
+        "http://metadata.goog/v1",
+        "http://100.100.100.200/latest/meta-data",
+        "http://[fe80::1]/v1",
+        "http://0.0.0.0:8080/v1",
+    ],
+)
+def test_llm_models_rejects_metadata_and_link_local(client, monkeypatch, base_url):
+    """拒绝云元数据地址与 link-local/未指定地址（#81）。"""
+    calls = []
+    _install_httpx(monkeypatch, lambda url, headers: calls.append(url))
+
+    response = client.post(
+        "/api/config/llm/models", json={"api_key": "k", "base_url": base_url}
+    )
+    assert response.status_code == 400
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://127.0.0.1:11434/v1",
+        "http://localhost:1234/v1",
+        "http://192.168.1.10:8000/v1",
+        "http://10.0.0.5/v1",
+    ],
+)
+def test_llm_models_allows_saved_local_endpoints(client, monkeypatch, base_url):
+    """本地 Ollama / LM Studio 是合法用法，但必须先保存该地址（#81）。"""
+    _FakeConfig.plain = {"llm": {"api_base": base_url}}
+    captured = {}
+
+    def handler(url, headers):
+        """记录外发地址。"""
+        captured["url"] = url
+        return _FakeResponse(200, {"data": [{"id": "llama3"}]})
+
+    _install_httpx(monkeypatch, handler)
+
+    body = client.post(
+        "/api/config/llm/models", json={"api_key": "k", "base_url": base_url}
+    ).json()
+    assert body["success"] is True
+    assert body["models"] == ["llama3"]
+    assert captured["url"] == base_url.rstrip("/") + "/models"
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://127.0.0.1:6379/",
+        "http://localhost:1234/v1",
+        "http://192.168.1.10:8000/v1",
+        "http://10.0.0.5/v1",
+        "http://[::1]:8080/v1",
+    ],
+)
+def test_llm_models_rejects_unsaved_local_endpoints(client, monkeypatch, base_url):
+    """未保存的内网/环回地址不能被一次请求临时指定（#81）。"""
+    calls = []
+    _install_httpx(monkeypatch, lambda url, headers: calls.append(url))
+
+    response = client.post(
+        "/api/config/llm/models", json={"api_key": "k", "base_url": base_url}
+    )
+    assert response.status_code == 400
+    assert "先保存" in response.json()["detail"]
+    assert calls == []
+
+
+def test_llm_models_does_not_follow_redirects(client, monkeypatch):
+    """必须禁用自动重定向：否则公开地址可 302 到内网绕过地址校验（#81）。"""
+    created = _install_httpx(
+        monkeypatch, lambda url, headers: _FakeResponse(301, {"data": []})
+    )
+
+    body = client.post(
+        "/api/config/llm/models",
+        json={"api_key": "k", "base_url": "https://x/v1"},
+    ).json()
+    assert created, "应至少构造一次 client"
+    assert created[0].kwargs["follow_redirects"] is False
+    # 3xx 也属于“没拿到模型列表”，返回统一文案
+    assert body["success"] is False
+    assert body["message"] == config_module._UNREACHABLE_MESSAGE
+    # 且只请求了一次原始地址，未追到 Location
+    assert [call["url"] for call in created[0].calls] == ["https://x/v1/models"]
+
+
+def test_llm_models_blank_api_key_falls_back_to_saved_key(client, monkeypatch):
+    """空白 api_key 视为“未提供”，回退已保存密钥而不是报错（#87）。
+
+    前端页面加载时就是这种情况：输入框为空，POST 体里不应出现 api_key 字段。
+    """
+    _FakeConfig.secrets["llm_api_key"] = "saved-key"
+    _FakeConfig.plain = {"llm": {"api_base": "https://saved/v1"}}
+    captured = {}
+
+    def handler(url, headers):
+        """记录鉴权头。"""
+        captured["headers"] = headers
+        return _FakeResponse(200, {"data": [{"id": "m"}]})
+
+    _install_httpx(monkeypatch, handler)
+
+    for payload in (
+        {"base_url": "https://saved/v1"},
+        {"base_url": "https://saved/v1", "api_key": ""},
+        {"base_url": "https://saved/v1", "api_key": "   "},
+        {"base_url": "https://saved/v1", "api_key": None},
+    ):
+        body = client.post("/api/config/llm/models", json=payload).json()
+        assert body["success"] is True, payload
+        assert captured["headers"]["Authorization"] == "Bearer saved-key"
+
 
 
 def test_update_llm_config_persists_and_resets_client(client):
@@ -530,6 +749,64 @@ def test_update_llm_config_rejects_invalid_daily_limit(client, value):
     assert response.status_code == 422
     assert _FakeConfig.secrets == {}
     assert _FakeConfig.saved == 0
+
+
+def test_update_llm_config_key_only_does_not_reset_endpoint(client):
+    """只提交 api_key 时不得把已保存的 base_url / model 重置为默认值（#91）。"""
+    _FakeConfig.plain = {"llm": {"api_base": "http://127.0.0.1:11434/v1", "model": "qwen2"}}
+
+    response = client.post("/api/config/llm", json={"api_key": "sk-only-key"})
+
+    assert response.status_code == 200
+    assert _FakeConfig.secrets["llm_api_key"] == "sk-only-key"
+    assert _FakeConfig.plain["llm"]["api_base"] == "http://127.0.0.1:11434/v1"
+    assert _FakeConfig.plain["llm"]["model"] == "qwen2"
+
+
+def test_update_llm_config_without_key_keeps_saved_secret(client):
+    """只提交 base_url/model 时不得清空已保存密钥（#91）。"""
+    _FakeConfig.secrets["llm_api_key"] = "sk-existing"
+    _FakeConfig.plain = {"llm": {"api_base": "https://old/v1", "model": "old-model"}}
+
+    response = client.post(
+        "/api/config/llm", json={"base_url": "https://new/v1", "model": "new-model"}
+    )
+
+    assert response.status_code == 200
+    assert _FakeConfig.secrets["llm_api_key"] == "sk-existing"
+    assert _FakeConfig.plain["llm"]["api_base"] == "https://new/v1"
+    assert _FakeConfig.plain["llm"]["model"] == "new-model"
+
+
+@pytest.mark.parametrize("api_key", ["", "   ", "\t\n"])
+def test_update_llm_config_rejects_blank_key(client, api_key):
+    """空/全空白 api_key 返回 422，绝不能被当成“清空密钥”（#91）。"""
+    _FakeConfig.secrets["llm_api_key"] = "sk-existing"
+
+    response = client.post("/api/config/llm", json={"api_key": api_key})
+
+    assert response.status_code == 422
+    assert _FakeConfig.secrets["llm_api_key"] == "sk-existing"
+    assert _FakeConfig.saved == 0
+
+
+def test_update_llm_config_rejects_empty_body(client):
+    """四个字段全缺省的请求没有意义，返回 422（#91）。"""
+    response = client.post("/api/config/llm", json={})
+
+    assert response.status_code == 422
+    assert _FakeConfig.saved == 0
+
+
+def test_update_llm_config_strips_text_fields(client):
+    """提交值两侧空白应被 strip 后再落盘。"""
+    client.post(
+        "/api/config/llm",
+        json={"api_key": "  sk-padded  ", "base_url": " https://x/v1 ", "model": " gpt-x "},
+    )
+    assert _FakeConfig.secrets["llm_api_key"] == "sk-padded"
+    assert _FakeConfig.plain["llm"]["api_base"] == "https://x/v1"
+    assert _FakeConfig.plain["llm"]["model"] == "gpt-x"
 
 
 def test_update_llm_config_failure_returns_500(client, monkeypatch):
@@ -638,6 +915,79 @@ def test_llm_usage_failure_returns_500(client, monkeypatch):
     assert "获取用量统计失败" in response.json()["detail"]
 
 
+@pytest.mark.parametrize("days", [0, -1, -30, 366, 10 ** 9])
+def test_llm_usage_rejects_out_of_range_days(client, days):
+    """#94 回归：days 必须有上下界，避免 timedelta 溢出 500 或静默空窗口。"""
+    response = client.get("/api/config/llm/usage", params={"days": days})
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("days", [1, 7, 365])
+def test_llm_usage_accepts_bounded_days(client, days):
+    """边界内取值正常返回，并把实际天数回显给前端。"""
+    body = client.get("/api/config/llm/usage", params={"days": days}).json()
+    assert body["days"] == days
+
+
+def _fake_usage_session(closed: list, fail: bool = False):
+    """构造会话替身：记录 close 调用，可按需让查询抛错。"""
+
+    class _Chain:
+        """可链式调用的查询替身，只覆盖路由用到的接口。"""
+
+        def filter(self, *args, **kwargs):
+            """返回自身以保持链式调用。"""
+            return self
+
+        def group_by(self, *args, **kwargs):
+            """返回自身以保持链式调用。"""
+            return self
+
+        def all(self):
+            """无聚合结果。"""
+            return []
+
+        def first(self):
+            """无总计结果。"""
+            return None
+
+    class _Session:
+        """会话替身。"""
+
+        def query(self, *args, **kwargs):
+            """返回查询链。"""
+            if fail:
+                raise RuntimeError("query down")
+            return _Chain()
+
+        def close(self):
+            """记录关闭。"""
+            closed.append(True)
+
+    return _Session()
+
+
+def test_llm_usage_closes_session_on_success(client, monkeypatch):
+    """#94 回归：正常路径必须关闭会话。"""
+    closed: list = []
+    monkeypatch.setattr(config_module, "get_session", lambda: _fake_usage_session(closed))
+    response = client.get("/api/config/llm/usage")
+    assert response.status_code == 200
+    assert closed == [True]
+
+
+def test_llm_usage_closes_session_when_query_fails(client, monkeypatch):
+    """#94 回归：查询抛错转 500 时也必须关闭会话（原先泄漏连接）。"""
+    closed: list = []
+    monkeypatch.setattr(
+        config_module, "get_session", lambda: _fake_usage_session(closed, fail=True)
+    )
+    response = client.get("/api/config/llm/usage")
+    assert response.status_code == 500
+    assert "获取用量统计失败" in response.json()["detail"]
+    assert closed == [True]
+
+
 # ---------------------------------------------------------------------------
 # PUT /
 # ---------------------------------------------------------------------------
@@ -702,6 +1052,27 @@ def test_put_max_tokens_with_padded_key_writes_clean_path(client):
     response = client.put("/api/config/", json={"key": " llm.max_tokens ", "value": 4096})
     assert response.status_code == 200
     assert _FakeConfig.plain["llm"] == {"max_tokens": 4096}
+
+
+def test_put_key_normalizes_every_path_segment(client):
+    """点分路径的每一段都要 strip，不得写出带空格的中间层级（#98）。"""
+    response = client.put("/api/config/", json={"key": " llm . model ", "value": "gpt-clean"})
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "配置 llm.model 已更新"
+    assert _FakeConfig.plain == {"llm": {"model": "gpt-clean"}}
+    # 任何带空格的顶层键都属于脏数据
+    assert not [k for k in _FakeConfig.plain if k != k.strip()]
+
+
+@pytest.mark.parametrize("key", ["", "   ", "llm.", ".llm", "llm..model", " llm . "])
+def test_put_key_rejects_malformed_path(client, key):
+    """空键、空段、只有空白的段一律 422，不写入也不落盘（#98）。"""
+    response = client.put("/api/config/", json={"key": key, "value": 1})
+
+    assert response.status_code == 422
+    assert _FakeConfig.plain == {}
+    assert _FakeConfig.saved == 0
 
 
 def test_post_llm_with_daily_limit_writes_migration_marker(client):
@@ -836,6 +1207,18 @@ def test_put_llm_key_resets_llm_client(runtime_env):
     assert runtime_env["resets"] == 1
 
 
+def test_put_padded_llm_key_still_resets_llm_client(runtime_env):
+    """带空格的 llm.* 键规范化后必须仍然触发 LLM 客户端重建（#98）。"""
+    response = runtime_env["client"].put(
+        "/api/config/", json={"key": " llm.model ", "value": "gpt-spaced"}
+    )
+
+    assert response.status_code == 200
+    assert runtime_env["runtime"].get("llm.model") == "gpt-spaced"
+    assert runtime_env["resets"] == 1
+    assert not [k for k in runtime_env["runtime"].all if k != k.strip()]
+
+
 def test_reload_picks_up_disk_changes_and_resets_llm_client(runtime_env):
     """外部改写磁盘后 POST /reload，运行时单例应读到磁盘新值并重建 LLM 客户端。"""
     import sys
@@ -859,13 +1242,31 @@ def test_web_main_config_manager_follows_put(runtime_env, monkeypatch):
     runtime = runtime_env["runtime"]
     # 真实 lifespan；conftest 已隔离 DB 与常驻监控，这里让运行时单例指向临时目录实例
     monkeypatch.setattr(web_main, "runtime_config", runtime, raising=False)
-    # 走真实 app：显式用本机 Host，与浏览器 / 桌面端访问一致（/api/config 可能挂本机 Host 校验）
+    # 走真实 app：显式用本机 Host，并带上本机写接口 token（全局中间件要求）
     with TestClient(web_main.app, base_url="http://127.0.0.1:8000") as client:
-        response = client.put("/api/config/", json={"key": "monitor.check_interval", "value": 77})
+        from web.local_guard import LOCAL_TOKEN_HEADER, get_local_guard
+
+        headers = {LOCAL_TOKEN_HEADER: get_local_guard().issue_token()}
+        response = client.put(
+            "/api/config/", json={"key": "monitor.check_interval", "value": 77}, headers=headers
+        )
         assert response.status_code == 200
         assert web_main.config_manager.get("monitor.check_interval") == 77
         monitor = web_main.monitor_service
         assert monitor.args[1] is web_main.config_manager
+
+
+def test_web_main_write_requires_local_token(runtime_env, monkeypatch):
+    """#79 回归：真实 app 的写接口缺少本机 token 时 403，业务不执行。"""
+    import importlib
+
+    web_main = importlib.import_module("web.main")
+    monkeypatch.setattr(web_main, "runtime_config", runtime_env["runtime"], raising=False)
+    with TestClient(web_main.app, base_url="http://127.0.0.1:8000") as client:
+        response = client.put("/api/config/", json={"key": "monitor.check_interval", "value": 78})
+        assert response.status_code == 403
+        assert response.json() == {"detail": "local_token_required"}
+        assert web_main.config_manager.get("monitor.check_interval") != 78
 
 
 # ---------------------------------------------------------------------------

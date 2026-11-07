@@ -254,8 +254,8 @@ def test_collect_all_comments_merges_and_dedups() -> None:
     assert CommentCollector.get_progress("BV1")["collected"] == 3
 
 
-def test_collect_all_comments_uses_default_limit_when_max_none() -> None:
-    """max_count 为 None 时普通评论按 10000 拉取。"""
+def test_collect_all_comments_passes_none_limit_when_max_none() -> None:
+    """max_count 为 None 表示不限制：limit 原样传 None，不再静默截断成 10000。"""
     collector, _, _ = _collector([])
 
     async def _hot(bvid):
@@ -274,7 +274,23 @@ def test_collect_all_comments_uses_default_limit_when_max_none() -> None:
 
     asyncio.run(collector._collect_all_comments("BV1", max_count=None))
 
-    assert calls["limit"] == 10000
+    assert calls["limit"] is None
+
+
+def test_collect_normal_comments_none_limit_keeps_all_pages() -> None:
+    """limit=None 时 comments[:None] 返回全量，翻页仍由 is_end 收敛。"""
+    collector, api, _ = _collector([
+        {
+            "replies": [_reply(1), _reply(2)],
+            "cursor": {"pagination_reply": {"next_offset": "a"}},
+        },
+        {"replies": [_reply(3)], "cursor": {"is_end": True}},
+    ])
+
+    comments = asyncio.run(collector._collect_normal_comments("BV1", limit=None))
+
+    assert [item["rpid"] for item in comments] == [1, 2, 3]
+    assert len(api.calls) == 2
 
 
 def test_collect_all_comments_only_hot() -> None:

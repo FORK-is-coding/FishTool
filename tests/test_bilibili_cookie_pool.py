@@ -152,6 +152,14 @@ class _PoolEnv:
 def env(tmp_path, monkeypatch):
     """构造真实临时 SQLite + CookiePool，并把模块级 get_session 指向临时库。"""
     manager = DatabaseManager(str(tmp_path / "cookie_pool.db"))
+    # 外键开启后，cookie_pool.account_id 必须指向真实父行；先建一个默认账号，
+    # 避免所有直接插 cookie_pool 的用例都依赖孤儿行（#82）。
+    session = manager.get_session()
+    try:
+        session.add(Account(uid="local-test", username="测试账号", is_primary=True))
+        session.commit()
+    finally:
+        session.close()
     pool = CookiePool(check_interval=123)
     monkeypatch.setattr(cookie_pool_module, "get_session", manager.get_session)
     return _PoolEnv(manager, pool)
@@ -496,6 +504,28 @@ def test_add_cookie_persist_writes_encrypted_row_and_backfills_id(env):
     assert stored.account_id == 1
     assert stored.cookie_data != "SESSDATA=persist; buvid3=b3"
     assert env.pool._cipher.decrypt(stored.cookie_data.encode()).decode() == "SESSDATA=persist; buvid3=b3"
+
+
+def test_add_cookie_persist_creates_local_account_when_missing(tmp_path, monkeypatch):
+    """空库首次持久化时补建本地账号，避免写 account_id 孤儿行（#82）。"""
+    manager = DatabaseManager(str(tmp_path / "no_account.db"))
+    monkeypatch.setattr(cookie_pool_module, "get_session", manager.get_session)
+    pool = CookiePool()
+
+    cookie = pool.add_cookie("SESSDATA=first; buvid3=b", persist=True)
+
+    session = manager.get_session()
+    try:
+        stored = session.query(CookiePoolModel).one()
+        account = session.query(Account).one()
+    finally:
+        session.close()
+
+    assert cookie.id == stored.id
+    assert account.uid == "local"
+    assert account.username == "本地账号"
+    assert account.is_primary is True
+    assert stored.account_id == account.id
 
 
 def test_add_cookie_persist_reuses_existing_db_row(env):

@@ -87,6 +87,35 @@ def test_save_failure_rolls_back(tmp_path, monkeypatch):
     assert not list(tmp_path.glob(".subscriptions.*.tmp"))
 
 
+def test_non_oserror_save_failure_also_rolls_back(tmp_path, monkeypatch, caplog):
+    """UnicodeEncodeError 之类的写入异常同样要回滚，否则内存有、磁盘无，重启后订阅静默消失。"""
+    store = SubscriptionStore(tmp_path / "s.json", log)
+    store.add("u1")
+
+    def boom():
+        raise UnicodeEncodeError("utf-8", "\ud800", 0, 1, "surrogates not allowed")
+
+    monkeypatch.setattr(store, "_save", boom)
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(UnicodeEncodeError):
+            store.add("u2")
+    assert store.list() == [{"umo": "u1", "self_id": ""}]
+    with pytest.raises(UnicodeEncodeError):
+        store.remove("u1")
+    assert store.contains("u1")
+    assert "已回滚本次修改" in caplog.text
+
+
+def test_real_encoding_failure_rolls_back(tmp_path):
+    """真实落盘路径：umo 含孤立代理项时 json 写不出去，内存必须保持原状且不留半成品文件。"""
+    store = SubscriptionStore(tmp_path / "s.json", log)
+    with pytest.raises(UnicodeEncodeError):
+        store.add("u\ud800")
+    assert store.list() == []
+    assert not (tmp_path / "s.json").exists()
+    assert not list(tmp_path.glob(".subscriptions.*.tmp"))
+
+
 def test_whitespace_handled_consistently(tmp_path):
     store = SubscriptionStore(tmp_path / "s.json", log)
     store.add("  u1  ")

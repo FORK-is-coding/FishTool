@@ -14,6 +14,32 @@ import sys
 import zipfile
 from pathlib import Path
 
+#: 适配器模块清单（``plugin/fishtool_adapter`` 的全部运行时代码）。
+#: 构建期 ``copytree`` 会整目录复制，所以这里缺文件只可能来自源树不完整；
+#: 少了任一模块，插件在 AstrBot 里 import 就会失败，而旧版校验只看 ``__init__.py`` 是查不出来的。
+#: 增删模块时同步这里（``tests/test_verify_package.py`` 会用源树对比兜底）。
+REQUIRED_ADAPTER_MODULES = (
+    "fishtool_adapter/__init__.py",
+    "fishtool_adapter/client.py",
+    "fishtool_adapter/commands.py",
+    "fishtool_adapter/constants.py",
+    "fishtool_adapter/errors.py",
+    "fishtool_adapter/events.py",
+    "fishtool_adapter/exports.py",
+    "fishtool_adapter/gate.py",
+    "fishtool_adapter/jobs.py",
+    "fishtool_adapter/notifier.py",
+    "fishtool_adapter/paths.py",
+    "fishtool_adapter/proxy.py",
+    "fishtool_adapter/replies.py",
+    "fishtool_adapter/report_charts.py",
+    "fishtool_adapter/report_pdf.py",
+    "fishtool_adapter/runtime_env.py",
+    "fishtool_adapter/subscriptions.py",
+    "fishtool_adapter/supervisor.py",
+    "fishtool_adapter/remote/__init__.py",
+)
+
 REQUIRED_FILES = (
     "main.py",
     "README.md",
@@ -29,9 +55,10 @@ REQUIRED_FILES = (
     "engine/fishtool/config/config.yaml",
     "engine/fishtool/config/budget.yaml",
     "engine_launcher/launcher.py",
-    "fishtool_adapter/__init__.py",
+    *REQUIRED_ADAPTER_MODULES,
     "views/console/index.html",
     "views/console/bridge-shim.js",
+    "views/console/shim.css",
     "views/console/astrbot-overrides.js",
     ".astrbot-plugin/i18n/zh-CN.json",
     ".astrbot-plugin/i18n/en-US.json",

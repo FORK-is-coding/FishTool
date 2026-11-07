@@ -145,12 +145,14 @@ class ColoredFormatter(logging.Formatter):
         """格式化日志记录，添加颜色代码
         
         临时修改 record.levelname 为带颜色的形式，
-        格式化完成后通过 super().format 输出。
+        格式化完成后通过 super().format 输出，并在 finally 里还原原值。
         
         实现说明：
         - 只对已知级别（DEBUG/INFO/WARNING/ERROR/CRITICAL）着色
-        - 修改的是 record 副本的 levelname，不影响原始数据
-        - 颜色码只在控制台输出中出现，文件日志保持纯文本
+        - 着色期间改的是 record 本体的 levelname，所以必须还原：
+          同一个 record 会依次经过多个 handler（控制台、文件、结构化），
+          不还原的话文件日志和 JSON 日志的 level 里会混进 ANSI 色码
+        - 颜色码只在本次 format 的输出里出现，其它 handler 拿到的是纯文本
         
         Args:
             record: 日志记录对象
@@ -158,12 +160,14 @@ class ColoredFormatter(logging.Formatter):
         Returns:
             格式化后的彩色日志字符串
         """
-        levelname = record.levelname
-        if levelname in self.COLORS:
-            # 用颜色码包裹级别名，例如 \033[32mINFO\033[0m
-            record.levelname = f"{self.COLORS[levelname]}{levelname}{self.COLORS['RESET']}"
-        
-        return super().format(record)
+        original = record.levelname
+        try:
+            if original in self.COLORS:
+                # 用颜色码包裹级别名，例如 \033[32mINFO\033[0m
+                record.levelname = f"{self.COLORS[original]}{original}{self.COLORS['RESET']}"
+            return super().format(record)
+        finally:
+            record.levelname = original
 
 
 class StructuredFormatter(logging.Formatter):

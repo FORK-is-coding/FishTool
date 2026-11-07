@@ -716,7 +716,10 @@ def _delete_video(manager, bvid=BVID):
     """模拟视频行事后缺失（任务/审计仍在）。"""
     session = manager.get_session()
     try:
-        session.query(Video).filter_by(bvid=bvid).delete()
+        # 外键开启后不能裸删仍被评论引用的视频行；用 ORM 删除让
+        # Video.comments / stats_history 的 delete-orphan 级联先清子行。
+        video = session.query(Video).filter_by(bvid=bvid).one()
+        session.delete(video)
         session.commit()
     finally:
         session.close()

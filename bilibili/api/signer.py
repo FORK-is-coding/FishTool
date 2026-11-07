@@ -9,6 +9,7 @@ B站部分接口（如投稿搜索）要求 WBI 签名：
 - MD5(query + mixin_key) 得到 w_rid 签名
 - 密钥每小时刷新一次（need_update 判断）
 """
+import asyncio
 import time
 import hashlib
 import urllib.parse
@@ -49,7 +50,11 @@ class WBISigner:
         36, 20, 34, 44, 52
     ]
     
-    def __init__(self, domain: str = CREDENTIAL_DOMAIN_COOKIE):
+    def __init__(
+        self,
+        domain: str = CREDENTIAL_DOMAIN_COOKIE,
+        skip_domain_cooldown: bool = False,
+    ):
         """初始化 WBI 签名器，密钥初始为空，需先刷新
         # 设置初始值/默认状态，避免后续空引用
 
@@ -59,6 +64,8 @@ class WBISigner:
         Args:
             domain: 凭证域（cookie / no_cookie），由所属客户端注入；
                 nav 请求是一次真实 HTTP 尝试，需带域参与分域冷却判定。
+            skip_domain_cooldown: 为 ``True`` 时 nav 刷新同样跳过域冷却，
+                与所属客户端的登录恢复模式保持一致；IP 熔断仍然生效。
         """
         # 两个基础密钥，从 nav 接口 wbi_img 字段提取
         # 从数据中取出目标字段，供后续逻辑使用
@@ -73,6 +80,20 @@ class WBISigner:
         self.update_interval = timedelta(hours=1)  # WBI密钥刷新间隔
         # 凭证域：由所属客户端注入，nav 请求按它参与分域冷却 / 配额判定。
         self.domain = domain
+        # 登录恢复模式：只跳过域冷却，不跳过 IP 熔断。
+        self.skip_domain_cooldown = bool(skip_domain_cooldown)
+        # 密钥刷新单飞锁：并发签名时只让一个协程真正请求 nav，其余复用结果。
+        # 锁按运行时事件循环惰性创建，避免跨 asyncio.run 复用时绑定到已关闭的循环。
+        self._update_lock: Optional[asyncio.Lock] = None
+        self._update_lock_loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def _refresh_lock(self) -> asyncio.Lock:
+        """获取绑定当前事件循环的刷新锁（同一循环内复用同一把锁）。"""
+        loop = asyncio.get_running_loop()
+        if self._update_lock is None or self._update_lock_loop is not loop:
+            self._update_lock = asyncio.Lock()
+            self._update_lock_loop = loop
+        return self._update_lock
     
     def get_mixin_key(self, orig: str) -> str:
         """对 imgKey 和 subKey 进行字符顺序打乱编码
@@ -161,7 +182,11 @@ class WBISigner:
             # 直接取 WBI 密钥是一次真实 HTTP 尝试，同样接预算钩子；
             # 经 client 走的已覆盖请求不会重复到这里。
             # 带凭证域 + 账号维护类别（C9：wbi 刷新 24/天）。
-            before_http_attempt(self.domain, CATEGORY_MAINTENANCE)
+            before_http_attempt(
+                self.domain,
+                CATEGORY_MAINTENANCE,
+                skip_domain_cooldown=self.skip_domain_cooldown,
+            )
             # 上下文管理：确保资源自动释放
             async with session.get(nav_url) as resp:
                 # 边界/有效性检查
@@ -234,7 +259,10 @@ class WBISigner:
         # 首次使用或过期时自动拉取新密钥
         # 需要时先刷新，保证签名用最新的密钥
         if self.need_update():
-            await self.update_wbi_keys(session)
+            # 双检单飞：拿锁后再判一次，先到的协程刷新后其余协程直接复用。
+            async with self._refresh_lock():
+                if self.need_update():
+                    await self.update_wbi_keys(session)
         
         # 用当前密钥完成 WBI 签名
         return self.enc_wbi(params, self.img_key, self.sub_key)

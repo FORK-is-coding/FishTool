@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -323,6 +324,85 @@ def test_get_analysis_task_missing_returns_404(client):
 
 
 # ---------------------------------------------------------------------------
+# 后台任务强引用与 TTL（issue #96）
+# ---------------------------------------------------------------------------
+
+
+def test_spawn_analysis_task_holds_reference_until_done(monkeypatch):
+    """#96 回归：create_task 结果必须被集合持有，结束后由 done callback 释放。"""
+    monkeypatch.setattr(analysis_module, "_analysis_task_refs", set())
+    reached = {}
+
+    async def blocking(task_id, request):
+        """卡住等待，模拟仍在抓取 / 调 LLM 的长任务。"""
+        reached["task_id"] = task_id
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(analysis_module, "_run_analysis_task", blocking)
+
+    async def scenario():
+        analysis_module._spawn_analysis_task("t-ref", object())
+        for _ in range(5):
+            await asyncio.sleep(0)
+        held = list(analysis_module._analysis_task_refs)
+        # 运行期必须有强引用，否则可能被 GC 提前回收
+        assert len(held) == 1 and not held[0].done()
+        assert reached.get("task_id") == "t-ref"
+        held[0].cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await held[0]
+        await asyncio.sleep(0)
+
+    asyncio.run(scenario())
+    # 结束后 done callback 已把引用移除，集合不会只增不减
+    assert analysis_module._analysis_task_refs == set()
+
+
+def test_prune_analysis_tasks_drops_only_expired_finished(monkeypatch):
+    """#96：TTL 清理只删除已结束且超时的任务，运行中或新结束的任务必须保留。"""
+    now = time.monotonic()
+    ttl = analysis_module._ANALYSIS_TASK_TTL_SECONDS
+    monkeypatch.setattr(
+        analysis_module,
+        "_analysis_tasks",
+        {
+            "old-done": {"status": "completed", "finished_monotonic": now - ttl - 10},
+            "old-running": {"status": "running", "started_monotonic": now - ttl * 2},
+            "fresh-done": {"status": "completed", "finished_monotonic": now},
+            "legacy-done": {"status": "failed", "started_monotonic": now - ttl - 10},
+        },
+    )
+
+    analysis_module._prune_analysis_tasks()
+
+    assert set(analysis_module._analysis_tasks) == {"old-running", "fresh-done"}
+
+
+def test_run_analysis_task_records_finish_time(monkeypatch):
+    """#96：终态写 finished_monotonic，供 TTL 清理判断超时。"""
+    monkeypatch.setattr(_FakeFetcher, "up_error", RuntimeError("抓取失败"))
+    monkeypatch.setattr(analysis_module, "init_clients", lambda: None)
+    monkeypatch.setattr(analysis_module, "UPDataFetcher", _FakeFetcher)
+    monkeypatch.setattr(analysis_module, "_analysis_tasks", {})
+    analysis_module._analysis_tasks["t"] = {
+        "status": "running",
+        "stage": "queued",
+        "progress": 0,
+        "message": "",
+        "estimated_seconds": None,
+        "started_monotonic": time.monotonic(),
+        "result": None,
+    }
+
+    request = type("Req", (), {"uid_or_url": "123"})()
+    asyncio.run(analysis_module._run_analysis_task("t", request))
+
+    task = analysis_module._analysis_tasks["t"]
+    assert task["status"] == "failed"
+    assert isinstance(task.get("finished_monotonic"), float)
+
+
+# ---------------------------------------------------------------------------
 # POST /self-diagnosis
 # ---------------------------------------------------------------------------
 
@@ -372,6 +452,14 @@ def test_export_report_failure_returns_500(client):
     _FakeReportGenerator.result_error = RuntimeError("写盘失败")
     response = client.post("/api/analysis/export-report", json={"uid": 7})
     assert response.status_code == 500
+
+
+@pytest.mark.parametrize("fmt", ["html", "docx", "PDF", "markdown "])
+def test_export_report_rejects_unknown_format(client, fmt):
+    """#94 回归：format 只接受 markdown/pdf，其它值直接 422，不进入生成分支。"""
+    response = client.post("/api/analysis/export-report", json={"uid": 7, "format": fmt})
+    assert response.status_code == 422
+    assert _FakeReportGenerator.calls == [] or _FakeReportGenerator.calls[-1][0] in {"markdown", "pdf"}
 
 
 def test_report_html_reuses_supplied_snapshot(client):

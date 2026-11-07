@@ -109,15 +109,21 @@ async def get_auth_status():
         if not cookie:
             return {"success": True, "logged_in": False, "user": None, "cookie_masked": ""}
 
-        # 实测 Cookie 有效性（nav 接口 isLogin）
-        valid = await CookieLoginHelper.validate_cookie(cookie)
+        # 实测 Cookie 有效性（nav 接口 isLogin）。状态查询同样属于用户显式
+        # 发起的登录态检查，不能被采集任务留下的域冷却误判成 Cookie 失效；
+        # IP 级熔断仍由底层闸门拦截。
+        valid = await CookieLoginHelper.validate_cookie(
+            cookie, allow_during_cooldown=True
+        )
         if not valid:
             logger.warning("[auth] 本地Cookie已失效，需重新扫码")
             return {"success": True, "logged_in": False, "user": None,
                     "cookie_masked": "", "invalid": True}
 
         # 拉取用户信息
-        user = await CookieLoginHelper.get_user_info(cookie)
+        user = await CookieLoginHelper.get_user_info(
+            cookie, allow_during_cooldown=True
+        )
         return {
             "success": True,
             "logged_in": True,
@@ -203,7 +209,12 @@ async def poll_login(request: QrPollRequest):
 
             # 校验3：nav 实测，必须在落盘之前；只用内存中的 cookie，不依赖已保存的 secrets。
             # 校验不通过时既不写 secrets 也不写 Cookie 池，避免无效 Cookie 覆盖原有登录态。
-            valid = await CookieLoginHelper.validate_cookie(cookie)
+            # 扫码是用户显式发起的登录恢复动作：跳过采集任务留下的域冷却，
+            # 否则一次 -352 后的 15 分钟本地冷却会把有效 Cookie 误报成失效。
+            # IP 级熔断仍由底层闸门拦截。
+            valid = await CookieLoginHelper.validate_cookie(
+                cookie, allow_during_cooldown=True
+            )
             if not valid:
                 return {"success": True, "status": "error",
                         "message": "Cookie验证未通过，请重新扫码", "user": None}
@@ -221,7 +232,9 @@ async def poll_login(request: QrPollRequest):
             except Exception as _pool_err:
                 logger.warning(f"[auth] 同步 Cookie 到池失败（secrets 已保存，不影响登录）: {_pool_err}")
 
-            user = await CookieLoginHelper.get_user_info(cookie)
+            user = await CookieLoginHelper.get_user_info(
+                cookie, allow_during_cooldown=True
+            )
             return {"success": True, "status": "confirmed",
                     "message": "✓获取登录态成功，已加密储存至本地", "user": user}
 
