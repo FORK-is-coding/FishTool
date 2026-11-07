@@ -747,7 +747,12 @@ def build(html_text: str, fonts: Fonts, *, charts: list | None = None, title: st
     doc.addPageTemplates([PageTemplate(id="cover", frames=[full]), PageTemplate(id="body", frames=[body])])
     story = [NextPageTemplate("body"), PageBreak()]
     story += build_story(blocks, fonts, doc.width, charts=charts)
-    doc.build(story, canvasmaker=NumberedCanvas)
+    try:
+        doc.build(story, canvasmaker=NumberedCanvas)
+    except ReportPdfError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - reportlab 的 LayoutError/TableTooLarge 等统一转成可读的导出错误
+        raise ReportPdfError(f"报告排版失败：{type(exc).__name__}（内容块过大或表格过宽）") from exc
     return buffer.getvalue()
 
 

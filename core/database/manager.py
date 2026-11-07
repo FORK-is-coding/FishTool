@@ -7,6 +7,7 @@
 from datetime import datetime
 from pathlib import Path
 import logging
+from typing import Dict
 
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import sessionmaker, Session
@@ -25,7 +26,11 @@ SQLITE_BUSY_TIMEOUT_S = SQLITE_BUSY_TIMEOUT_MS / 1000
 
 
 def _apply_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
-    """每条 SQLite 连接建立时开启 WAL 与 busy_timeout（规格 §2.6）。
+    """每条 SQLite 连接建立时开启外键约束、WAL 与 busy_timeout（规格 §2.6）。
+
+    SQLite 默认 ``foreign_keys=OFF``，模型里声明的 ``ForeignKey`` 只是注释，
+    孤儿行可以照常写入。外键开关是连接级设置，必须在建连 hook 里打开，
+    且要在任何事务开始之前执行（事务内设置会被 SQLite 静默忽略）。
 
     Args:
         dbapi_connection: sqlite3 原生连接。
@@ -36,11 +41,18 @@ def _apply_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
     """
     cursor = dbapi_connection.cursor()
     try:
+        # 外键强制：父行被引用时拒绝删除，声明了 ON DELETE 的按 schema 级联。
+        cursor.execute("PRAGMA foreign_keys=ON")
+        # 回读确认真的生效，避免驱动层静默忽略后仍然以为约束已开。
+        cursor.execute("PRAGMA foreign_keys")
+        enabled = cursor.fetchone()
+        if not enabled or int(enabled[0]) != 1:
+            logger.error("SQLite 外键约束未生效（PRAGMA foreign_keys=%s），孤儿行可能仍可写入", enabled)
         # WAL 是库文件级设置，开启后读不阻塞写、写不阻塞读。
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
     except Exception:
-        logger.exception("SQLite PRAGMA（WAL / busy_timeout）设置失败，回退默认日志模式")
+        logger.exception("SQLite PRAGMA（foreign_keys / WAL / busy_timeout）设置失败，回退默认设置")
     finally:
         cursor.close()
 
@@ -113,6 +125,8 @@ class DatabaseManager:
         self._migrate_hotspot_watch_event_columns()
         self._migrate_cookie_pool_plaintext_credentials()
         self._migrate_semantic_run_budget_columns()
+        # 外键开启后，历史库可能存在父行已删除的孤儿行；启动时体检并告警，不删数据。
+        self._audit_orphan_rows()
         logger.info(f"数据库表创建完成: {self.db_path}")
 
     def _migrate_task_key_column(self) -> None:
@@ -399,6 +413,93 @@ class DatabaseManager:
         except Exception:
             logger.exception("cookie_pool 明文凭据列清理失败")
             raise
+
+    @staticmethod
+    def _orphan_count_statement(table, constraint):
+        """为一条外键约束生成"统计孤儿行"的 SQL。
+
+        Args:
+            table: 子表（``sqlalchemy.Table``）。
+            constraint: 该表上的 ``ForeignKeyConstraint``。
+
+        Returns:
+            ``SELECT COUNT(*)`` 语句；约束不属于该表时返回 ``None``。
+        """
+        child_columns = []
+        parent_columns = []
+        for element in constraint.elements:
+            # 只处理以本表为子端的约束（同一约束对象可能被两侧共享）。
+            if element.parent.table is not table:
+                continue
+            child_columns.append(element.parent.name)
+            parent_columns.append(element.column.name)
+        if not child_columns:
+            return None
+        parent_table = constraint.elements[0].column.table.name
+        # NULL 外键在 SQLite 语义里不算违例，只统计非 NULL 且父行不存在的行。
+        conditions = " AND ".join(
+            f"({table.name}.{child} IS NOT NULL AND NOT EXISTS ("
+            f"SELECT 1 FROM {parent_table} "
+            f"WHERE {parent_table}.{parent} = {table.name}.{child}))"
+            for child, parent in zip(child_columns, parent_columns)
+        )
+        return f"SELECT COUNT(*) FROM {table.name} WHERE {conditions}"
+
+    def _audit_orphan_rows(self) -> None:
+        """体检历史遗留的孤儿外键行并告警，不删除任何业务数据。
+
+        外键在本版本才开启，旧库里可能存在父行已删除、子行仍残留的记录。
+        SQLite 开启外键后不会回溯校验存量行，这些行对新写入没有影响，因此这里
+        只统计并告警：静默删除会误伤仍然有效的子行（例如 accounts 行被清理后
+        cookie_pool 里仍可用的凭据），数据修复交给人工按告警处理。体检失败只记
+        日志，绝不让启动失败。
+
+        Args:
+            无。
+
+        Returns:
+            无；重复启动结果一致。
+        """
+        orphaned: Dict[str, int] = {}
+        try:
+            with self.engine.connect() as connection:
+                # 依赖倒序：先统计子表，父表计数不受子行影响。
+                for table in reversed(Base.metadata.sorted_tables):
+                    for constraint in table.foreign_key_constraints:
+                        count = self._count_orphan_rows(connection, table, constraint)
+                        if count:
+                            orphaned[table.name] = orphaned.get(table.name, 0) + count
+        except Exception:
+            # 体检失败不影响启动：外键仍对新写入生效。
+            logger.exception("历史孤儿外键行体检失败（继续启动）")
+            return
+        if orphaned:
+            detail = ", ".join(f"{name}={count}" for name, count in sorted(orphaned.items()))
+            logger.warning(
+                "检测到历史孤儿外键行（外键已开启，新写入不会再产生），请人工确认后清理: %s", detail
+            )
+
+    @staticmethod
+    def _count_orphan_rows(connection, table, constraint) -> int:
+        """统计单条外键约束下的孤儿行数，查询失败只记警告。
+
+        Args:
+            connection: 当前连接。
+            table: 子表。
+            constraint: 外键约束。
+
+        Returns:
+            孤儿行条数；查询失败返回 0。
+        """
+        statement = DatabaseManager._orphan_count_statement(table, constraint)
+        if not statement:
+            return 0
+        try:
+            result = connection.execute(text(statement)).scalar()
+        except Exception:
+            logger.warning("跳过 %s 的孤儿行体检", table.name, exc_info=True)
+            return 0
+        return int(result or 0)
 
     def get_session(self) -> Session:
         """获取数据库会话

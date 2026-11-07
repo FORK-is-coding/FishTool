@@ -30,13 +30,17 @@
 - core.config.ConfigManager：配置读写与持久化
 - core.database.get_session / LLMUsage：用量统计
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 # 从 pydantic 导入符号
-from pydantic import BaseModel, Field, StrictInt
+from pydantic import BaseModel, Field, StrictInt, field_validator, model_validator
 # 从 typing 导入符号
 from typing import Optional, Dict, Any, List
 # 从 datetime 导入符号
 from datetime import datetime
+# copy 用于在响应副本上脱敏，绝不写回活配置（#88）
+import copy
+# ipaddress 用于识别云元数据 / link-local 地址（#81）
+import ipaddress
 # httpx 用于异步请求 OpenAI 兼容服务的模型列表
 import httpx
 # URL 处理工具用于规范化 /v1/models 请求路径
@@ -102,27 +106,168 @@ def _normalize_base_url(url: str) -> str:
     ))
 
 
+# ============ 外部地址校验与脱敏（#81 / #88） ============
+
+# 模型列表探测只允许 http/https：其他协议（file://、gopher://、dict:// 等）
+# 在部分客户端实现里能读取本地文件或触发奇怪协议行为。
+_ALLOWED_SCHEMES = {"http", "https"}
+
+# 云厂商元数据服务地址：一旦被当成 Base URL，服务端会带着自己的身份去访问它，
+# 属于典型的 SSRF 目标，直接拒绝（含阿里云 100.100.100.200 与常见别名）。
+_METADATA_HOSTNAMES = {
+    "169.254.169.254",
+    "100.100.100.200",
+    "metadata.google.internal",
+    "metadata.goog",
+    "instance-data",
+}
+
+# IPv4/IPv6 的 link-local 网段（169.254.0.0/16、fe80::/10）。
+# 注意：这里刻意不封 127.0.0.1 和私网段——本地 Ollama / LM Studio 是合法用法。
+_LINK_LOCAL_NETWORKS = (
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("fe80::/10"),
+)
+
+# 连接失败 / HTTP 状态码异常的统一定案（#81）：
+# 旧实现分别返回“HTTP 401”“无法连接…”等不同文案，攻击者可据此区分
+# 端口是否开放、服务是否存活，形成端口探测 oracle。
+_UNREACHABLE_MESSAGE = "无法连接模型服务，请检查 Base URL 与 API Key"
+
+
+def _is_private_hostname(hostname: str) -> bool:
+    """判断主机名是否属于环回/私网/本地网络（不触发 DNS 查询）。"""
+    if hostname in {"localhost", "localhost.localdomain"}:
+        return True
+    if hostname.endswith((".localhost", ".local", ".internal", ".lan", ".home", ".corp")):
+        return True
+    return False
+
+
+def _validate_models_url(base_url: str, *, trusted_base_url: str = "") -> str:
+    """校验外部模型服务的 Base URL，并拼出标准的 /models 端点（#81）。
+
+    校验规则：
+    - 只允许 http / https；
+    - 拒绝 URL 内嵌用户名/密码（避免把凭据塞进请求地址）；
+    - 拒绝云元数据服务地址（169.254.169.254、metadata.google.internal 等）；
+    - 拒绝 IPv4/IPv6 link-local 与未指定地址（0.0.0.0、::）；
+    - 环回/私网/本地主机名默认拒绝，只有与已保存的 ``llm.api_base`` 完全一致时放行。
+
+    最后一条是本地 Ollama / LM Studio 的兼容口子：用户必须先显式保存本地
+    Base URL，服务端才会向该地址发起请求，不能由一次请求临时指定内网目标。
+
+    返回：
+        拼接好的 /models 请求地址。
+
+    异常：
+        HTTPException(400)：地址不被允许。
+    """
+    parts = urlsplit(base_url.strip())
+
+    if parts.scheme.lower() not in _ALLOWED_SCHEMES:
+        raise HTTPException(status_code=400, detail="Base URL 只支持 http/https 地址")
+
+    # urlsplit 对 userinfo 不做解码，直接用原始 netloc 判断 '@' 更稳妥
+    if parts.username is not None or parts.password is not None or '@' in parts.netloc:
+        raise HTTPException(status_code=400, detail="Base URL 不能包含用户名或密码")
+
+    hostname = (parts.hostname or '').strip().lower().rstrip('.')
+    if not hostname:
+        raise HTTPException(status_code=400, detail="Base URL 缺少主机名")
+
+    if hostname in _METADATA_HOSTNAMES:
+        raise HTTPException(status_code=400, detail="Base URL 指向云服务元数据地址，已拒绝")
+
+    trusted = bool(trusted_base_url) and (
+        _normalize_base_url(base_url) == _normalize_base_url(trusted_base_url)
+    )
+
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        address = None
+    if address is not None:
+        if address.is_unspecified:
+            raise HTTPException(status_code=400, detail="Base URL 指向无效地址，已拒绝")
+        if any(
+            address in network
+            for network in _LINK_LOCAL_NETWORKS
+            if network.version == address.version
+        ):
+            raise HTTPException(status_code=400, detail="Base URL 指向 link-local 地址，已拒绝")
+        if (address.is_private or address.is_loopback or address.is_reserved) and not trusted:
+            raise HTTPException(
+                status_code=400,
+                detail="Base URL 指向内网或环回地址；如使用本地模型服务，请先保存该地址",
+            )
+    elif _is_private_hostname(hostname) and not trusted:
+        raise HTTPException(
+            status_code=400,
+            detail="Base URL 指向内网或环回地址；如使用本地模型服务，请先保存该地址",
+        )
+
+    # 兼容用户填写带或不带末尾斜杠的地址，并固定访问标准模型端点。
+    return urljoin(parts.geturl().rstrip('/') + '/', 'models')
+
+
+def _mask_api_key(value: Any) -> Optional[str]:
+    """把密钥脱敏成前端展示用字符串；没有密钥时返回 None（不生成字段）。
+
+    规则：长度 > 12 时保留前 8 位与后 4 位；更短的密钥整体按固定长度打码，
+    避免旧规则（前 8 + 后 4）把短密钥完整拼出来（#88）。
+    """
+    if not isinstance(value, str):
+        return None
+    key = value.strip()
+    if not key:
+        return None
+    if len(key) <= 12:
+        return '*' * 8
+    return key[:8] + '***' + key[-4:]
+
+
 # ============ 请求/响应模型 ============
 
 class LLMConfigRequest(BaseModel):
     """LLM 配置更新请求体
     # 用新值覆盖旧值，保持数据一致
 
-    字段说明：
-    - api_key: 必填，大模型 API 密钥，保存时走加密存储
-    # 持久化数据，防止丢失
-    - base_url: API 地址，默认 OpenAI 兼容地址
-    - model: 模型名，默认 gpt-3.5-turbo
+    字段说明（全部可选，只写入请求里真正提供的字段，未提供的一律保持原值）：
+    - api_key: 大模型 API 密钥，保存时走加密存储；空白视为非法，不是“清空密钥”
+    - base_url: API 地址，省略则保留已保存地址
+    - model: 模型名，省略则保留已保存模型
     - daily_token_limit: 每日 token 上限，可选
+
+    为什么不再给 base_url/model 默认值（#91）：
+    旧模型给这两个字段填了 OpenAI 默认值，于是“只想换密钥”的请求会把
+    用户已保存的地址与模型悄悄重置回默认值。
     """
-    api_key: str
-    # 赋值并准备后续使用
-    base_url: str = "https://api.openai.com/v1"
-    # 赋值并准备后续使用
-    model: str = "gpt-3.5-turbo"
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
     # 全局每日 token 上限：0 表示不限制；None 表示不修改
     daily_token_limit: Optional[StrictInt] = Field(
         default=None, ge=0, le=LLM_DAILY_TOKEN_LIMIT_MAX)
+
+    @field_validator('api_key', 'base_url', 'model')
+    @classmethod
+    def _strip_text_fields(cls, value: Optional[str]) -> Optional[str]:
+        """统一去首尾空白；显式传空串视为非法，而不是“清空/重置”（#91）。"""
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError('字段不能为空字符串；不修改请省略该字段')
+        return value
+
+    @model_validator(mode='after')
+    def _require_at_least_one_field(self):
+        """至少要提供一个要更新的字段，空请求体 422（#91）。"""
+        provided = (self.api_key, self.base_url, self.model, self.daily_token_limit)
+        if all(item is None for item in provided):
+            raise ValueError('至少需要提供一个要更新的字段')
+        return self
 
 
 class LLMModelsRequest(BaseModel):
@@ -130,6 +275,7 @@ class LLMModelsRequest(BaseModel):
 
     前端切换 Base URL 时会传入当前输入框内容；如果字段为空，
     后端会回退读取已保存的 LLM 配置，便于直接调用接口探测。
+    空白字符串与 None 等价，都表示“未提供”（#87）。
     """
     api_key: Optional[str] = None
     # 允许前端传入尚未保存的新地址，避免必须先保存才能刷新模型
@@ -147,6 +293,22 @@ class ConfigUpdateRequest(BaseModel):
     """
     key: str
     value: Any
+
+    @field_validator('key')
+    @classmethod
+    def _normalize_key(cls, value: str) -> str:
+        """规范化点分路径：每段去空白，任一段为空即 422（#98）。
+
+        旧实现只用 strip 后的键做校验、却用原始键写入，`" llm"` 会写出
+        顶层垃圾键且 `llm.*` 的重置判定失效。
+        """
+        key = (value or '').strip()
+        if not key:
+            raise ValueError('配置键不能为空')
+        segments = [segment.strip() for segment in key.split('.')]
+        if any(not segment for segment in segments):
+            raise ValueError('配置键的每一段都不能为空')
+        return '.'.join(segments)
 
 
 # ============ 路由端点 ============
@@ -172,26 +334,28 @@ async def get_all_config():
         # 赋值并准备后续使用
         config = ConfigManager()
         
-        # 获取配置并脱敏 - 使用 .all 属性
-        # .all 返回的是配置字典的浅拷贝，直接改它不会污染内部状态
-        # 将结果交回调用方
-        all_config = config.all
+        # 取配置快照：.all 已改为深拷贝，这里再 copy 一次只是显式表明
+        # “下面所有改动都只作用于响应副本”（#88）
+        all_config = copy.deepcopy(config.all)
         
         # 脱敏处理 - 检查是否有 api_key（从 secrets 获取）
         # 注意：api_key 存在加密 secrets 里，不在普通配置中，
         # 所以必须单独 get_secret 取出来再拼进返回结构
-        # 将结果交回调用方
-        api_key = config.get_secret('llm_api_key')
-        # 判断 api_key
-        # 根据条件走向不同处理分支
-        if api_key:
-            # 前端展示需要 llm 节点存在，这里做惰性初始化
-            if 'llm' not in all_config:
-                # 赋值并准备后续使用
-                all_config['llm'] = {}
+        llm_node = all_config.get('llm')
+        has_llm_node = isinstance(llm_node, dict)
+        # 历史版本曾把明文写进 llm.api_key，这里连同一并剔除，响应里只留脱敏串（#88）
+        legacy_key = llm_node.pop('api_key', None) if has_llm_node else None
+        if has_llm_node:
+            # 避免上一次污染留下的字段被原样带出
+            llm_node.pop('api_key_masked', None)
+        masked = _mask_api_key(config.get_secret('llm_api_key') or legacy_key)
+        if masked:
+            if not has_llm_node:
+                # 前端展示需要 llm 节点存在，这里做惰性初始化（只作用于副本）
+                llm_node = {}
+                all_config['llm'] = llm_node
             # 只暴露脱敏串，完整密钥永不返回给前端
-            # 将结果交回调用方
-            all_config['llm']['api_key_masked'] = api_key[:8] + '***' + api_key[-4:]
+            llm_node['api_key_masked'] = masked
         
         return {
             "success": True,
@@ -225,19 +389,18 @@ async def get_llm_config():
         # 赋值并准备后续使用
         config = ConfigManager()
         
-        # 读取 llm 命名空间，不存在时返回空字典
-        # 将结果交回调用方
-        llm_config = config.get('llm', {})
+        # 读取 llm 命名空间的副本（#88）：必须在副本上脱敏，
+        # 旧实现的 config.get('llm', {}) 是活引用，写 api_key_masked 会污染活配置。
+        llm_config = copy.deepcopy(config.get('llm', {}) or {})
+        if not isinstance(llm_config, dict):
+            llm_config = {}
         
-        # 从 secrets 获取 api_key 并脱敏
-        # get_secret 返回 None 表示未配置，跳过脱敏字段
-        # 将结果交回调用方
-        api_key = config.get_secret('llm_api_key')
-        # 判断 api_key
-        # 根据条件走向不同处理分支
-        if api_key:
-            # 赋值并准备后续使用
-            llm_config['api_key_masked'] = api_key[:8] + '***' + api_key[-4:]
+        # 从 secrets 获取 api_key 并脱敏；历史明文 llm.api_key 也只留脱敏串
+        legacy_key = llm_config.pop('api_key', None)
+        llm_config.pop('api_key_masked', None)
+        masked = _mask_api_key(config.get_secret('llm_api_key') or legacy_key)
+        if masked:
+            llm_config['api_key_masked'] = masked
         
         return {
             "success": True,
@@ -266,8 +429,14 @@ async def get_llm_models(request: LLMModelsRequest):
         base_url = (saved_base_url if request.base_url is None else request.base_url or '').strip()
         if not base_url:
             return {"success": False, "models": [], "message": "请先填写 Base URL"}
-        if request.api_key is None:
-            # None 表示请求未提供密钥，回退已保存密钥；此时只允许访问已保存的地址，
+
+        # 空白字符串与 None 等价，都表示“本次没有提供密钥”（#87）：
+        # 前端页面加载时会带 api_key=""，不能据此判定用户填了空密钥。
+        provided_key = (request.api_key or '').strip()
+        if provided_key:
+            api_key = provided_key
+        else:
+            # 回退已保存密钥；此时只允许访问已保存的地址，
             # 防止调用方指定任意 base_url 把已保存密钥随 Authorization 头发出去。
             api_key = (config.get_secret('llm_api_key') or '').strip()
             if api_key and _normalize_base_url(base_url) != _normalize_base_url(saved_base_url):
@@ -275,26 +444,29 @@ async def get_llm_models(request: LLMModelsRequest):
                     status_code=400,
                     detail="使用已保存的 API Key 时只能查询已保存的 Base URL；切换地址请同时填写 API Key",
                 )
-        else:
-            # 空字符串表示用户明确未填写，不能回退旧密钥。
-            api_key = request.api_key.strip()
         if not api_key:
             return {"success": False, "models": [], "message": "请先填写 API Key"}
 
-        # 兼容用户填写带或不带末尾斜杠的地址，并固定访问标准模型端点。
-        models_url = urljoin(base_url.rstrip('/') + '/', 'models')
+        # 地址白名单校验（#81）：只允许 http/https，拒绝内嵌凭据、
+        # 云元数据地址与 link-local；环回/私网只允许访问已保存的地址。
+        models_url = _validate_models_url(base_url, trusted_base_url=saved_base_url)
         headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        # 禁止跟随重定向：否则公开地址可以 302 到内网地址，绕过上面的地址校验。
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
             response = await client.get(models_url, headers=headers)
-        if response.status_code >= 400:
-            # 不返回完整响应正文，避免第三方错误内容污染前端或泄露敏感信息。
-            return {
-                "success": False,
-                "models": [],
-                "message": f"模型列表请求失败（HTTP {response.status_code}）"
-            }
+        if response.status_code >= 300:
+            # 不区分“连不上”与“HTTP 4xx/5xx”，统一文案，避免被用来探测端口/服务（#81）。
+            logger.warning(
+                "模型列表请求失败：status=%s url=%s", response.status_code, models_url
+            )
+            return {"success": False, "models": [], "message": _UNREACHABLE_MESSAGE}
 
-        payload = response.json()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            # 只对“响应正文不是 JSON”给出专门提示，其余异常一律走统一文案
+            logger.warning("模型服务返回非法 JSON: %s", exc, exc_info=True)
+            return {"success": False, "models": [], "message": "模型服务返回的不是有效 JSON"}
         raw_models = payload.get('data', []) if isinstance(payload, dict) else []
         models: List[str] = []
         for item in raw_models:
@@ -311,17 +483,19 @@ async def get_llm_models(request: LLMModelsRequest):
         raise
     except httpx.TimeoutException as exc:
         logger.warning("获取模型列表超时: %s", exc, exc_info=True)
-        return {"success": False, "models": [], "message": "获取模型列表超时，请检查 Base URL"}
+        return {"success": False, "models": [], "message": _UNREACHABLE_MESSAGE}
     except httpx.RequestError as exc:
         logger.warning("连接模型服务失败: %s", exc, exc_info=True)
-        return {"success": False, "models": [], "message": f"无法连接模型服务：{exc}"}
+        # 与 HTTP 错误共用一个文案：细节只留在服务端日志里，前端拿到的信息不构成探测面
+        return {"success": False, "models": [], "message": _UNREACHABLE_MESSAGE}
     except ValueError as exc:
-        logger.warning("模型服务返回非法 JSON: %s", exc, exc_info=True)
-        return {"success": False, "models": [], "message": "模型服务返回的不是有效 JSON"}
+        # 地址解析等意料之外的取值错误也统一文案：不同异常文本会变成探测信号
+        logger.warning("模型列表请求参数无效: %s", exc, exc_info=True)
+        return {"success": False, "models": [], "message": _UNREACHABLE_MESSAGE}
     except Exception as exc:
-        # 兜底保护路由稳定性，同时保留足够的错误上下文帮助排查。
+        # 兜底保护路由稳定性；细节只写日志，不回传给前端（#81）
         logger.error("获取模型列表失败: %s", exc, exc_info=True)
-        return {"success": False, "models": [], "message": f"获取模型列表失败：{exc}"}
+        return {"success": False, "models": [], "message": _UNREACHABLE_MESSAGE}
 
 
 @router.post("/llm")
@@ -343,11 +517,15 @@ async def update_llm_config(request: LLMConfigRequest):
         # 赋值并准备后续使用
         config = ConfigManager()
         
-        # 更新配置 - 使用正确的键名
-        # 密钥必须走 save_secret，不能混进普通配置明文存储
-        config.save_secret('llm_api_key', request.api_key)
-        config.set('llm.api_base', request.base_url)
-        config.set('llm.model', request.model)
+        # 只写请求里真正提供的字段（#91）：
+        # 旧实现给 base_url/model 填了 OpenAI 默认值并总是写入，导致“只想换密钥”
+        # 的请求把已保存的地址与模型一起重置掉；空 key 还会把已存密钥清空。
+        if request.api_key is not None:
+            config.save_secret('llm_api_key', request.api_key)
+        if request.base_url is not None:
+            config.set('llm.api_base', request.base_url)
+        if request.model is not None:
+            config.set('llm.model', request.model)
         
         # 每日限额可选：未传不覆盖旧值；0 是合法值（不限制），不能用真值判断
         if request.daily_token_limit is not None:
@@ -382,11 +560,11 @@ async def update_llm_config(request: LLMConfigRequest):
 
 @router.get("/llm/usage")
 # 赋值并准备后续使用
-async def get_llm_usage(days: int = 7):
+async def get_llm_usage(days: int = Query(default=7, ge=1, le=365)):
     """获取LLM用量统计
     # 读取数据并赋值给当前作用域变量
 
-    查询最近 N 天的 LLMUsage 记录，返回：
+    查询最近 N 天的 LLMUsage 记录（N 限定 1..365，避免 timedelta 溢出或空窗口），返回：
     # 将结果交回调用方
     1. daily_usage：按自然日聚合的 token 明细
        （prompt/completion/total 各自求和 + 请求次数）
@@ -401,7 +579,11 @@ async def get_llm_usage(days: int = 7):
     try:
         # 赋值并准备后续使用
         session = get_session()
-        
+    except Exception as e:
+        # 获取连接失败与查询失败同样落 500，避免半途抛出未包装异常。
+        raise HTTPException(status_code=500, detail=f"获取用量统计失败: {str(e)}")
+
+    try:
         # 查询最近N天的用量
         from datetime import timedelta
         # 计算结果存入 start_date
@@ -434,10 +616,6 @@ async def get_llm_usage(days: int = 7):
 
         # 今日用量与上限（与每日限额检查同口径），供配置页显示“今日已用 / 上限”
         today_usage = _today_usage(session)
-
-        # 关闭连接释放资源
-        # 释放连接/窗口资源
-        session.close()
         
         # 格式化数据
         # SQL 聚合结果转成前端友好的 dict 列表
@@ -469,6 +647,9 @@ async def get_llm_usage(days: int = 7):
     except Exception as e:
         # 抛出异常中断流程
         raise HTTPException(status_code=500, detail=f"获取用量统计失败: {str(e)}")
+    finally:
+        # 连接必须释放：查询抛错（含上方 500 分支）时也不能漏掉 close。
+        session.close()
 
 
 def _today_usage(session) -> Dict[str, Any]:
@@ -502,7 +683,9 @@ async def update_config(request: ConfigUpdateRequest):
     LLM 地址（llm / llm.api_base / llm.api_key）与 secrets.* 拒绝写入，
     避免绕过 POST /llm 把已保存密钥与新地址拼接。
     """
-    key = request.key.strip()
+    # ConfigUpdateRequest 已在模型层规范化点分路径（每段 strip、任一段为空即 422），
+    # 这里直接使用规范化后的键，校验、写入与重置判定必须同一个键（#98）。
+    key = request.key
     if key in _PROTECTED_CONFIG_KEYS or key.split('.')[0] == 'secrets':
         raise HTTPException(status_code=400, detail="LLM 地址与密钥请通过 POST /api/config/llm 修改")
     if key == _DAILY_LIMIT_KEY and not _valid_daily_limit(request.value):
@@ -521,28 +704,25 @@ async def update_config(request: ConfigUpdateRequest):
         
         # set 支持点分路径自动创建嵌套结构
         if key == _DAILY_LIMIT_KEY:
-            # 校验用的是 strip 后的键，写入也必须用同一个键，否则带空格的键会写出脏路径。
             config.set(key, request.value)
             # 用户主动设置过：写迁移标记，防止下次启动把主动保存的 100000 当旧默认值迁移掉
             config.set(_DAILY_LIMIT_MIGRATED_KEY, 1)
-        elif key == _MAX_TOKENS_KEY:
-            # 同上：写入校验过的 strip 后的键。
-            config.set(key, request.value)
         else:
-            config.set(request.key, request.value)
+            # 一律写规范化后的键：旧实现用未 strip 的原始键，" llm" 会生成顶层垃圾键
+            config.set(key, request.value)
         # 落盘持久化
         config.save_config()
         # 同 update_llm_config：上面用新建实例写盘，运行中的模块级单例需 reload 才能读到新值
         from core.config import config as runtime_config
         runtime_config.reload()
         # llm.* 会影响全局 LLMClient 构造时固定的地址、模型与请求头，需丢弃后按新配置重建
-        if request.key.split('.')[0] == 'llm':
+        if key.split('.')[0] == 'llm':
             from llm.client import reset_llm_client
             await reset_llm_client()
         
         return {
             "success": True,
-            "message": f"配置 {request.key} 已更新"
+            "message": f"配置 {key} 已更新"
         }
         
     except Exception as e:

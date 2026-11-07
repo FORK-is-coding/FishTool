@@ -38,7 +38,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 # 从 pydantic 导入符号
 from pydantic import BaseModel, Field
 # 从 typing 导入符号
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Literal, Set
 # 导入模块
 import asyncio
 import time
@@ -80,6 +80,12 @@ logger = get_logger(__name__)
 bili_api: Optional[BilibiliAPI] = None
 rate_limiter: Optional[RateLimiter] = None
 _analysis_tasks: Dict[str, Dict[str, Any]] = {}
+# 已结束任务在内存中的保留时长（秒）；超时记录在创建新任务时清理，避免字典无界增长。
+_ANALYSIS_TASK_TTL_SECONDS = 3600
+# 后台协程的强引用集合：事件循环只持弱引用，不留引用可能被 GC 提前回收；完成时由 done callback 移除。
+_analysis_task_refs: Set["asyncio.Task[None]"] = set()
+# 查询接口不对外暴露的内部控制字段。
+_ANALYSIS_INTERNAL_KEYS = frozenset({"started_monotonic", "finished_monotonic"})
 
 
 def _update_analysis_task(task_id: str, stage: str, progress: int, message: str) -> None:
@@ -91,6 +97,31 @@ def _update_analysis_task(task_id: str, stage: str, progress: int, message: str)
     elapsed = max(time.monotonic() - task["started_monotonic"], 0.1)
     task["estimated_seconds"] = round(elapsed * (100 - progress) / progress) if progress >= 10 else None
 
+
+def _prune_analysis_tasks() -> None:
+    """清理已结束且超过 TTL 的分析任务记录。
+
+    只在创建新任务时调用：运行中的任务永远不清理，因此不会让查询接口读到「消失的任务」。
+    """
+    if not _analysis_tasks:
+        return
+    now = time.monotonic()
+    expired = [
+        task_id
+        for task_id, task in _analysis_tasks.items()
+        if task.get("status") != "running"
+        and now - float(task.get("finished_monotonic") or task.get("started_monotonic") or now)
+        > _ANALYSIS_TASK_TTL_SECONDS
+    ]
+    for task_id in expired:
+        _analysis_tasks.pop(task_id, None)
+
+
+def _spawn_analysis_task(task_id: str, request: "UPAnalysisRequest") -> None:
+    """启动分析协程并保留强引用，完成后自动释放。"""
+    background = asyncio.create_task(_run_analysis_task(task_id, request))
+    _analysis_task_refs.add(background)
+    background.add_done_callback(_analysis_task_refs.discard)
 
 
 def init_clients():
@@ -163,12 +194,14 @@ async def _run_analysis_task(task_id: str, request: UPAnalysisRequest) -> None:
         _analysis_tasks[task_id].update(
             status="completed", stage="completed", progress=100,
             message="UP主拆解完成", estimated_seconds=0,
+            finished_monotonic=time.monotonic(),
             result={"up_data": up_data, "analysis": analysis_result},
         )
     except Exception as exc:
         logger.exception("UP主拆解后台任务失败 task=%s", task_id)
         _analysis_tasks[task_id].update(
-            status="failed", message=f"分析失败: {exc}", estimated_seconds=0
+            status="failed", message=f"分析失败: {exc}", estimated_seconds=0,
+            finished_monotonic=time.monotonic(),
         )
 
 
@@ -196,8 +229,8 @@ class ReportExportRequest(BaseModel):
     - category: 对比分区（可选）
     """
     uid: int = Field(..., description="B站UID")
-    # 赋值并准备后续使用
-    format: str = Field("markdown", description="导出格式: markdown/pdf")
+    # 只有 markdown / pdf 两个分支，非法值在入参处直接 422，避免落进 markdown 分支静默降级。
+    format: Literal["markdown", "pdf"] = Field("markdown", description="导出格式: markdown/pdf")
     # 赋值并准备后续使用
     category: Optional[str] = Field(None, description="对比分区")
     # 01 新增：导出报告时携带同一个冻结排名 run（拒绝跨 UID）
@@ -339,6 +372,8 @@ async def get_category_top_ups(request: CategoryTopRequest):
 @router.post("/analyze-up/tasks")
 async def start_analysis_task(request: UPAnalysisRequest):
     """启动UP主拆解后台任务并返回任务 ID。"""
+    # 先清理过期任务，避免内存表只增不减。
+    _prune_analysis_tasks()
     task_id = uuid.uuid4().hex
     _analysis_tasks[task_id] = {
         "task_id": task_id,
@@ -350,7 +385,8 @@ async def start_analysis_task(request: UPAnalysisRequest):
         "started_monotonic": time.monotonic(),
         "result": None,
     }
-    asyncio.create_task(_run_analysis_task(task_id, request))
+    # 保留协程强引用，避免任务只被事件循环弱引用而中途被回收。
+    _spawn_analysis_task(task_id, request)
     return {"success": True, "task_id": task_id}
 
 
@@ -361,7 +397,7 @@ async def get_analysis_task(task_id: str):
     if not task:
         raise HTTPException(status_code=404, detail="分析任务不存在或已过期")
     return {"success": True, "data": {
-        key: value for key, value in task.items() if key != "started_monotonic"
+        key: value for key, value in task.items() if key not in _ANALYSIS_INTERNAL_KEYS
     }}
 
 

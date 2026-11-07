@@ -365,6 +365,8 @@ class BilibiliAPICore:
                         logger.warning(f"收到 429 响应，等待 {retry_after}s 后重试")
                         # 429 取该域共享的较晚恢复时刻（规格 §2.4）。
                         report_status_429(self.domain, retry_after)
+                        # 记住真实限频异常：重试耗尽后必须原样抛出，而不是退化成 NetworkError。
+                        last_exception = Status429Error(url, retry_after)
                         await asyncio.sleep(retry_after)
                         # 跳过本轮继续循环
                         continue  # 继续重试
@@ -410,6 +412,8 @@ class BilibiliAPICore:
                         # 边界/有效性检查
                         if self.rate_limiter is not None:
                             retry_after = self.rate_limiter.report_429(url)
+                            # 业务码 -509 同样是限频：重试耗尽后抛 RateLimitError 而非 NetworkError。
+                            last_exception = RateLimitError(retry_after)
                             await asyncio.sleep(retry_after)
                             # 跳过本轮继续循环
                             continue

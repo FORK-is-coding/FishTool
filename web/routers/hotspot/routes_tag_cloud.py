@@ -3,14 +3,13 @@
 
 拆分自 hotspot.py 原始 L299-L428。
 """
-import asyncio
 import time
 import uuid
 
 from fastapi import HTTPException
 
 from . import router
-from .deps import TagCloudGenerator, ValidationError, _run_tag_cloud_task, _tag_cloud_tasks, get_api
+from .deps import TagCloudGenerator, ValidationError, _spawn_tag_cloud_task, _tag_cloud_tasks, get_api
 from .schemas import TagCloudRequest
 
 
@@ -30,8 +29,8 @@ async def start_tag_cloud_task(request: TagCloudRequest):
         "started_monotonic": time.monotonic(),
         "result": None,
     }
-    # 将耗时工作交给后台协程，接口立即返回任务 ID 供前端轮询。
-    asyncio.create_task(_run_tag_cloud_task(task_id, request))
+    # 将耗时工作交给后台协程，接口立即返回任务 ID 供前端轮询（强引用由 deps 侧保存）。
+    _spawn_tag_cloud_task(task_id, request)
     return {"success": True, "task_id": task_id}
 
 @router.get("/tag-cloud/tasks/{task_id}")

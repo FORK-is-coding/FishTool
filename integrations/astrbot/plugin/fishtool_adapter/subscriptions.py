@@ -87,7 +87,7 @@ class SubscriptionStore:
 
         Raises:
             ValueError: umo 为空。
-            OSError: 落盘失败（内存中的修改会回滚）。
+            Exception: 落盘失败（任何异常都会把内存中的修改回滚后再原样抛出）。
         """
         umo = (umo or "").strip()
         if not umo:
@@ -105,13 +105,14 @@ class SubscriptionStore:
             result = "added"
         try:
             self._save()
-        except OSError:
+        except Exception as exc:  # noqa: BLE001 - 磁盘/编码等任何失败都要回滚，避免“内存有、磁盘没有”
             self._items = before
+            self.log.warning(f"[fishtool] 保存推送订阅失败，已回滚本次修改: {exc!r}")
             raise
         return result
 
     def remove(self, umo: str) -> bool:
-        """移除订阅；不存在时返回 False。落盘失败抛 OSError 并回滚。"""
+        """移除订阅；不存在时返回 False。落盘失败回滚内存并原样抛出。"""
         umo = (umo or "").strip()
         before = [dict(item) for item in self._items]
         self._items = [item for item in self._items if item["umo"] != umo]
@@ -119,7 +120,8 @@ class SubscriptionStore:
             return False
         try:
             self._save()
-        except OSError:
+        except Exception as exc:  # noqa: BLE001 - 同上：任何异常都要回滚
             self._items = before
+            self.log.warning(f"[fishtool] 保存推送订阅失败，已回滚本次修改: {exc!r}")
             raise
         return True

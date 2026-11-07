@@ -19,12 +19,13 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import core.database as db_package
 import core.database.api as db_api
-from core.database import DatabaseManager, LLMUsage
+from core.database import Comment, DatabaseManager, LLMUsage, Video
 
 
 # ---------------------------------------------------------------------------
@@ -339,3 +340,90 @@ def test_task_key_migration_is_idempotent_and_keeps_existing_rows(tmp_path):
     with sqlite3.connect(legacy_path) as raw:
         assert raw.execute("SELECT COUNT(*) FROM tasks WHERE task_key IS NULL").fetchone()[0] == 1
     manager.engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# SQLite 外键约束（#82）
+# ---------------------------------------------------------------------------
+
+
+def test_foreign_keys_pragma_enabled_on_connection(tmp_path):
+    """建连 hook 后每条连接都必须处于 PRAGMA foreign_keys=ON。"""
+    manager = DatabaseManager(str(tmp_path / "ops.db"))
+
+    with manager.engine.connect() as connection:
+        assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
+
+    session = manager.get_session()
+    try:
+        assert session.execute(text("PRAGMA foreign_keys")).scalar() == 1
+    finally:
+        session.close()
+
+
+def test_comment_with_missing_parent_is_rejected(tmp_path):
+    """video_id 指向不存在的视频时插入必须被拒绝（不会写入孤儿行）。"""
+    manager = DatabaseManager(str(tmp_path / "ops.db"))
+    session = manager.get_session()
+    try:
+        session.add(Comment(rpid="r-orphan", video_id=424242, content="孤儿评论"))
+        with pytest.raises(IntegrityError):
+            session.commit()
+    finally:
+        session.rollback()
+        session.close()
+
+
+def test_parent_delete_rejected_while_child_exists(tmp_path):
+    """schema 未声明 ON DELETE，裸 SQL 删除仍被引用的父行必须被拒绝。
+
+    走 SQL 而不是 ``session.delete``：ORM 关系上声明了 ``cascade="all, delete-orphan"``，
+    会先删子行再删父行，测不到数据库层面的外键约束。
+    """
+    manager = DatabaseManager(str(tmp_path / "ops.db"))
+    session = manager.get_session()
+    try:
+        video = Video(bvid="BV1test0001", title="父行")
+        session.add(video)
+        session.commit()
+        session.add(Comment(rpid="r-1", video_id=video.id, content="子行"))
+        session.commit()
+
+        with pytest.raises(IntegrityError):
+            session.execute(text("DELETE FROM videos WHERE id = :id"), {"id": video.id})
+            session.commit()
+    finally:
+        session.rollback()
+        session.close()
+
+    session = manager.get_session()
+    try:
+        assert session.query(Video).filter_by(bvid="BV1test0001").count() == 1
+        assert session.query(Comment).filter_by(rpid="r-1").count() == 1
+    finally:
+        session.close()
+
+
+def test_legacy_orphan_rows_do_not_break_startup(tmp_path):
+    """历史库里的孤儿行不影响启动，也不会被静默删除（避免误删仍可用的凭据/评论）。"""
+    db_path = tmp_path / "ops.db"
+    DatabaseManager(str(db_path))  # 先建全量 schema
+
+    raw = sqlite3.connect(db_path)
+    try:
+        raw.execute("PRAGMA foreign_keys=OFF")
+        raw.execute(
+            "INSERT INTO comments (rpid, video_id, content) VALUES ('orphan-1', 987654, '孤儿')"
+        )
+        raw.commit()
+        assert raw.execute("SELECT COUNT(*) FROM comments").fetchone()[0] == 1
+    finally:
+        raw.close()
+
+    DatabaseManager(str(db_path))  # 重新打开：体检告警而不是启动失败
+
+    raw = sqlite3.connect(db_path)
+    try:
+        assert raw.execute("SELECT COUNT(*) FROM comments").fetchone()[0] == 1
+    finally:
+        raw.close()

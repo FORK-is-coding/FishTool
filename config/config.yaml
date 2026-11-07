@@ -99,10 +99,8 @@ monitor:
     negative_ratio: 0.3
   check_interval: 300
   enable: false
-server:
-  host: 127.0.0.1
-  port: 8080
-  reload: false
+# 监听地址与端口不在这里配置：桌面版和 Web 版都从命令行参数取
+# （`app.py --port` / `app.py web --host --port`，默认 8000），写在这里不会生效。
 
 # FishTool 04 §18.2 功能开关与降级（第三批 h 增补）。
 # 刻意与 hotspot.events（EventPolicy 策略白名单段）隔离：把非策略键放进策略段会触犯

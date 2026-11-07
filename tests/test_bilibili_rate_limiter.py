@@ -536,3 +536,103 @@ def test_get_rate_limiter_is_lazy_singleton_reading_config(monkeypatch):
     assert first.limiters["dynamic"].rate == 7.5
     assert first.limiters["normal"].retry_delays == [5, 10]
     assert first.limiters["normal"].max_429_count == 2
+
+
+# ---------------------------------------------------------------------------
+# #103 回归：并发下按 rate 排队放行（不再用 tokens=1.0 抬高实际速率）
+# ---------------------------------------------------------------------------
+
+
+class _FakeClock:
+    """可控时钟：同时提供 time() 与 monotonic()，不随真实时间推进。"""
+
+    def __init__(self, start: float = 1000.0) -> None:
+        """设置初始时刻。"""
+        self.now = start
+
+    def time(self) -> float:
+        """返回当前假时刻（供 _refill_tokens 使用）。"""
+        return self.now
+
+    def monotonic(self) -> float:
+        """返回当前假时刻（供槽位计算使用）。"""
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        """手动推进假时刻。"""
+        self.now += seconds
+
+
+def test_acquire_reserves_one_slot_per_request(sleeps, monkeypatch):
+    """并发 acquire 每个请求只占一个槽位：等待应为 rate、2*rate、3*rate（#103）。
+
+    旧实现醒后 ``tokens = 1.0`` + 锁内 sleep，会让相邻请求共用同一个令牌，
+    实际速率约翻倍；本用例用可控时钟锁死槽位序列。
+    """
+    clock = _FakeClock()
+    monkeypatch.setattr(rate_limiter_module, "time", clock)
+    limiter = RateLimiter(rate=2.0, jitter_factor=0.0)
+
+    async def _scenario() -> None:
+        """同时发起 4 个 acquire，记录各自等待时长。"""
+        await asyncio.gather(*(limiter.acquire("/api/slot") for _ in range(4)))
+
+    asyncio.run(_scenario())
+
+    # 首个请求立即可发（满令牌），随后每个请求多等一个 rate。
+    assert sorted(sleeps) == pytest.approx([2.0, 4.0, 6.0], abs=1e-6)
+    # 令牌不再被覆盖成 1.0，余额如实扣到 0。
+    assert limiter.tokens == pytest.approx(0.0, abs=1e-6)
+    assert limiter._next_slot == pytest.approx(clock.monotonic() + 8.0, abs=1e-6)
+    assert len(limiter.request_history) == 4
+
+
+def test_concurrent_acquire_keeps_configured_rate_in_wall_clock():
+    """真实时钟下 4 并发 acquire 的相邻放行间隔不得被压缩（#103）。"""
+    limiter = RateLimiter(rate=0.08, jitter_factor=0.0)
+
+    async def _scenario() -> list:
+        """并发取令牌并按完成顺序记录单调时刻。"""
+        marks: list[float] = []
+
+        async def _worker() -> None:
+            """取一次令牌后记录时刻。"""
+            await limiter.acquire("/api/paced")
+            marks.append(_time.monotonic())
+
+        await asyncio.gather(*(_worker() for _ in range(4)))
+        return sorted(marks)
+
+    marks = asyncio.run(_scenario())
+
+    gaps = [later - earlier for earlier, later in zip(marks, marks[1:])]
+    # 相邻放行至少半个间隔（0.04s），避免 2 倍速与零间隔突发。
+    assert all(gap >= 0.04 for gap in gaps), gaps
+    assert marks[-1] - marks[0] >= 0.16
+
+
+def test_cookie_budget_wait_does_not_block_other_cookies():
+    """一个 Cookie 的窗口等待不得在共享锁内阻塞其它 Cookie 的预算检查（#103）。"""
+    limiter = RateLimiter()
+    window = 0.4
+
+    async def _scenario() -> float:
+        """让 busy Cookie 进入等待，同时测量 idle Cookie 的耗时。"""
+        limiter.cookie_request_history["charge:busy"] = deque([_time.monotonic()])
+        busy = asyncio.ensure_future(
+            limiter.acquire_cookie_budget("busy", limit=1, window=window)
+        )
+        await asyncio.sleep(0.05)
+        assert not busy.done()
+
+        started = _time.monotonic()
+        await limiter.acquire_cookie_budget("idle", limit=1, window=window)
+        elapsed = _time.monotonic() - started
+
+        await busy
+        return elapsed
+
+    elapsed = asyncio.run(_scenario())
+
+    assert elapsed < 0.15
+    assert len(limiter.cookie_request_history["charge:idle"]) == 1

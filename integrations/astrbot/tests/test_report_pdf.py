@@ -190,6 +190,18 @@ def test_build_pdf_end_to_end(html_text):
         assert "测试UP<script>" in cover  # 外部文本按纯文本绘制，没被当成标记吞掉
 
 
+def test_build_wraps_layout_error(html_text):
+    """reportlab 排版失败要转成可读的 ReportPdfError，不能以 LayoutError 抛穿成“内部错误”。"""
+    from reportlab.platypus import Spacer
+
+    fonts = rp.resolve_fonts({}, log)
+    with pytest.raises(rp.ReportPdfError) as excinfo:
+        rp.build(html_text, fonts, charts=[Spacer(1, 5000)])
+    message = str(excinfo.value)
+    assert "报告排版失败" in message and "LayoutError" in message
+    assert excinfo.value.__cause__ is not None  # 原始异常保留在链上，便于排查
+
+
 def test_build_rejects_empty():
     fonts = rp.resolve_fonts({}, log)
     with pytest.raises(rp.ReportPdfError):
