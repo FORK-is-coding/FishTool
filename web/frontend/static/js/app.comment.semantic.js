@@ -291,7 +291,9 @@
         if (eta.queued_note) return eta.queued_note;
         const remain = Number(eta.remaining_ms);
         if (!Number.isFinite(remain)) return '';
-        const secs = Math.max(0, Math.round((remain - (Date.now() - (eta._localAt || 0)) / 1000)));
+        // remaining_ms 与本地已过时间都是毫秒，先相减再换算成秒（以前把毫秒减秒，结果放大了 1000 倍）。
+        const elapsedLocalMs = Date.now() - (eta._localAt || Date.now());
+        const secs = Math.max(0, Math.round((remain - elapsedLocalMs) / 1000));
         const mins = Math.max(1, Math.round(secs / 60));  // 还有剩余调用时不显示 0 分钟
         const used = Math.round((Number(eta.elapsed_ms) || 0) / 60000);
         const progress = eta.total ? `（${eta.done}/${eta.total}）` : '';
@@ -940,6 +942,8 @@
     // 任务进度区：阶段 / 进度 / 覆盖 / 预算 / 错误（只读展示）。
     // ETA 按秒倒数：只更新那一行文字，不重渲染整个任务区（避免把按钮状态/焦点打乱）。
     let etaTimer = null;
+    // 上一次打戳时的服务端剩余值：轮询返回同一个值时沿用旧时间戳，倒数不回跳。
+    let etaStamp = null;
 
     function startEtaTicker() {
         if (etaTimer) return;
@@ -955,6 +959,7 @@
 
     function stopEtaTicker() {
         if (etaTimer) { clearInterval(etaTimer); etaTimer = null; }
+        etaStamp = null;  // 不再倒数（终态 / 切 BV / 无 ETA）：下次拿到 ETA 时重新打戳
     }
 
     function renderTaskArea() {
@@ -962,9 +967,15 @@
         if (!area) return;
         const task = state.task;
         if (!task) { area.innerHTML = ''; return; }
-        // ETA 的本地时间戳：按秒倒数用，每次拿到新任务态就校准一次，不额外请求后端。
+        // ETA 的本地时间戳：按秒倒数用，不额外请求后端。
+        // 服务端 remaining_ms 只在一次模型调用结束时下降，调用进行中每次轮询都返回同一个值；
+        // 每次轮询都重新打戳会让倒数最多走几秒就跳回，接近半分钟边界时分钟数来回闪。
+        // 所以只有服务端值变了（或换了任务）才重新打戳，否则沿用上一次的时间戳继续倒数。
         if (task.eta && task.eta.remaining_ms !== undefined) {
-            task.eta._localAt = Date.now();
+            const prev = etaStamp;
+            const same = prev && prev.taskId === task.task_id && prev.remainingMs === task.eta.remaining_ms;
+            task.eta._localAt = same ? prev.localAt : Date.now();
+            etaStamp = { taskId: task.task_id, remainingMs: task.eta.remaining_ms, localAt: task.eta._localAt };
             startEtaTicker();
         } else {
             stopEtaTicker();
@@ -1322,6 +1333,7 @@
         window.__semanticPanel = {
             state, selectBvid, renderResult, stopPolling, init, onLoadClick, submitDecision,
             resumePollingIfActive, onStart, setBudgetMode: applyBudgetMode, resumeWithUnlimited,
+            etaLine,
         };
     }
 })();
