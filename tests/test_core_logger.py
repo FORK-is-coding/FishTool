@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import importlib
+import io
 import json
 import logging
 from datetime import datetime
@@ -109,6 +110,52 @@ def test_colored_formatter_leaves_unknown_level():
     output = formatter.format(record)
     assert "Level 25" in output
     assert "\033[" not in output
+
+
+def test_colored_formatter_restores_levelname_after_format():
+    """着色只作用于本次输出：同一个 record 交给下一个 handler 时 level 必须是纯文本（#125）。"""
+    colored = logger_module.ColoredFormatter("%(levelname)s|%(message)s")
+    plain = logging.Formatter("%(levelname)s|%(message)s")
+    record = logging.LogRecord("probe", logging.WARNING, "file.py", 1, "hello", (), None)
+    assert colored.format(record).startswith("\033[33mWARNING\033[0m")
+    assert record.levelname == "WARNING"
+    assert plain.format(record) == "WARNING|hello"
+
+
+def test_colored_formatter_restores_levelname_when_format_raises():
+    """格式化本身抛异常时也要还原，否则后续 handler 会拿到带色码的 level。"""
+    formatter = logger_module.ColoredFormatter("%(levelname)s|%(missing_field)s")
+    record = logging.LogRecord("probe", logging.ERROR, "file.py", 1, "hello", (), None)
+    # logging.Formatter 把 KeyError 包成了 ValueError
+    with pytest.raises(ValueError):
+        formatter.format(record)
+    assert record.levelname == "ERROR"
+
+
+def test_console_handler_colors_but_file_and_json_stay_clean():
+    """handler 顺序是控制台先于文件：控制台带色，文件与结构化输出不能混进 ANSI（#125）。"""
+    logger = logging.getLogger("test_color_handler_chain")
+    saved = logger.handlers[:]
+    saved_propagate = logger.propagate
+    stream, filebuf, structbuf = io.StringIO(), io.StringIO(), io.StringIO()
+    console = logging.StreamHandler(stream)
+    console.setFormatter(logger_module.ColoredFormatter("%(levelname)s|%(message)s"))
+    file_handler = logging.StreamHandler(filebuf)
+    file_handler.setFormatter(logging.Formatter("%(levelname)s|%(message)s"))
+    structured = logging.StreamHandler(structbuf)
+    structured.setFormatter(logger_module.StructuredFormatter())
+    logger.handlers[:] = [console, file_handler, structured]
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+    try:
+        logger.info("hello")
+    finally:
+        logger.handlers[:] = saved
+        logger.propagate = saved_propagate
+    assert "\033[32mINFO\033[0m" in stream.getvalue()
+    assert filebuf.getvalue() == "INFO|hello\n"
+    assert "\033[" not in filebuf.getvalue()
+    assert json.loads(structbuf.getvalue())["level"] == "INFO"
 
 
 def test_structured_formatter_serialize_types():

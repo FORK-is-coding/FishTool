@@ -9,6 +9,7 @@ B站部分接口（如投稿搜索）要求 WBI 签名：
 - MD5(query + mixin_key) 得到 w_rid 签名
 - 密钥每小时刷新一次（need_update 判断）
 """
+import asyncio
 import time
 import hashlib
 import urllib.parse
@@ -73,6 +74,18 @@ class WBISigner:
         self.update_interval = timedelta(hours=1)  # WBI密钥刷新间隔
         # 凭证域：由所属客户端注入，nav 请求按它参与分域冷却 / 配额判定。
         self.domain = domain
+        # 密钥刷新单飞锁：并发签名时只让一个协程真正请求 nav，其余复用结果。
+        # 锁按运行时事件循环惰性创建，避免跨 asyncio.run 复用时绑定到已关闭的循环。
+        self._update_lock: Optional[asyncio.Lock] = None
+        self._update_lock_loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def _refresh_lock(self) -> asyncio.Lock:
+        """获取绑定当前事件循环的刷新锁（同一循环内复用同一把锁）。"""
+        loop = asyncio.get_running_loop()
+        if self._update_lock is None or self._update_lock_loop is not loop:
+            self._update_lock = asyncio.Lock()
+            self._update_lock_loop = loop
+        return self._update_lock
     
     def get_mixin_key(self, orig: str) -> str:
         """对 imgKey 和 subKey 进行字符顺序打乱编码
@@ -234,7 +247,10 @@ class WBISigner:
         # 首次使用或过期时自动拉取新密钥
         # 需要时先刷新，保证签名用最新的密钥
         if self.need_update():
-            await self.update_wbi_keys(session)
+            # 双检单飞：拿锁后再判一次，先到的协程刷新后其余协程直接复用。
+            async with self._refresh_lock():
+                if self.need_update():
+                    await self.update_wbi_keys(session)
         
         # 用当前密钥完成 WBI 签名
         return self.enc_wbi(params, self.img_key, self.sub_key)

@@ -72,6 +72,10 @@ class AlertNotifier:
         self._sleep = sleep
         self._buffer: list[dict] = []
         self._overflow = 0
+        #: 已进缓冲区但还没成功推送的 id：挡住同一合并窗口内的重复事件，同时不污染补发去重表。
+        self._pending: set = set()
+        #: 因超出单批上限只计数、没进缓冲区的 id，同样只用于窗口内去重。
+        self._overflow_ids: set = set()
         self._seen: OrderedDict = OrderedDict()
         self._flush_task: asyncio.Task | None = None
         self._backfill_task: asyncio.Task | None = None
@@ -85,20 +89,27 @@ class AlertNotifier:
         self.add(data)
 
     def add(self, data: dict) -> bool:
-        """放进缓冲区；被过滤、重复或已关闭时返回 False。"""
+        """放进缓冲区；被过滤、重复或已关闭时返回 False。
+
+        这里只把 id 记进 ``_pending``（未发出的才算待发），推送成功后才写 ``_seen``；
+        否则「无订阅会话被跳过」的告警会被去重表永久挡住，重新订阅也补发不出去。
+        """
         if self.closed or not self.chat.get("enable", True) or not isinstance(data, dict):
             return False
         if not level_allowed(data.get("level"), self.chat.get("notify_min_level", "high")):
             return False
         alert_id = data.get("id")
         if alert_id is not None:
-            if alert_id in self._seen:
+            if alert_id in self._seen or alert_id in self._pending or alert_id in self._overflow_ids:
                 return False
-            self._remember(alert_id)
         if len(self._buffer) >= MAX_BATCH:
             self._overflow += 1
+            if alert_id is not None:
+                self._overflow_ids.add(alert_id)
         else:
             self._buffer.append(dict(data))
+            if alert_id is not None:
+                self._pending.add(alert_id)
         self._ensure_flush_scheduled()
         return True
 
@@ -125,21 +136,49 @@ class AlertNotifier:
                     self._ensure_flush_scheduled()
 
     async def flush(self) -> None:
-        """把缓冲区里的告警推送给所有订阅会话。"""
+        """把缓冲区里的告警推送给所有订阅会话。
+
+        没有任何订阅会话时不算“已推送”：把这一批放回缓冲区头部并重新排一次定时器，
+        等用户重新订阅后的下一个合并窗口再发（引擎侧这些告警仍是未读，也能被补发捞回）。
+        """
         alerts, overflow = self._buffer, self._overflow
-        self._buffer, self._overflow = [], 0
-        if self.closed or not alerts:
+        overflow_ids = self._overflow_ids
+        self._buffer, self._overflow, self._overflow_ids = [], 0, set()
+        if self.closed:
+            self._pending.clear()
+            return
+        if not alerts:
             return
         sessions = self._sessions()
         if not sessions:
-            self.log.debug(f"[fishtool] {len(alerts)} 条告警无订阅会话，跳过推送")
+            self._buffer[:0] = alerts
+            self._overflow += overflow
+            self._overflow_ids |= overflow_ids
+            self.log.debug(f"[fishtool] {len(alerts)} 条告警无订阅会话，保留待发")
+            self._ensure_flush_scheduled()
             return
         try:
             await self._send_batch(sessions, alerts, overflow)
         except asyncio.CancelledError:
+            self._drop_pending(alerts)
             raise
         except Exception as exc:  # noqa: BLE001 - 推送失败只记日志，告警仍在引擎里是未读状态
             self.log.warning(f"[fishtool] 告警推送失败: {exc!r}")
+            # 没发出去就不记去重表：重连补发时还能把同一批捞回来。
+            self._drop_pending(alerts)
+            return
+        for alert in alerts:
+            alert_id = alert.get("id")
+            if alert_id is not None:
+                self._remember(alert_id)
+                self._pending.discard(alert_id)
+
+    def _drop_pending(self, alerts: list[dict]) -> None:
+        """推送失败/取消后放掉这批 id，让它们还能被后续补发重新入队。"""
+        for alert in alerts:
+            alert_id = alert.get("id")
+            if alert_id is not None:
+                self._pending.discard(alert_id)
 
     # ------------------------------------------------------------------ backfill
     def on_connection(self, connected: bool) -> None:
@@ -190,7 +229,8 @@ class AlertNotifier:
         """取消定时任务；缓冲区里未发出的告警直接丢弃（它们在引擎里仍是未读，可用 /fishtool 告警 查到）。"""
         self.closed = True
         dropped = len(self._buffer) + self._overflow
-        self._buffer, self._overflow = [], 0
+        self._buffer, self._overflow, self._overflow_ids = [], 0, set()
+        self._pending.clear()
         tasks = [t for t in (self._flush_task, self._backfill_task) if t and not t.done()]
         for task in tasks:
             task.cancel()

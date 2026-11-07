@@ -28,6 +28,9 @@ logger = get_logger(__name__)
 # LLM客户端不在本模块缓存，统一委托 llm.client 全局单例（保存配置后会被重置）
 _api: Optional[BilibiliAPI] = None  # B站API客户端实例
 _tag_cloud_tasks = {}
+# 词云后台协程的强引用集合：事件循环只持弱引用，不留引用可能被 GC 提前回收；
+# 任务完成时由 done callback 自动移除，避免长期驻留。
+_tag_cloud_task_refs: set = set()
 
 
 def _update_tag_cloud_task(task_id: str, stage: str, progress: int, message: str) -> None:
@@ -61,6 +64,19 @@ async def _run_tag_cloud_task(task_id: str, request: "TagCloudRequest") -> None:
         _tag_cloud_tasks[task_id].update(
             status="failed", message=f"生成词云失败: {exc}", estimated_seconds=0
         )
+
+
+def _spawn_tag_cloud_task(task_id: str, request: "TagCloudRequest") -> None:
+    """启动词云后台协程并保留强引用，完成后自动释放。
+
+    Args:
+        task_id: 任务 ID（同时是 ``_tag_cloud_tasks`` 的键）。
+        request: 已校验的词云请求体。
+    """
+    background = asyncio.create_task(_run_tag_cloud_task(task_id, request))
+    _tag_cloud_task_refs.add(background)
+    background.add_done_callback(_tag_cloud_task_refs.discard)
+
 
 def get_api() -> BilibiliAPI:
     """

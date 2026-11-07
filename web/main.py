@@ -64,7 +64,7 @@ from core.database import get_session
 from modules.self_diagnosis.benchmark.service import BenchmarkService
 from modules.self_diagnosis.benchmark.store import BenchmarkStore
 # 跨站来源判定与 benchmark 的 local_guard 共用同一套规则（含 FISHTOOL_ALLOWED_HOSTS 覆盖）
-from web.local_guard import is_cross_site_origin
+from web.local_guard import LOCAL_TOKEN_HEADER, get_local_guard, is_cross_site_origin
 # 从 routers 导入符号
 from .routers import (
     hotspot, comment, config as config_router, logs, analysis,
@@ -537,24 +537,40 @@ async def no_cache_static_assets(request: Request, call_next):
     return response
 
 
-# 跨站写请求拦截
+# 写请求统一防护（#79）
 # CORS 白名单只阻止跨站页面「读取响应」，并不阻止请求被执行：任意网页都能用
 # fetch(..., {mode: 'no-cors'}) 发出不带 Content-Type 的 POST，而 FastAPI 仍会按 JSON
 # 解析请求体，于是可以跨站改写 LLM 配置、退出登录、增删监控目标等。
-# 浏览器跨站请求一定带 Origin 头；这里对 /api/ 下的非安全方法，只要 Origin 不属于
-# 本机允许集合就直接 403。无 Origin 的请求（同源 GET、CLI、桌面内嵌页、测试客户端）不受影响。
-_UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+#
+# 单个路由挂 require_local_write 只能覆盖到「刚好挂了的」那几个接口：只有
+# benchmark / comment_semantic 的写接口带 token 校验，其余写接口（config PUT、
+# lottery、analysis、logs 导出、hotspot、auth 等）只要 Origin 合法或缺 Origin 就能打。
+# 这里在应用层对所有非安全方法统一要求「本机 Host + 同源 + 本机 token」：
+#   1) Host 必须是回环 / 显式放行的主机，挡掉 DNS rebinding 与局域网直连写；
+#   2) Origin 存在时必须是同源（scheme/host/port 全匹配，见 web/local_guard.py）；
+#   3) 必须携带 X-Local-Token，token 由 GET /api/local-token 下发给同源页面；
+#      跨站页面即使发出请求也读不到响应体，拿不到 token，因而无法完成写操作；
+#   4) 无 Origin 的本地进程/CLI 一样要带 token，避免「不带 Origin 即放行」的形状漏检。
+# 读接口（GET/HEAD/OPTIONS）不受影响，只读接口仍由各自的 require_local_read 管 Host。
+_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
 @app.middleware("http")
 async def block_cross_site_writes(request: Request, call_next):
-    if (
-        request.method in _UNSAFE_METHODS
-        and request.url.path.startswith("/api/")
-        and is_cross_site_origin(request.headers.get("origin"))
-    ):
-        logger.warning("已拦截跨站写请求: %s %s origin=%s", request.method, request.url.path, request.headers.get("origin"))
-        return JSONResponse(status_code=403, content={"detail": "cross_site_request_blocked"})
+    """拦截跨站写请求与缺少本机 token 的写请求。"""
+    if request.method.upper() not in _SAFE_METHODS:
+        guard = get_local_guard()
+        # 1) Host 必须是本机 / 显式放行：挡掉 DNS rebinding 与局域网直连的写入。
+        if not guard.is_local_host(request.headers.get("host")):
+            logger.warning("已拦截非本机 Host 的写请求: %s %s host=%s", request.method, request.url.path, request.headers.get("host"))
+            return JSONResponse(status_code=403, content={"detail": "local_host_required"})
+        origin = request.headers.get("origin")
+        if is_cross_site_origin(origin, request_port=request.url.port):
+            logger.warning("已拦截跨站写请求: %s %s origin=%s", request.method, request.url.path, origin)
+            return JSONResponse(status_code=403, content={"detail": "cross_site_request_blocked"})
+        if not guard.verify_token(request.headers.get(LOCAL_TOKEN_HEADER)):
+            logger.warning("已拦截缺少本机 token 的写请求: %s %s", request.method, request.url.path)
+            return JSONResponse(status_code=403, content={"detail": "local_token_required"})
     return await call_next(request)
 
 
@@ -656,6 +672,25 @@ async def api_info():
         "name": "B站运营工具箱 API",
         "version": "1.0.0",
         "status": "running"
+    }
+
+
+@app.get("/api/local-token", dependencies=[Depends(require_local_read)])
+async def local_write_token():
+    """下发本机写请求令牌（写接口统一防护用）。
+
+    token 只交给同源页面：跨站页面能发出请求，但读不到响应体，也就拿不到 token。
+    前端 ``apiRequest`` 会在首次写请求前取一次并缓存，之后以 ``X-Local-Token`` 携带。
+
+    Returns:
+        dict: ``{"success": True, "data": {"token": ..., "header": ...}}``。
+    """
+    return {
+        "success": True,
+        "data": {
+            "token": get_local_guard().issue_token(),
+            "header": LOCAL_TOKEN_HEADER,
+        },
     }
 
 

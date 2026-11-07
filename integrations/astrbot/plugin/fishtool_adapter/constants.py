@@ -29,19 +29,31 @@ DEFAULT_ENGINE_CFG = {
 
 
 def engine_cfg(raw: dict | None) -> dict:
-    """把插件配置里的 engine 段与默认值合并。
+    """把插件配置里的 engine 段与默认值合并，并把非法值收敛为默认值。
+
+    面板保存时 AstrBot 会做类型校验，但手改配置文件或旧版本残留的值不会经过校验：
+    ``port: 'abc'`` 会让 ``int()`` 在启动时抛 ValueError，``'false'`` 之类字符串还是真值。
+    这里与 :func:`chat_cfg` 同构地兜一层，保证下游可以直接按类型使用。
 
     Args:
         raw: 插件配置中的 ``engine`` 对象，可为空。
 
     Returns:
-        dict: 补齐默认值后的新字典。
+        dict: 补齐默认值、收敛非法值后的新字典。
     """
-    merged = dict(DEFAULT_ENGINE_CFG)
-    for key, value in (raw or {}).items():
-        if value is not None:
-            merged[key] = value
-    return merged
+    raw = raw if isinstance(raw, dict) else {}
+    d = DEFAULT_ENGINE_CFG
+    return {
+        "autostart": _as_bool(raw.get("autostart"), d["autostart"]),
+        "python": _as_str(raw.get("python")),
+        "pip_index_url": _as_str(raw.get("pip_index_url")),
+        "port": _as_int(raw.get("port"), d["port"], minimum=0, maximum=65535),
+        "request_timeout_s": _as_int(
+            raw.get("request_timeout_s"), d["request_timeout_s"], minimum=1, maximum=3600),
+        "long_request_timeout_s": _as_int(
+            raw.get("long_request_timeout_s"), d["long_request_timeout_s"], minimum=1, maximum=86400),
+        "block_api_key_write": _as_bool(raw.get("block_api_key_write"), d["block_api_key_write"]),
+    }
 
 
 #: 聊天指令与告警推送的默认配置（_conf_schema.json 的 chat 段）。

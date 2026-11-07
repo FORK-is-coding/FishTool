@@ -42,9 +42,12 @@ async function loadLLMModels() {
     const status = document.getElementById('llm-model-status');
     if (status) status.textContent = '正在获取模型列表...';
     try {
+        // 空白密钥表示“本次没填”，必须省略 api_key 字段而不是发空串：
+        // 后端把空串当作明确未填会直接拒绝，导致页面加载时无法回退已保存的密钥（#87）。
+        const payload = apiKey ? { base_url: baseUrl, api_key: apiKey } : { base_url: baseUrl };
         const data = await apiRequest('/config/llm/models', {
             method: 'POST',
-            body: JSON.stringify({ base_url: baseUrl, api_key: apiKey })
+            body: JSON.stringify(payload)
         });
         if (data.success && data.models?.length) {
             useModelSelect(data.models, document.getElementById('llm-model')?.value.trim());

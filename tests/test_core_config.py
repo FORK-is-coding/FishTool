@@ -12,6 +12,10 @@
 """
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
+import pytest
 import yaml
 
 from core.config import ConfigManager
@@ -214,3 +218,136 @@ def test_all_property_snapshot_excludes_secrets(tmp_path):
     snapshot["injected"] = True
     assert manager.get("injected") is None
     assert manager.get_secret("k") == "v"
+
+
+def test_all_property_returns_deep_copy(tmp_path):
+    """all 返回深拷贝：改写嵌套节点不得污染活配置，也不得随落盘写出（#88）。"""
+    manager = _make_manager(tmp_path)
+    snapshot = manager.all
+    # 模拟 web 层往响应副本里塞展示字段
+    snapshot["llm"]["api_key_masked"] = "sk-1234***cdef"
+    snapshot["server"]["port"] = 1
+
+    assert "api_key_masked" not in manager.get("llm")
+    assert manager.get("server.port") == 8080
+
+    manager.save_config()
+    assert "api_key_masked" not in manager.main_config_path.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# 明文密钥迁移（#88）
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_plaintext_api_key_is_migrated_into_secrets(tmp_path):
+    """历史明文 llm.api_key 应搬进加密 secrets 并从普通配置里消失。"""
+    _make_manager(tmp_path)  # 生成默认 config.yaml
+    cfg_dir = tmp_path / "cfg"
+    raw = yaml.safe_load((cfg_dir / "config.yaml").read_text(encoding="utf-8"))
+    raw["llm"]["api_key"] = "sk-legacy-plain"
+    (cfg_dir / "config.yaml").write_text(
+        yaml.dump(raw, allow_unicode=True), encoding="utf-8"
+    )
+
+    manager = ConfigManager(config_dir=str(cfg_dir))
+
+    assert manager.get_secret("llm_api_key") == "sk-legacy-plain"
+    assert manager.get("llm.api_key") is None
+    assert "sk-legacy-plain" not in (cfg_dir / "config.yaml").read_text(encoding="utf-8")
+    assert b"sk-legacy-plain" not in manager.secrets_path.read_bytes()
+
+
+# ---------------------------------------------------------------------------
+# 坏文件与原子写盘（#124）
+# ---------------------------------------------------------------------------
+
+
+def test_broken_yaml_falls_back_to_defaults_and_backs_up(tmp_path):
+    """config.yaml 解析失败时构造不抛异常，回退默认值并备份坏文件。"""
+    cfg_dir = tmp_path / "cfg"
+    cfg_dir.mkdir(parents=True)
+    broken = "server: [unclosed\n  bad: : :\n"
+    (cfg_dir / "config.yaml").write_text(broken, encoding="utf-8")
+
+    manager = ConfigManager(config_dir=str(cfg_dir))
+
+    assert manager.get("server.port") == 8080
+    backups = list(cfg_dir.glob("config.yaml.bad-*"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == broken
+
+
+def test_broken_user_config_is_ignored(tmp_path):
+    """user_config.yaml 解析失败时按“没有覆盖项”处理，主配置照常生效。"""
+    _make_manager(tmp_path)
+    cfg_dir = tmp_path / "cfg"
+    (cfg_dir / "user_config.yaml").write_text("app: {broken\n", encoding="utf-8")
+
+    manager = ConfigManager(config_dir=str(cfg_dir))
+
+    assert manager.get("server.port") == 8080
+    assert list(cfg_dir.glob("user_config.yaml.bad-*"))
+
+
+def test_non_mapping_yaml_falls_back_to_defaults(tmp_path):
+    """顶层不是字典的 YAML 同样视为坏文件，而不是让后续 .get 崩掉。"""
+    cfg_dir = tmp_path / "cfg"
+    cfg_dir.mkdir(parents=True)
+    (cfg_dir / "config.yaml").write_text("just-a-string\n", encoding="utf-8")
+
+    manager = ConfigManager(config_dir=str(cfg_dir))
+
+    assert manager.get("server.port") == 8080
+    assert list(cfg_dir.glob("config.yaml.bad-*"))
+
+
+def test_save_config_failure_keeps_original_file(tmp_path, monkeypatch):
+    """序列化失败时原 config.yaml 字节不变（旧实现会先截断成半截文件）。"""
+    manager = _make_manager(tmp_path)
+    original = manager.main_config_path.read_bytes()
+    manager.set("app.version", "9.9.9")
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("dump failed")
+
+    monkeypatch.setattr(
+        sys.modules["core.config"], "yaml", SimpleNamespace(dump=_boom)
+    )
+    with pytest.raises(RuntimeError):
+        manager.save_config()
+
+    assert manager.main_config_path.read_bytes() == original
+    assert "9.9.9" not in manager.main_config_path.read_text(encoding="utf-8")
+    # 不留临时文件
+    assert not list(manager.config_dir.glob(".config.yaml.*.tmp"))
+
+
+def test_truncated_key_file_is_backed_up_and_rebuilt(tmp_path):
+    """截断的 .key 不再抛 ValueError：备份旧文件并重建可用密钥。"""
+    manager = _make_manager(tmp_path)
+    manager.save_secret("llm_api_key", "sk-old")
+    manager.key_path.write_bytes(b"short")
+
+    rebuilt = ConfigManager(config_dir=str(tmp_path / "cfg"))
+
+    assert len(rebuilt.key_path.read_bytes()) > 8
+    assert rebuilt.get("server.port") == 8080  # 配置本身仍可加载
+    backups = list(manager.config_dir.glob(".key.bad-*"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == b"short"
+    # 新密钥可正常加解密
+    rebuilt.save_secret("k2", "v2")
+    assert rebuilt.get_secret("k2") == "v2"
+
+
+def test_init_survives_unexpected_load_error(tmp_path, monkeypatch):
+    """_load_config 抛出意料之外的异常时，构造仍成功并落到默认值（导入期不崩）。"""
+    def _boom(self):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(ConfigManager, "_load_config", _boom)
+    manager = ConfigManager(config_dir=str(tmp_path / "cfg"))
+
+    assert manager.get("server.port") == 8080
+    assert manager.all["app"]["name"] == "B站运营工具箱"

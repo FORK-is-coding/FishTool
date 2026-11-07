@@ -115,6 +115,15 @@ def test_long_timeout_selection():
     assert is_long_request("hotspot/tag-cloud/tasks")
 
 
+def test_invalid_timeout_config_falls_back_to_default():
+    """配置里残留非法超时值（绕过面板校验）时不能把请求直接打挂（#122）。"""
+    client = FakeClient()
+    proxy = EngineProxy(FakeSup(), client, {"request_timeout_s": "abc", "long_request_timeout_s": None}, log)
+    run(proxy.handle("auth/status", method="GET", query={}, body_json=None, username=None))
+    run(proxy.handle("analysis/self-diagnosis", method="POST", query={}, body_json={"uid": 1}, username=None))
+    assert [call["timeout"] for call in client.calls] == [120.0, 120.0]
+
+
 def test_engine_unavailable_maps_to_502_504():
     proxy, _ = make(exc=EngineUnavailable("engine request timeout after 120s"))
     out = run(proxy.handle("auth/status", method="GET", query={}, body_json=None, username=None))

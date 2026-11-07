@@ -288,3 +288,32 @@ def test_run_task_marks_failed_on_exception(monkeypatch):
     assert task["status"] == "failed"
     assert "生成词云失败" in task["message"]
     assert task["estimated_seconds"] == 0
+
+
+def test_spawn_tag_cloud_task_holds_reference_until_done(monkeypatch):
+    """#96 回归：后台协程必须被强引用集合持有，结束后自动移除。"""
+    monkeypatch.setattr(deps_module, "_tag_cloud_task_refs", set())
+    reached = {}
+
+    async def blocking(task_id, request):
+        """卡住等待，模拟仍在采集的长任务。"""
+        reached["task_id"] = task_id
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(deps_module, "_run_tag_cloud_task", blocking)
+
+    async def scenario():
+        deps_module._spawn_tag_cloud_task("task-ref", object())
+        for _ in range(5):
+            await asyncio.sleep(0)
+        held = list(deps_module._tag_cloud_task_refs)
+        # 事件循环只持弱引用，这里必须有强引用兜住
+        assert len(held) == 1 and not held[0].done()
+        assert reached.get("task_id") == "task-ref"
+        held[0].cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await held[0]
+        await asyncio.sleep(0)
+
+    asyncio.run(scenario())
+    assert deps_module._tag_cloud_task_refs == set()

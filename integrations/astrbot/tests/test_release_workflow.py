@@ -6,6 +6,7 @@ astrbot-v0.1.1 首次发布就因为孤儿分支那一步没传令牌而失败�
 """
 from __future__ import annotations
 
+import fnmatch
 import re
 
 from conftest import REPO_ROOT
@@ -48,3 +49,45 @@ def test_plugin_repository_is_published_before_orphan_branch():
     names = [s.splitlines()[0] for s in _publish_steps()]
     assert names[0].startswith("Publish to plugin repository"), names
     assert names[1].startswith('Publish to orphan branch "astrbot"'), names
+
+
+MANIFEST = REPO_ROOT / "integrations" / "astrbot" / "release_tools" / "engine_manifest.txt"
+
+
+def _manifest_includes() -> list[str]:
+    lines = MANIFEST.read_text("utf-8").splitlines()
+    return [line.strip() for line in lines if line.strip() and not line.strip().startswith(("#", "!"))]
+
+
+def _event_paths(event: str) -> list[str]:
+    """取 on.<event>.paths 里的模式列表（纯文本解析，不依赖 PyYAML）。"""
+    text = WORKFLOW.read_text("utf-8")
+    block = re.search(rf"(?ms)^  {event}:\n((?:    .*\n|\n)+)", text)
+    assert block, f"workflow 缺少 on.{event} 段"
+    paths = re.search(r"(?ms)^    paths:\n((?:      - .*\n)+)", block.group(1))
+    assert paths, f"on.{event} 缺少 paths 过滤"
+    return re.findall(r'"([^"]+)"', paths.group(1))
+
+
+def _covers(pattern: str, entry: str) -> bool:
+    if entry.endswith("/"):
+        return pattern == f"{entry}**"
+    return pattern == entry or fnmatch.fnmatch(entry, pattern)
+
+
+def test_workflow_paths_cover_engine_manifest():
+    """插件包内含 engine_manifest.txt 打进 engine/ 的文件，改动它们也要触发本 workflow（#127）。"""
+    includes = _manifest_includes()
+    assert includes, "engine_manifest.txt 不应该为空"
+    for event in ("push", "pull_request"):
+        patterns = _event_paths(event)
+        for entry in includes:
+            assert any(_covers(p, entry) for p in patterns), f"on.{event}.paths 未覆盖 {entry}"
+
+
+def test_release_job_gate_requires_tag_or_dispatch():
+    """发布门不变：只有 astrbot-v* tag 或手动 workflow_dispatch 才会走到 release。"""
+    text = WORKFLOW.read_text("utf-8")
+    assert (
+        "if: startsWith(github.ref, 'refs/tags/astrbot-v') || (github.event_name == 'workflow_dispatch')" in text
+    )
