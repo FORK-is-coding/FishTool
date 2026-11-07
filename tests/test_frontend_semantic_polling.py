@@ -614,6 +614,106 @@ def test_running_task_shows_eta_after_three_calls(tmp_path) -> None:
     assert "已用约" in out["taskHtmlAfterStart"]
     assert "预计还需" in out["taskHtmlAfterStart"]
     assert "（2/10）" in out["taskHtmlAfterStart"]
+    # 经真实渲染路径（renderTaskArea 打戳）后的数值：16 秒 → 不足 1 分钟按 1 分钟显示（#90 前是约 267 分钟）
+    assert "预计还需约 至少 1 分钟" in out["taskHtmlAfterStart"]
+
+
+_ETA_LINE_SCRIPT = r"""
+const fs = require('fs');
+const vm = require('vm');
+const [corePath, semanticPath, casesJson] = process.argv.slice(-3);
+let now = 1_000_000;
+const RealDate = Date;
+class FakeDate extends RealDate {
+  constructor(...a) { if (a.length) super(...a); else super(now); }
+  static now() { return now; }
+}
+const el = () => ({ innerHTML: '', value: '', style: {}, classList: { add() {}, remove() {} },
+  addEventListener() {}, querySelector: () => null, querySelectorAll: () => [] });
+const ctx = { console, Date: FakeDate, JSON, Math, Number, String, Object, Array, Promise, Error,
+  setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
+  document: { getElementById: el, addEventListener() {}, querySelector: () => null,
+              querySelectorAll: () => [], readyState: 'complete', hidden: false } };
+ctx.window = ctx;
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(corePath, 'utf8'), ctx);
+vm.runInContext(fs.readFileSync(semanticPath, 'utf8'), ctx);
+const out = [];
+for (const c of JSON.parse(casesJson)) {
+  now = 1_000_000;
+  const eta = Object.assign({ elapsed_ms: 60000, at_least: true }, c.eta);
+  if (c.stampLocal) eta._localAt = now;
+  now += c.advanceMs || 0;
+  out.push(ctx.window.__semanticPanel.etaLine({ eta }));
+}
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+def _eta_lines(cases: list) -> list:
+    proc = subprocess.run(
+        ["node", "-e", _ETA_LINE_SCRIPT, str(_JS_DIR / "app.core.js"),
+         str(_JS_DIR / "app.comment.semantic.js"), json.dumps(cases)],
+        capture_output=True, text=True, encoding="utf-8", timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+def test_eta_minutes_match_remaining_ms() -> None:
+    """remaining_ms 是毫秒：剩 2 分钟显示约 2 分钟，不能放大 1000 倍（#90）。"""
+    lines = _eta_lines([
+        {"eta": {"remaining_ms": 120_000}, "stampLocal": True},
+        {"eta": {"remaining_ms": 30 * 60_000}, "stampLocal": True},
+    ])
+    assert "预计还需约 至少 2 分钟" in lines[0]
+    assert "预计还需约 至少 30 分钟" in lines[1]
+    assert "2000 分钟" not in lines[0]
+
+
+def test_eta_counts_down_with_local_clock() -> None:
+    """本地按秒倒数：拿到状态后过了 60 秒，剩余 3 分钟应显示约 2 分钟；倒数到底不出现负数。"""
+    lines = _eta_lines([
+        {"eta": {"remaining_ms": 180_000}, "stampLocal": True, "advanceMs": 60_000},
+        {"eta": {"remaining_ms": 60_000}, "stampLocal": True, "advanceMs": 10 * 60_000},
+    ])
+    assert "预计还需约 至少 2 分钟" in lines[0]
+    assert "至少 1 分钟" in lines[1]  # 还有剩余调用时最少显示 1 分钟
+
+
+def test_eta_without_local_stamp_shows_server_value() -> None:
+    """还没打本地时间戳（第一次渲染前）时，按服务端剩余时间显示，不能按 1970 年起算成 0。"""
+    lines = _eta_lines([{"eta": {"remaining_ms": 5 * 60_000}, "advanceMs": 0}])
+    assert "预计还需约 至少 5 分钟" in lines[0]
+
+
+def test_eta_keeps_counting_down_while_server_value_is_unchanged(tmp_path) -> None:
+    """一次模型调用进行中，服务端每次轮询都返回同一个 remaining_ms：倒数继续走，不跳回服务端值。
+
+    剩 150 秒，轮询 40 次（前 2 分钟每 1.5 秒一次，约 60 秒）后应显示约 2 分钟（剩约 90 秒）。
+    如果每次轮询都重新打戳，倒数永远停在 150 秒附近，显示约 3 分钟。
+    """
+    eta = {"phase": "batch", "done": 2, "total": 10, "calls_left": 8,
+           "avg_call_ms": 20000, "remaining_ms": 150_000, "elapsed_ms": 40000, "at_least": True}
+    statuses = [dict(_running(i), eta=dict(eta)) for i in range(1, 60)]
+    out = _run({"statuses": statuses, "maxStatusCalls": 40}, tmp_path)
+    assert len(out["phase1Calls"]) == 40
+    elapsed_s = (out["phase1Calls"][-1] - out["phase1Calls"][0]) / 1000
+    assert 55 <= elapsed_s <= 65
+    assert "预计还需约 至少 2 分钟" in out["taskHtml"]
+
+
+def test_eta_restamps_when_server_value_changes(tmp_path) -> None:
+    """服务端剩余值下降（一次调用结束）时按新值重新对时，不再沿用旧时间戳继续扣减。"""
+    eta_a = {"phase": "batch", "done": 2, "total": 10, "calls_left": 8,
+             "avg_call_ms": 20000, "remaining_ms": 600_000, "elapsed_ms": 40000, "at_least": True}
+    eta_b = dict(eta_a, done=3, calls_left=7, remaining_ms=140_000)
+    statuses = [dict(_running(i), eta=dict(eta_a)) for i in range(1, 40)]
+    statuses.append(dict(_running(40), eta=eta_b))
+    out = _run({"statuses": statuses, "maxStatusCalls": 40}, tmp_path)
+    # 最后一次是新值 140 秒且刚打戳：显示约 2 分钟。若沿用 60 秒前的旧时间戳，会算成约 1 分钟。
+    assert "预计还需约 至少 2 分钟" in out["taskHtml"]
+    assert "（3/10）" in out["taskHtml"]
 
 
 def test_queued_task_shows_queue_note_instead_of_eta(tmp_path) -> None:

@@ -1,4 +1,6 @@
 """PR 5：耗时统计、实测中位数与运行中剩余时间（ETA）。"""
+import logging
+
 import pytest
 
 from core.database import DatabaseManager
@@ -83,6 +85,47 @@ def test_recent_call_ms_median_empty_returns_none(store):
     """没有历史数据时返回 None，由调用方回退到固定区间。"""
     store_obj, manager = store
     assert store_obj.recent_call_ms_median() is None
+
+
+class _BrokenSession:
+    """查询即抛错的会话：模拟读 semantic_runs 时数据库瞬时出错（如 database is locked）。"""
+
+    def query(self, *args, **kwargs):
+        raise RuntimeError("database is locked")
+
+    def close(self):
+        return None
+
+
+def test_recent_call_ms_median_db_error_returns_none_and_logs(caplog):
+    """查询出错时返回 None，并用模块自己的 logger 记下原始异常（#89）。
+
+    不替换 logger：直接走真实的 get_logger 返回值。修复前这里抛 NameError（logger 未定义），
+    原始的数据库异常被盖掉。
+    """
+    store_obj = SemanticStore(session_factory=_BrokenSession)
+
+    with caplog.at_level(logging.DEBUG, logger="modules.comment.semantic.store"):
+        assert store_obj.recent_call_ms_median() is None
+
+    records = [r for r in caplog.records if r.name == "modules.comment.semantic.store"]
+    assert len(records) == 1
+    assert records[0].exc_info is not None
+    assert "database is locked" in str(records[0].exc_info[1])
+
+
+def test_estimate_falls_back_to_fixed_range_when_median_query_fails():
+    """读历史耗时出错 → median 为 None → 预检的粗估回退到固定区间，照常可用。"""
+    store_obj = SemanticStore(session_factory=_BrokenSession)
+    median = store_obj.recent_call_ms_median()
+    items = [{"id": f"c{i}", "content": "内容"} for i in range(3)]
+    est = _start_estimate({"items": items, "eligible_ids": ["c0", "c1", "c2"]}, median)
+
+    assert median is None
+    assert est["median_call_ms"] is None
+    # 与 test_start_estimate_uses_median_when_available 的“没有中位数”分支一致：固定 10~30 秒
+    assert est["seconds_min"] == 10
+    assert est["seconds_max"] == 90
 
 
 def test_recent_call_ms_median_ignores_single_call_tasks(store):

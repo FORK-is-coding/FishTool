@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from sqlalchemy.exc import IntegrityError
 
+from core.logger import get_logger
 from core.database import (
     Comment,
     Task,
@@ -63,6 +64,8 @@ from .contracts import (
     SemanticValidationError,
     normalize_bvid,
 )
+
+logger = get_logger(__name__)
 
 #: 单条内容合格 UTF-8 字节上限（别名，对齐 contracts 命名）。
 CONTENT_MAX_BYTES = CONTENT_BYTES_CAP
