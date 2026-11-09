@@ -132,3 +132,39 @@ supply:
 # 旧格式缓存、部分采集或超时快照一律重新完整采集。缺失或非法时按 600 秒处理。
 lottery:
   comment_snapshot_ttl_seconds: 600       # 评论快照复用窗口（秒）
+
+# AI 伪人巡检（抽奖工具子功能）。所有键在代码里都有默认值，老版本配置缺少本段也能运行；
+# 安全上限在代码中再次限制（采集 2000、楼中楼请求 60、甄别 500、代发 24h 30 条/单次 10 条），改大无效。
+patrol:
+  enabled: true
+  comment_endpoint: main          # main | wbi_main
+  max_comments_default: 500
+  max_comments_hard: 2000
+  reply_floors: 20                # 抓楼中楼的楼数
+  reply_pages_per_floor: 3
+  reply_requests_hard: 60         # 楼中楼请求总数硬上限
+  judge:
+    batch_size: 8
+    max_items: 300
+    max_items_hard: 500
+    temperature: 0.2
+    cache_days: 7
+  thresholds: { bot: 75, suspect: 45, gray_low: 20, gray_high: 85 }
+  soft_cap: 70                    # 软信号合计上限，必须 < thresholds.bot
+  hard_hit_floor: 60              # AI 已判时硬命中保底分
+  disagreement_gap: 50
+  fusion_weight_llm: 0.55
+  report:
+    default_mode: native          # native | proxy
+    proxy_enabled: true           # 是否允许开启代发举报（用户在界面仍需单独同意）
+    dry_run: false                # true 时代发举报走全部流程但不发 POST
+    require_ai: true              # 只允许 rule+llm 且 bot 档
+    per_account_limit: 1          # 同一 mid 最多举报几条代表评论（≤ 2）
+    max_per_task: 5
+    daily_limit: 10               # 滚动 24 小时、按 reporter_mid、计尝试次数
+    interval_seconds: [3, 6]
+    cooldown_minutes_after_limit: 30
+    stale_warn_hours: 24
+    stale_block_hours: 72
+    preselect: false              # 标注集验证达标前保持 false
+  retention_days: { scans: 7, reports: 180, llm_cache: 7 }

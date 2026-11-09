@@ -160,6 +160,32 @@
 
 注意：这是创作中心网页使用的接口，不在公开文档里。若返回结构变化，上面的校验会让采集直接失败，此时先比对 `page` / `list` 字段，不要放宽校验。
 
+### `GET /x/v2/reply/reply`（AI 伪人巡检楼中楼）
+
+代码入口：`modules/lottery/patrol/collector.py`。
+
+入参：`oid`、`type=1`、`root`（一级评论 rpid）、`ps≤20`、`pn`（页码）。单楼最多 3 页，楼中楼请求总数硬上限 60。
+
+出参：`data.replies[]`（结构与一级评论相同）。巡检只把它用于跨评论特征与原生举报定位，不入 `comments` 表。
+
+### `GET /x/v2/reply/report/metadata`（举报理由表）
+
+代码入口：`modules/lottery/patrol/reporter.py`。
+
+入参：`oid`、`type=1`；**需要登录**（未登录返回 -101）。返回 `reason_list`（`tag_id/tag_name/content_required`）或 `report_groups`；失败时使用网页端兜底表并在界面标注「可能已过期」。
+
+### `POST /x/v2/reply/report`（举报评论，项目中唯一的 B站写接口）
+
+代码入口：`modules/lottery/patrol/reporter.py`。
+
+入参（`application/x-www-form-urlencoded`）：`type`、`oid`、`rpid`、`reason`、`content`（reason=0 时必填，2–200 字）、`csrf`（取 Cookie 的 `bili_jct`）。
+
+硬性约定：
+- 仅在用户开启代发开关、单独同意、逐批确认后调用；`retry_times=1`，**不重试**。
+- 发送前先写 `sending` 台账行，返回后只更新一次终态；中途换号 / 退出立即停批。
+- 错误码：`0` 成功，`12008` 已举报过（继续），`12006/12022` 评论已删（继续），`12002` 评论区关闭（停批），`12019/-509/-799/429` 举报频繁（停批并冷却 30 分钟），`12077` 理由长度不符（停批），`12009` type 不合法（停批，高优先级），`-111` csrf 失败 / `-101` 未登录（停批），`-102` 账号封停（停批，高优先级），`-352/-412/HTTP412` 风控（停批并触发域冷却）。
+- 数字业务码通过 `BilibiliAPIError.bili_code` 传递，不要再从消息文本解析。
+
 ## 6. 扫码登录接口
 
 ### `GET passport.bilibili.com/x/passport-login/web/qrcode/generate`
@@ -185,5 +211,6 @@
 5. 认证/迁移：若 Cookie 或 nav 字段变化，同步 `auth.py`、`cookie_pool.py`。
 6. 前端契约：`web/routers` 返回字段和 `web/frontend/static/js/app.js`。
 7. 文档与验证：更新本文、运行 `/health`、目标接口小样本验证、检查 `data/logs/error.log` 和 `risk_control.log`。
+8. 举报接口变更：同步 `modules/lottery/patrol/reporter.py` 的错误码表、`FALLBACK_REASONS` 兜底表与对应测试。
 
 禁止直接改线上 Cookie、跳过限频或用归档脚本验证接口；先备份数据库和配置。
