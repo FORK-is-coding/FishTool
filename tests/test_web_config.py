@@ -655,6 +655,35 @@ def test_resolution_check_with_multiple_results(monkeypatch, addresses, blocked)
         run()
 
 
+def test_resolution_check_blocks_mapped_metadata_on_newer_python(monkeypatch):
+    """较新的 CPython 对 ::ffff:a.b.c.d 按内嵌 IPv4 计算 is_link_local。
+
+    放行 fe80:: 的判断不能依赖这个属性，否则 ::ffff:169.254.169.254 会被当成
+    link-local 跳过、元数据地址漏过去（CI 的 Linux Python 上实际出现过）。
+    这里强制模拟新语义，保证任何 Python 版本上都覆盖到这条路径。
+    """
+    import asyncio
+    import ipaddress
+    import socket
+
+    real = ipaddress.IPv6Address.is_link_local
+
+    def _newer_semantics(self):
+        mapped = self.ipv4_mapped
+        return mapped.is_link_local if mapped is not None else real.fget(self)
+
+    monkeypatch.setattr(ipaddress.IPv6Address, "is_link_local", property(_newer_semantics))
+    assert ipaddress.ip_address("::ffff:169.254.169.254").is_link_local  # 前提：确实模拟成了新语义
+
+    async def _fake_resolve(host):
+        return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("::ffff:169.254.169.254", 0))]
+
+    monkeypatch.setattr(config_module, "_resolve_host", _fake_resolve)
+    with pytest.raises(config_module.HTTPException) as excinfo:
+        asyncio.run(config_module._reject_blocked_resolution("http://meta.example/v1"))
+    assert excinfo.value.status_code == 400
+
+
 def test_resolution_check_ignores_resolver_failure(monkeypatch):
     """解析失败不在这里报错，交给随后的真实请求按“无法连接”处理。"""
     import asyncio
