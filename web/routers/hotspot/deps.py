@@ -7,7 +7,7 @@
 - 只有在首次调用时才创建API/LLM客户端实例，节省资源
 - _tag_cloud_tasks 维护词云后台任务状态
 """
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 import asyncio
 import time
 import uuid
@@ -19,6 +19,9 @@ from core.config import ConfigManager
 from core.exceptions import LLMNotConfiguredError, ValidationError
 from core.logger import get_logger
 from modules.hotspot import TagCloudGenerator, ActivityTracker, TopicGenerator
+
+if TYPE_CHECKING:  # 仅供类型注解；运行时不导入，避免与 schemas 形成循环依赖
+    from .schemas import TagCloudRequest
 
 logger = get_logger(__name__)
 

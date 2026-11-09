@@ -660,3 +660,35 @@ def test_cookie_budget_wait_does_not_block_other_cookies():
 
     assert elapsed < 0.15
     assert len(limiter.cookie_request_history["charge:idle"]) == 1
+
+
+def test_acquire_rechecks_circuit_after_waiting():
+    """已排队的请求醒来时熔断已打开：必须抛 CircuitBreakerError，不能照常放行。"""
+    limiter = RateLimiter(rate=0.2)
+
+    async def _scenario() -> list:
+        """首个请求立即放行，第二个排队等待期间打开熔断。"""
+        await limiter.acquire("probe")
+        waiter = asyncio.ensure_future(limiter.acquire("probe"))
+        await asyncio.sleep(0.02)
+        limiter.is_circuit_open = True
+        limiter.circuit_open_time = rate_limiter_module.datetime.now()
+        outcome = []
+        try:
+            await waiter
+            outcome.append("passed")
+        except CircuitBreakerError:
+            outcome.append("blocked")
+        return outcome
+
+    assert asyncio.run(_scenario()) == ["blocked"]
+
+
+def test_cookie_budget_non_positive_limit_is_treated_as_one(sleeps):
+    """limit<=0 不能触发 IndexError：按 1 次/窗口处理。"""
+    limiter = RateLimiter()
+    asyncio.run(limiter.acquire_cookie_budget("zero", limit=0, window=60.0))
+    asyncio.run(limiter.acquire_cookie_budget("zero", limit=0, window=60.0))
+
+    assert len(limiter.cookie_request_history["charge:zero"]) == 2
+    assert len(sleeps) == 1 and sleeps[0] > 0

@@ -317,3 +317,24 @@ def test_collect_all_comments_only_hot() -> None:
     comments = asyncio.run(collector._collect_all_comments("BV1", max_count=10))
 
     assert [item["rpid"] for item in comments] == [1, 2]
+
+@pytest.mark.parametrize("error", [Status429Error("url", 60), RateLimitError(60)])
+def test_get_video_oid_propagates_rate_limit(error) -> None:
+    """取 oid 时限频耗尽要向上抛：降级成 None 会让评论采集静默返回 []。"""
+
+    class _ViewAPI:
+        async def get(self, url, params=None, need_sign=False):
+            raise error
+
+    collector = CommentCollector(api=_ViewAPI(), rate_limiter=FakeLimiter())
+
+    with pytest.raises(RateLimitError):
+        asyncio.run(collector._get_video_oid("BV1"))
+
+
+def test_collect_hot_comments_propagates_rate_limit() -> None:
+    """热门评论同样不能把限频吞成空列表。"""
+    collector, _, _ = _collector([Status429Error("url", 60)])
+
+    with pytest.raises(RateLimitError):
+        asyncio.run(collector._collect_hot_comments("BV1"))

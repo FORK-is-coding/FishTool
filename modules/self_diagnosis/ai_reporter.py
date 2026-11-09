@@ -22,10 +22,12 @@ logger = get_logger(__name__)
 JSON_RESPONSE_FORMAT = {"type": "json_object"}
 #: 端点不认识 response_format 时常见的返回码；只有这两种情况才去掉参数重试。
 _UNSUPPORTED_PARAM_STATUS = (400, 422)
-#: 400/422 里去掉 response_format 重试也必然失败的错误码（#106）：
+#: 400/422 里去掉 response_format 重试也必然失败的错误码（#105）：
 #: 输入超长与 JSON 模式无关，重试只会再烧一次全量诊断提示词。
 #: 刻意只列已知错误码、不反向要求报文点名 JSON 模式：不少兼容端点（含中文报文、
 #: 空报文、``{"error":"Invalid argument"}``）拒绝该参数时根本不说原因。
+#: 已知局限：通义（DashScope）超长返回笼统的 ``invalid_parameter_error``，与“参数不支持”
+#: 同码无法区分，这类端点超长时仍会多重试一次；宁可多烧一次，也不误伤 JSON 模式降级。
 _NON_RETRYABLE_ERROR_CODES = frozenset({
     "context_length_exceeded",
     "string_above_max_length",
@@ -45,37 +47,51 @@ class _ResponseFormatError(LLMError):
     """
 
 
-def _extract_error_code(detail: Any) -> str:
-    """从上游错误体里只提炼错误码，绝不把正文透出去。
+def _error_code_candidates(detail: Any) -> list[str]:
+    """从上游错误体里列出全部合法的错误码候选，绝不把正文透出去。
 
     上游错误体（``LLMAPIError.detail``）常见形态是
     ``{"error": {"code": "context_length_exceeded", "message": "...", ...}}``，
     里面可能回显 API Key 片段、内部 trace id 或请求片段。这里按 JSON 解析后只取
-    ``error.code`` / ``error.type`` / 顶层 ``code``，取不到就返回空串，调用方退化成只报状态码。
+    ``error.code`` / ``error.type`` / 顶层 ``code``，且必须匹配 ``_ERROR_CODE_RE``；
+    非 JSON 报文（HTML 网关页、纯文本）或 ``error`` 为字符串时返回空列表。
     """
     text = str(detail or "").strip()
     if not text:
-        return ""
+        return []
     try:
         data = json.loads(text)
     except (TypeError, ValueError):
-        # 非 JSON 报文（HTML 网关页、纯文本）一律不提炼，避免把正文当错误码。
-        return ""
-    candidates: list[Any] = []
+        return []
+    raw: list[Any] = []
     if isinstance(data, dict):
         error = data.get("error")
         if isinstance(error, dict):
-            candidates = [error.get("code"), error.get("type")]
+            raw = [error.get("code"), error.get("type")]
         # 顶层 code 是常见的结构化错误码；``error`` 为字符串时直接丢弃，
         # 否则整段上游正文会被当作错误码透给前端。
-        candidates.append(data.get("code"))
-    for item in candidates:
+        raw.append(data.get("code"))
+    codes: list[str] = []
+    for item in raw:
         if isinstance(item, bool) or not isinstance(item, (str, int)):
             continue
         code = str(item).strip()
-        if _ERROR_CODE_RE.fullmatch(code):
+        if _ERROR_CODE_RE.fullmatch(code) and code not in codes:
+            codes.append(code)
+    return codes
+
+
+def _extract_error_code(detail: Any) -> str:
+    """取一个对外展示用的错误码；优先非纯数字的语义码，取不到返回空串。
+
+    vLLM 等端点会给 ``{"error": {"code": 400, "type": "context_length_exceeded"}}``：
+    纯数字 code 只是状态码的重复，``type`` 才是有用的信息。
+    """
+    codes = _error_code_candidates(detail)
+    for code in codes:
+        if not code.isdigit():
             return code
-    return ""
+    return codes[0] if codes else ""
 
 
 class AIDiagnosisReporter:
@@ -203,8 +219,8 @@ class AIDiagnosisReporter:
         """
         if getattr(exc, "status_code", None) not in _UNSUPPORTED_PARAM_STATUS:
             return False
-        code = _extract_error_code(getattr(exc, "detail", "")).lower()
-        return code not in _NON_RETRYABLE_ERROR_CODES
+        codes = {code.lower() for code in _error_code_candidates(getattr(exc, "detail", ""))}
+        return not (codes & _NON_RETRYABLE_ERROR_CODES)
 
     async def _chat_json(self, client: LLMClient, prompt: str) -> str:
         """请求模型并要求服务端返回 JSON 对象；端点不支持 JSON 模式时去掉参数重试一次。

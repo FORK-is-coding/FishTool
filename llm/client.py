@@ -426,7 +426,7 @@ class LLMClient:
             # 对模型不存在做可操作的中文提示，避免用户只能看到原始英文错误
             response_text = e.response.text or ''
             status_code = e.response.status_code
-            # 只保留状态码进 message（#105）。message 会经 ai_report['error'] 与
+            # 只保留状态码进 message（#108）。message 会经 ai_report['error'] 与
             # /api/analysis/self-diagnosis 响应原样交给调用方，而上游错误体常回显
             # API Key 片段、内部 trace id、请求片段；原始体只放 detail 属性。
             # detail 不截断：它只在进程内供上层归类（错误码提取、semantic provider

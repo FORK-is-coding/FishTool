@@ -115,7 +115,7 @@ class CommentCollectorBase:
         Args:
             bvid: 视频BV号
             strategy: 采集策略（fast/normal/full）
-            max_count: 最大采集数量（None表示不限制）
+            max_count: 最大采集数量（None 表示使用默认上限 10000）
             
         Returns:
             评论列表，自动保存到数据库
@@ -145,7 +145,7 @@ class CommentCollectorBase:
             comments = self._merge_comments_by_rpid(hot_comments + normal_comments)
         else:  # STRATEGY_FULL
             # 完整模式：所有评论
-            # 进度预置为全量阶段；max_count 为 None 时 limit 置空表示不设上限
+            # 进度预置为全量阶段；max_count 为 None 时进度条不显示上限（实际按默认 10000 翻页）
             self._update_progress(bvid, phase='full', collected=0, limit=max_count)
             comments = await self._collect_all_comments(bvid, max_count)
         

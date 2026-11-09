@@ -150,6 +150,10 @@ def test_corrupted_secrets_file_falls_back_to_empty(tmp_path):
     reloaded = ConfigManager(config_dir=str(tmp_path / "cfg"))
     assert reloaded.get_secret("k") is None
     assert reloaded.get_secret("k", "fallback") == "fallback"
+    # 解不开的 .secrets 先改名备份，下一次 save_secret 不会把它覆盖掉
+    backups = list(manager.config_dir.glob(".secrets.bad-*"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == b"not-a-valid-fernet-token"
 
 
 def test_user_config_deep_merges_over_main(tmp_path):
@@ -339,6 +343,91 @@ def test_truncated_key_file_is_backed_up_and_rebuilt(tmp_path):
     # 新密钥可正常加解密
     rebuilt.save_secret("k2", "v2")
     assert rebuilt.get_secret("k2") == "v2"
+
+
+def test_truncated_key_also_backs_up_secrets_so_old_values_stay_recoverable(tmp_path):
+    """.key 损坏重建时必须先备份 .secrets：否则下一次保存会用新密钥覆盖，旧 Cookie 永久丢失。"""
+    from cryptography.fernet import Fernet
+    import json
+
+    manager = _make_manager(tmp_path)
+    manager.save_secret("bilibili_cookie", "SESSDATA=OLD")
+    old_key = manager.key_path.read_bytes()
+    manager.key_path.write_bytes(old_key[:10])
+
+    rebuilt = ConfigManager(config_dir=str(tmp_path / "cfg"))
+    rebuilt.save_secret("llm_api_key", "sk-new")
+
+    backups = list(manager.config_dir.glob(".secrets.bad-*"))
+    assert len(backups) == 1
+    restored = json.loads(Fernet(old_key).decrypt(backups[0].read_bytes()))
+    assert restored["bilibili_cookie"] == "SESSDATA=OLD"
+
+
+def test_key_read_error_is_not_treated_as_corruption(tmp_path, monkeypatch):
+    """读 .key 时的 OSError（占用、权限）不是密钥损坏：不得改名重建 .key / .secrets。"""
+    from pathlib import Path
+
+    manager = _make_manager(tmp_path)
+    manager.save_secret("bilibili_cookie", "SESSDATA=KEEP")
+    key_path = manager.key_path
+    real_read = Path.read_bytes
+
+    def _flaky(self):
+        if self == key_path:
+            raise PermissionError("locked")
+        return real_read(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _flaky)
+    # 与 main 一致：读不到密钥就让构造失败，而不是悄悄换一把新密钥
+    with pytest.raises(PermissionError):
+        ConfigManager(config_dir=str(tmp_path / "cfg"))
+    monkeypatch.setattr(Path, "read_bytes", real_read)
+
+    assert not list(manager.config_dir.glob(".key.bad-*"))
+    assert not list(manager.config_dir.glob(".secrets.bad-*"))
+    assert ConfigManager(config_dir=str(tmp_path / "cfg")).get_secret("bilibili_cookie") == "SESSDATA=KEEP"
+
+
+def test_legacy_plaintext_key_in_user_config_is_migrated_once(tmp_path):
+    """明文 key 写在 user_config.yaml：迁入 secrets、从该文件删除，且不再反复重写 config.yaml。"""
+    manager = _make_manager(tmp_path)
+    manager.user_config_path.write_text("llm:\n  api_key: sk-user-plain\n", encoding="utf-8")
+
+    first = ConfigManager(config_dir=str(tmp_path / "cfg"))
+    assert first.get_secret("llm_api_key") == "sk-user-plain"
+    assert "sk-user-plain" not in manager.user_config_path.read_text(encoding="utf-8")
+    assert "sk-user-plain" not in manager.main_config_path.read_text(encoding="utf-8")
+
+    before = manager.main_config_path.stat().st_mtime_ns
+    ConfigManager(config_dir=str(tmp_path / "cfg"))
+    assert manager.main_config_path.stat().st_mtime_ns == before
+
+
+def test_atomic_replace_retries_when_target_is_briefly_locked(tmp_path, monkeypatch):
+    """Windows 上目标文件被别的句柄打开时 os.replace 抛 PermissionError：短暂重试后成功。"""
+    import os as os_module
+
+    # core/__init__.py 用同名属性导出了 ConfigManager 实例，必须从 sys.modules 取子模块本身
+    core_config_module = sys.modules["core.config"]
+    manager = _make_manager(tmp_path)
+    real_replace = os_module.replace
+    failures = {"left": 2}
+
+    def _locked_then_ok(src, dst):
+        if failures["left"]:
+            failures["left"] -= 1
+            raise PermissionError("[WinError 5] 拒绝访问")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os_module, "replace", _locked_then_ok)
+    monkeypatch.setattr(os_module, "name", "nt")
+    monkeypatch.setattr(core_config_module.time, "sleep", lambda _s: None)
+    manager.set("app.version", "9.9.9")
+    manager.save_config()
+
+    assert failures["left"] == 0
+    assert "9.9.9" in manager.main_config_path.read_text(encoding="utf-8")
 
 
 def test_init_survives_unexpected_load_error(tmp_path, monkeypatch):

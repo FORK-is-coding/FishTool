@@ -53,7 +53,7 @@ from bilibili.api import BilibiliAPI
 # 从 bilibili.rate_limiter 导入符号
 from bilibili.rate_limiter import RateLimiter
 # 从 core.exceptions 导入符号
-from core.exceptions import BilibiliAPIError, ValidationError
+from core.exceptions import BilibiliAPIError, RateLimitError, ValidationError
 # 从 core.logger 导入符号
 from core.logger import get_logger
 # 从 core.database 导入符号
@@ -447,6 +447,10 @@ class TagCloudGenerator:
                     # 追加到列表
                     all_tags.append(tname)
                     
+            except RateLimitError:
+                # 限频耗尽中止整批：继续逐个请求只会加重风控，部分结果也会被当成完整词云。
+                # 与改造前 429 统一抛 NetworkError、整批中止的行为一致。
+                raise
             except BilibiliAPIError as e:
                 # 单个视频失败不阻断整批采集，进度仍按已处理数量推进。
                 logger.warning(f"获取视频 {bvid} tag失败: {e}")

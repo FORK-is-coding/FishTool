@@ -13,6 +13,7 @@ import os
 import sys
 import json
 import tempfile
+import time
 import yaml
 from datetime import datetime
 from pathlib import Path
@@ -112,12 +113,14 @@ class ConfigManager:
         """
         # 检查密钥文件是否已存在
         if self.key_path.exists():
-            # 从文件读取已有的密钥（二进制格式）
+            # 从文件读取已有的密钥（二进制格式）。读失败（OSError：文件被占用、权限、
+            # 杀毒扫描）不是“密钥损坏”，必须原样抛出：当成损坏处理会把仍然有效的
+            # .key 和 .secrets 一起改名重建，用户的登录态和 API Key 全部丢失。
+            key = self.key_path.read_bytes()
             try:
-                key = self.key_path.read_bytes()
                 # 创建并返回 Fernet 加密器实例
                 return Fernet(key)
-            except (ValueError, TypeError, OSError) as e:
+            except (ValueError, TypeError) as e:
                 # 密钥文件被截断/损坏（例如写盘时进程被杀）时，旧行为是在这里抛
                 # ValueError 让整个进程起不来。改为备份损坏文件后重建新密钥（#124）。
                 backup = self._backup_broken_file(self.key_path)
@@ -187,7 +190,7 @@ class ConfigManager:
                 os.fsync(f.fileno())
             if mode is not None and os.name != 'nt':
                 os.chmod(tmp_path, mode)
-            os.replace(tmp_path, path)
+            self._replace_with_retry(tmp_path, path)
         except BaseException:
             # 失败时清掉临时文件，原文件保持不动
             try:
@@ -196,6 +199,23 @@ class ConfigManager:
                 # 临时文件清不掉不应覆盖原始写入异常；保留诊断信息。
                 logger.debug("清理临时配置文件失败: %s", cleanup_error)
             raise
+
+    @staticmethod
+    def _replace_with_retry(source: Path, target: Path, attempts: int = 10, delay_s: float = 0.05) -> None:
+        """``os.replace`` 的 Windows 容错版本。
+
+        Windows 上只要目标文件被别的句柄打开（编辑器、杀毒扫描、同进程另一个线程正在
+        读配置），``os.replace`` 就会抛 ``PermissionError``；旧实现直接 ``open(path, 'w')``
+        不受影响。这里短暂退避重试，仍失败才抛出，调用方会清理临时文件、原文件不动。
+        """
+        for attempt in range(attempts):
+            try:
+                os.replace(source, target)
+                return
+            except PermissionError:
+                if os.name != 'nt' or attempt == attempts - 1:
+                    raise
+                time.sleep(delay_s)
 
     def _atomic_write_text(self, path: Path, text: str, mode: Optional[int] = None) -> None:
         """文本版原子写入（UTF-8 编码）。"""
@@ -284,8 +304,16 @@ class ConfigManager:
                 # 将敏感配置添加到 _config 字典的 'secrets' 键下
                 self._config['secrets'] = secrets
             except Exception as e:
-                # 解密失败（可能是密钥错误或文件损坏），记录错误日志
+                # 解密失败（密钥与密文不配套，或文件损坏），记录错误日志
                 logger.error(f"解密敏感配置失败: {e}", exc_info=True)
+                # 先把解不开的 .secrets 改名备份：否则下一次 save_secret 会直接覆盖它，
+                # 换回配套的 .key 也找不回原来的 Cookie / API Key。
+                backup = self._backup_broken_file(self.secrets_path)
+                if backup is not None:
+                    logger.error(
+                        "无法解密的加密配置已备份到 %s；换回配套的 config/.key 后把它改回 .secrets 即可恢复",
+                        backup,
+                    )
                 # 初始化为空字典，避免后续访问出错
                 self._config['secrets'] = {}
 

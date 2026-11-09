@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from core.exceptions import BilibiliAPIError
+from core.exceptions import BilibiliAPIError, RateLimitError, Status429Error
 from core.request_budget import RequestBudgetExceeded
 from modules.hotspot.discovery import contracts, sources
 
@@ -270,3 +270,17 @@ def test_budget_exhaustion_propagates() -> None:
     api = _StubAPI(get_result={})
     with pytest.raises(RequestBudgetExceeded):
         asyncio.run(sources.fetch_hot_keywords(api, budget_hook=_exhausted))
+
+
+@pytest.mark.parametrize(
+    ("exc", "code"),
+    [
+        (Status429Error("url", 60), 429),
+        (RateLimitError(60), -509),
+        (BilibiliAPIError("API错误 [-352]: 风控"), -352),
+        (BilibiliAPIError("未知错误"), -1),
+    ],
+)
+def test_extract_api_code_maps_rate_limit_exceptions(exc, code) -> None:
+    """限频异常消息里没有业务码，也要给出明确的码，不能落成 -1。"""
+    assert sources.extract_api_code(exc) == code

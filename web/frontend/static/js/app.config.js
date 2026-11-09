@@ -90,19 +90,20 @@ async function saveLLMConfig() {
     const baseUrl = document.getElementById('llm-base-url').value;
     const model = document.getElementById('llm-model').value;
     
-    if (!apiKey) {
+    if (!apiKey.trim()) {
         showAppAlert('请输入API Key');
         return;
     }
-    
+
     try {
+        // 去掉首尾空白后为空的 base_url / model 直接省略：后端把“省略”当作保留已保存值，
+        // 把空串当作非法输入（422）。api_key 上面已经保证非空。
+        const payload = { api_key: apiKey.trim() };
+        if (baseUrl.trim()) payload.base_url = baseUrl.trim();
+        if (model.trim()) payload.model = model.trim();
         await apiRequest('/config/llm', {
             method: 'POST',
-            body: JSON.stringify({
-                api_key: apiKey,
-                base_url: baseUrl,
-                model: model
-            })
+            body: JSON.stringify(payload)
         });
         
         showAppAlert('配置保存成功！');

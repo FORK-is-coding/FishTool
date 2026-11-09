@@ -164,6 +164,12 @@ def _install_httpx(monkeypatch, handler) -> list:
         RequestError=_FakeRequestError,
     )
     monkeypatch.setattr(config_module, "httpx", namespace)
+    # 域名解析检查在测试里不发真实 DNS：替身域名（https://x/v1 等）解析不到即放行，
+    # 与生产“解析失败交给真实请求按无法连接处理”的语义一致。
+    async def _no_dns(_base_url):
+        return None
+
+    monkeypatch.setattr(config_module, "_reject_blocked_resolution", _no_dns)
     return created
 
 
@@ -555,6 +561,18 @@ def test_llm_models_rejects_embedded_credentials(client, monkeypatch, base_url):
         "http://100.100.100.200/latest/meta-data",
         "http://[fe80::1]/v1",
         "http://0.0.0.0:8080/v1",
+        # 非标准写法与 IPv6 内嵌 IPv4：都能被系统解析成元数据地址
+        "http://[::ffff:169.254.169.254]/",
+        "http://[::ffff:a9fe:a9fe]/",
+        "http://[::169.254.169.254]/",
+        "http://[64:ff9b::a9fe:a9fe]/",
+        "http://[2002:a9fe:a9fe::1]/",
+        "http://[fd00:ec2::254]/",
+        "http://2852039166/",
+        "http://0xa9fea9fe/",
+        "http://0251.0376.0251.0376/",
+        "http://169.254.43518/",
+        "http://169.254.169.254./",
     ],
 )
 def test_llm_models_rejects_metadata_and_link_local(client, monkeypatch, base_url):
@@ -567,6 +585,62 @@ def test_llm_models_rejects_metadata_and_link_local(client, monkeypatch, base_ur
     )
     assert response.status_code == 400
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("resolved", "blocked"),
+    [
+        ("169.254.169.254", True),   # 169.254.169.254.nip.io 这类域名
+        ("fd00:ec2::254", True),
+        ("::ffff:169.254.169.254", True),
+        ("127.0.0.1", False),        # 解析到本机的域名照常放行（本地模型服务）
+        ("203.0.113.7", False),
+    ],
+)
+def test_resolution_check_rejects_domains_resolving_to_metadata(monkeypatch, resolved, blocked):
+    """域名的解析结果同样要过地址检查：拦元数据 / link-local，放行环回与公网。"""
+    import asyncio
+    import socket
+
+    family = socket.AF_INET6 if ":" in resolved else socket.AF_INET
+
+    async def _fake_resolve(host):
+        assert host == "meta.example"
+        return [(family, socket.SOCK_STREAM, 6, "", (resolved, 0))]
+
+    monkeypatch.setattr(config_module, "_resolve_host", _fake_resolve)
+    run = lambda: asyncio.run(config_module._reject_blocked_resolution("http://meta.example/v1"))  # noqa: E731
+
+    if blocked:
+        with pytest.raises(config_module.HTTPException) as excinfo:
+            run()
+        assert excinfo.value.status_code == 400
+    else:
+        run()
+
+
+def test_resolution_check_ignores_resolver_failure(monkeypatch):
+    """解析失败不在这里报错，交给随后的真实请求按“无法连接”处理。"""
+    import asyncio
+
+    async def _fail(_host):
+        raise OSError("no such host")
+
+    monkeypatch.setattr(config_module, "_resolve_host", _fail)
+    asyncio.run(config_module._reject_blocked_resolution("http://nowhere.invalid/v1"))
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    ["http://ollama.lan:11434/v1", "http://1.2.3.4.example/v1", "http://[::1]:8080/v1"],
+)
+def test_llm_models_does_not_block_normal_hostnames(client, monkeypatch, base_url):
+    """局域网主机名、以数字开头的普通域名、IPv6 环回都不是非标准 IP 写法，照常放行。"""
+    _install_httpx(monkeypatch, lambda url, headers: _FakeResponse(200, {"data": [{"id": "m"}]}))
+
+    body = client.post("/api/config/llm/models", json={"api_key": "k", "base_url": base_url}).json()
+
+    assert body["success"] is True
 
 
 @pytest.mark.parametrize(
@@ -722,7 +796,7 @@ def test_update_llm_config_rejects_blank_key(client, api_key):
 
 
 def test_update_llm_config_rejects_empty_body(client):
-    """四个字段全缺省的请求没有意义，返回 422（#91）。"""
+    """缺少必填的 api_key 返回 422（#91）。"""
     response = client.post("/api/config/llm", json={})
 
     assert response.status_code == 422

@@ -41,6 +41,9 @@ from datetime import datetime
 import copy
 # ipaddress 用于识别云元数据 / link-local 地址（#81）
 import ipaddress
+# asyncio 用于异步解析域名，校验解析结果；re 用于识别非标准数字 IP 写法
+import asyncio
+import re
 # httpx 用于异步请求 OpenAI 兼容服务的模型列表
 import httpx
 # URL 处理工具用于规范化 /v1/models 请求路径
@@ -122,6 +125,18 @@ _METADATA_HOSTNAMES = {
     "instance-data",
 }
 
+# 元数据服务的 IP 形式：按地址比较而不是按字符串，避免大小写 / 压缩写法绕过。
+# fd00:ec2::254 是 AWS 的 IPv6 元数据端点。
+_METADATA_ADDRESSES = frozenset(
+    ipaddress.ip_address(item) for item in ("169.254.169.254", "100.100.100.200", "fd00:ec2::254")
+)
+
+# NAT64 前缀 64:ff9b::/96：低 32 位就是目标 IPv4。
+_NAT64_NETWORK = ipaddress.ip_network("64:ff9b::/96")
+
+# inet_aton 接受的单段数字写法：十进制、0 开头八进制、0x 开头十六进制。
+_NUMERIC_LABEL_RE = re.compile(r"(?:0x[0-9a-f]*|[0-9]+)")
+
 # IPv4/IPv6 的 link-local 网段（169.254.0.0/16、fe80::/10）。
 # 注意：这里刻意不封 127.0.0.1 和私网段——本地 Ollama / LM Studio / 局域网模型服务
 # 是合法用法，且前端允许传入尚未保存的新地址来刷新模型列表。
@@ -166,21 +181,96 @@ def _validate_models_url(base_url: str) -> str:
         raise HTTPException(status_code=400, detail="Base URL 指向云服务元数据地址，已拒绝")
 
     try:
-        address = ipaddress.ip_address(hostname)
+        address = ipaddress.ip_address(hostname.split('%', 1)[0])
     except ValueError:
         address = None
+    if address is None and _looks_like_numeric_ipv4(hostname):
+        # 2852039166 / 0xa9fea9fe / 0251.0376.0251.0376 / 169.254.43518 这类写法
+        # 标准库判不出来，但 inet_aton 会把它们解析成 169.254.169.254。
+        raise HTTPException(status_code=400, detail="Base URL 使用了非标准的 IP 写法，请改用点分十进制")
     if address is not None:
-        if address.is_unspecified:
-            raise HTTPException(status_code=400, detail="Base URL 指向无效地址，已拒绝")
-        if any(
-            address in network
-            for network in _LINK_LOCAL_NETWORKS
-            if network.version == address.version
-        ):
-            raise HTTPException(status_code=400, detail="Base URL 指向 link-local 地址，已拒绝")
+        reason = _blocked_address_reason(address)
+        if reason:
+            raise HTTPException(status_code=400, detail=reason)
 
     # 兼容用户填写带或不带末尾斜杠的地址，并固定访问标准模型端点。
     return urljoin(parts.geturl().rstrip('/') + '/', 'models')
+
+
+def _is_ip_literal(hostname: str) -> bool:
+    """主机名本身是不是一个 IP 字面量（含 IPv6 zone id 写法）。"""
+    try:
+        ipaddress.ip_address(hostname.split('%', 1)[0])
+    except ValueError:
+        return False
+    return True
+
+
+def _looks_like_numeric_ipv4(hostname: str) -> bool:
+    """主机名的每一段都是十进制 / 八进制 / 十六进制数字时视为 IPv4 写法。"""
+    labels = hostname.split('.')
+    return 1 <= len(labels) <= 4 and all(_NUMERIC_LABEL_RE.fullmatch(label) for label in labels)
+
+
+def _embedded_ipv4(address: "ipaddress.IPv6Address") -> List["ipaddress.IPv4Address"]:
+    """取出 IPv6 地址里内嵌的 IPv4（映射、兼容、6to4、NAT64、Teredo）。"""
+    found = []
+    if address.ipv4_mapped is not None:
+        found.append(address.ipv4_mapped)
+    if address.sixtofour is not None:
+        found.append(address.sixtofour)
+    if address.teredo is not None:
+        found.append(address.teredo[1])
+    packed = int(address)
+    low32 = ipaddress.IPv4Address(packed & 0xFFFFFFFF)
+    if address in _NAT64_NETWORK:
+        found.append(low32)
+    # IPv4 兼容地址 ::a.b.c.d（已废弃但仍可能被解析），排除 :: 与 ::1。
+    if packed >> 32 == 0 and packed > 1:
+        found.append(low32)
+    return found
+
+
+def _blocked_address_reason(address) -> Optional[str]:
+    """判断单个 IP 是否属于禁止访问的地址；允许时返回 None。"""
+    candidates = [address]
+    if address.version == 6:
+        candidates.extend(_embedded_ipv4(address))
+    for item in candidates:
+        if item in _METADATA_ADDRESSES:
+            return "Base URL 指向云服务元数据地址，已拒绝"
+        if item.is_unspecified:
+            return "Base URL 指向无效地址，已拒绝"
+        if any(item in network for network in _LINK_LOCAL_NETWORKS if network.version == item.version):
+            return "Base URL 指向 link-local 地址，已拒绝"
+    return None
+
+
+async def _resolve_host(hostname: str):
+    """异步解析主机名（单独成函数，便于测试替换）。"""
+    return await asyncio.get_running_loop().getaddrinfo(hostname, None)
+
+
+async def _reject_blocked_resolution(base_url: str) -> None:
+    """域名解析后再查一次：``169.254.169.254.nip.io`` 这类域名会解析到元数据地址。
+
+    解析失败不在这里报错，交给随后的真实请求按“无法连接”处理。
+    """
+    hostname = (urlsplit(base_url.strip()).hostname or '').strip().rstrip('.')
+    if not hostname or _is_ip_literal(hostname):
+        return  # 字面量 IP 已在 _validate_models_url 里检查过
+    try:
+        infos = await _resolve_host(hostname)
+    except (OSError, UnicodeError):
+        return
+    for info in infos:
+        try:
+            resolved = ipaddress.ip_address(str(info[4][0]).split('%', 1)[0])
+        except ValueError:
+            continue
+        reason = _blocked_address_reason(resolved)
+        if reason:
+            raise HTTPException(status_code=400, detail=f"{reason}（域名解析结果）")
 
 
 def _mask_api_key(value: Any) -> Optional[str]:
@@ -238,9 +328,8 @@ class LLMConfigRequest(BaseModel):
 class LLMModelsRequest(BaseModel):
     """获取模型列表的请求体。
 
-    前端切换 Base URL 时会传入当前输入框内容；如果字段为空，
-    后端会回退读取已保存的 LLM 配置，便于直接调用接口探测。
-    空白字符串与 None 等价，都表示“未提供”（#87）。
+    前端切换 Base URL 时会传入当前输入框内容。字段省略（None）时后端回退读取已保存的
+    LLM 配置；空字符串表示用户明确没填，不回退（#87：前端在输入框为空时省略 api_key）。
     """
     api_key: Optional[str] = None
     # 允许前端传入尚未保存的新地址，避免必须先保存才能刷新模型
@@ -414,6 +503,7 @@ async def get_llm_models(request: LLMModelsRequest):
         # 地址校验（#81）：只允许 http/https，拒绝内嵌凭据、云元数据地址、
         # link-local 与未指定地址；本地 / 局域网模型服务照常可用。
         models_url = _validate_models_url(base_url)
+        await _reject_blocked_resolution(base_url)
         headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
         # 禁止跟随重定向：否则公开地址可以 302 到元数据地址，绕过上面的地址校验。
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
