@@ -17,6 +17,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+import threading
 from datetime import datetime
 
 import pytest
@@ -276,8 +278,9 @@ def test_dashboard_without_any_video(client):
     assert "dedup_statistics" in body["data"]["visualization"]
 
 
-def test_dashboard_with_seeded_video(client, db):
-    """有评论数据时应返回视频信息与可视化结构。"""
+@pytest.mark.asyncio
+async def test_dashboard_with_seeded_video(client, db, monkeypatch):
+    """大屏只把快照交给后台去重，数据库先关闭，事件循环仍能推进。"""
     session = db.get_session()
     try:
         video = Video(bvid="BV1DASH", title="大屏视频")
@@ -299,7 +302,37 @@ def test_dashboard_with_seeded_video(client, db):
     finally:
         session.close()
 
-    body = client.get("/api/comment/dashboard", params={"bvid": "BV1DASH"}).json()
+    snapshot_session = db.get_session()
+    closed = threading.Event()
+    loop_progressed = threading.Event()
+    loop_thread = threading.get_ident()
+    original_close = snapshot_session.close
+
+    def close_snapshot():
+        assert threading.get_ident() == loop_thread
+        original_close()
+        closed.set()
+
+    def deduplicate_snapshot(comments):
+        assert closed.is_set()
+        assert threading.get_ident() != loop_thread
+        assert loop_progressed.wait(1), "去重阻塞了事件循环"
+        assert comments[0]["content"] == "不错"
+        return None
+
+    async def advance_loop():
+        await asyncio.sleep(0)
+        loop_progressed.set()
+
+    monkeypatch.setattr(snapshot_session, "close", close_snapshot)
+    monkeypatch.setattr(comment_module, "get_session", lambda: snapshot_session)
+    monkeypatch.setattr(comment_module.get_monitor().deduplicator, "deduplicate", deduplicate_snapshot)
+    tick = asyncio.create_task(advance_loop())
+    try:
+        body = await comment_module.get_comment_dashboard(bvid="BV1DASH")
+    finally:
+        loop_progressed.set()
+        await tick
     assert body["data"]["video"] == {"bvid": "BV1DASH", "title": "大屏视频"}
     assert body["data"]["visualization"] == {"built": True}
     assert body["data"]["message"] == "已加载历史监控数据"

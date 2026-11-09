@@ -365,3 +365,41 @@ def test_pipeline_repeated_batches_and_failure_do_not_retain_cache(monkeypatch):
     dedup.simhash_calls.clear()
     assert _without_timestamp(dedup.deduplicate(comments)) == _without_timestamp(first)
     assert dedup.simhash_calls == calls
+
+
+def test_indexed_candidates_preserve_fuzzy_results_and_skip_distant_pairs(monkeypatch):
+    from modules.comment import deduplicator as dedup_module
+
+    rng = random.Random(41)
+    # 覆盖跨不同分段的 0/1/2/3 位差异与 4 位粗筛边界。
+    fingerprints = [0, 1, (1 << 16) | 1, (1 << 32) | (1 << 16) | 1,
+                    (1 << 48) | (1 << 32) | (1 << 16) | 1]
+    fingerprints.extend(rng.getrandbits(64) for _ in range(250))
+    texts = [f"这是一条待比较的完整评论{i:04d}" for i in range(len(fingerprints))]
+    by_text = dict(zip(texts, fingerprints))
+    comments = [make_comment(i, i, text) for i, text in enumerate(texts)]
+    optimized = CommentDeduplicator()
+    reference = _UncachedDeduplicator()
+    monkeypatch.setattr(optimized, "_simhash", by_text.__getitem__)
+    monkeypatch.setattr(reference, "_simhash", by_text.__getitem__)
+
+    batch = optimized._build_batch_similarity(texts)
+    for i, fingerprint in enumerate(fingerprints):
+        required = {j for j in range(i + 1, len(texts))
+                    if (fingerprint ^ fingerprints[j]).bit_count() <= 3}
+        assert required <= set(batch.candidates(texts, i))
+
+    calls = []
+    original_call = dedup_module._SimHashBatch.__call__
+
+    def counted_call(self, a, b):
+        calls.append((a, b))
+        return original_call(self, a, b)
+
+    monkeypatch.setattr(dedup_module._SimHashBatch, "__call__", counted_call)
+    assert optimized._deduplicate_by_fuzzy(comments) == reference._deduplicate_by_fuzzy(comments)
+    assert len(calls) < len(texts) * (len(texts) - 1) // 20
+
+    # 0 分也能过门槛时，必须保留粗筛不通过的配对。
+    optimized.fuzzy_match_threshold = reference.fuzzy_match_threshold = 0
+    assert optimized._deduplicate_by_fuzzy(comments) == reference._deduplicate_by_fuzzy(comments)

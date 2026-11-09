@@ -31,6 +31,9 @@
 - 运营人员批量监控账号动态，维护社区氛围
 - 数据分析人员获取结构化评论数据
 """
+import asyncio
+from contextlib import closing
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
@@ -474,66 +477,68 @@ async def get_comment_dashboard(bvid: Optional[str] = None):
     """
     session = get_session()
     try:
-        # 优先使用用户指定视频；未指定时选择最近有评论记录的视频。
-        video_query = session.query(Video)
-        if bvid:
-            video = video_query.filter(Video.bvid == bvid).first()
-        else:
-            video = (
-                video_query.join(Comment, Comment.video_id == Video.id)
-                .order_by(Comment.created_at.desc())
-                .first()
+        with closing(session):
+            # 优先使用用户指定视频；未指定时选择最近有评论记录的视频。
+            video_query = session.query(Video)
+            if bvid:
+                video = video_query.filter(Video.bvid == bvid).first()
+            else:
+                video = (
+                    video_query.join(Comment, Comment.video_id == Video.id)
+                    .order_by(Comment.created_at.desc())
+                    .first()
+                )
+
+            if not video:
+                return {
+                    "success": True,
+                    "data": {
+                        "video": None,
+                        "visualization": CommentMonitor._empty_visualization_data(),
+                        "message": "暂无已落库评论数据",
+                    },
+                }
+
+            rows = (
+                session.query(Comment)
+                .filter(Comment.video_id == video.id)
+                .order_by(Comment.ctime.asc())
+                .all()
             )
+            comments = [
+                {
+                    "rpid": row.rpid,
+                    "uid": row.uid,
+                    "uname": row.uname,
+                    "content": row.content,
+                    "ctime": row.ctime,
+                    "like": row.like or 0,
+                    "sentiment": row.sentiment or "neutral",
+                    "sentiment_score": row.sentiment_score,
+                    "is_duplicate": bool(row.is_duplicate),
+                    "duplicate_count": row.duplicate_count or 1,
+                }
+                for row in rows
+            ]
 
-        if not video:
-            return {
-                "success": True,
-                "data": {
-                    "video": None,
-                    "visualization": CommentMonitor._empty_visualization_data(),
-                    "message": "暂无已落库评论数据",
-                },
-            }
-
-        rows = (
-            session.query(Comment)
-            .filter(Comment.video_id == video.id)
-            .order_by(Comment.ctime.asc())
-            .all()
-        )
-        comments = [
-            {
-                "rpid": row.rpid,
-                "uid": row.uid,
-                "uname": row.uname,
-                "content": row.content,
-                "ctime": row.ctime,
-                "like": row.like or 0,
-                "sentiment": row.sentiment or "neutral",
-                "sentiment_score": row.sentiment_score,
-                "is_duplicate": bool(row.is_duplicate),
-                "duplicate_count": row.duplicate_count or 1,
-            }
-            for row in rows
-        ]
+            video_data = {"bvid": video.bvid, "title": video.title or video.bvid}
 
         # 历史数据也走同一去重器与统计构造器，避免实时/历史接口字段漂移。
         monitor = get_monitor()
-        dedup_result = monitor.deduplicator.deduplicate(comments) if comments else None
+        # 只把已脱离数据库的评论快照交给线程；CPU 去重不占用事件循环或业务事务。
+        dedup_result = await asyncio.to_thread(monitor.deduplicator.deduplicate, comments) if comments else None
         processed = dedup_result.get("deduplicated_comments", comments) if dedup_result else comments
         visualization = monitor._build_visualization_data(comments, processed, dedup_result)
         return {
             "success": True,
             "data": {
-                "video": {"bvid": video.bvid, "title": video.title or video.bvid},
+                "video": video_data,
                 "visualization": visualization,
                 "message": "已加载历史监控数据" if comments else "该视频暂无评论数据",
             },
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"读取评论大屏失败: {exc}") from exc
-    finally:
-        session.close()
 
 
 @router.get("/resident/status")

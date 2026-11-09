@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import heapq
+import io
 import json
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -158,28 +161,50 @@ def _parse_text_log(line: str, source_hint: str) -> Optional[Dict[str, object]]:
     }
 
 
-def parse_log_lines(lines: Iterable[str], source_hint: str) -> List[Dict[str, object]]:
-    """解析日志行，并把异常堆栈续行合并到上一条消息。"""
-    records: List[Dict[str, object]] = []
-    for raw_line in lines:
+def _parse_log_lines_with_offsets(
+    lines: Iterable[Tuple[str, int]], source_hint: str,
+) -> List[Tuple[Dict[str, object], int]]:
+    """解析日志及每条记录末尾的字节偏移，堆栈续行随同一记录消费。"""
+    records = []
+    for raw_line, end_offset in lines:
         line = raw_line.rstrip("\r\n")
         if not line:
+            if records:
+                records[-1] = (records[-1][0], end_offset)
             continue
         record = _parse_json_log(line, source_hint) or _parse_text_log(line, source_hint)
         if record:
-            records.append(record)
+            records.append((record, end_offset))
         elif records:
-            # 无法解析的行视为上一条日志的堆栈续行，合并到它的消息末尾。
-            records[-1]["message"] = f"{records[-1]['message']}\n{line}"
+            previous = records[-1][0]
+            previous["message"] = f"{previous['message']}\n{line}"
+            records[-1] = (previous, end_offset)
         else:
-            records.append({
+            records.append(({
                 "timestamp": "时间未知",
                 "level": "INFO",
                 "source": source_hint,
                 "message": _serialize_text(line),
                 "is_rate_limit": source_hint == "risk_control",
-            })
+            }, end_offset))
     return records
+
+
+def parse_log_lines(lines: Iterable[str], source_hint: str) -> List[Dict[str, object]]:
+    """解析日志行，并把异常堆栈续行合并到上一条消息。"""
+    return [record for record, _ in _parse_log_lines_with_offsets(
+        ((line, 0) for line in lines), source_hint
+    )]
+
+
+def _parse_log_bytes(
+    content: bytes, source: str, start: int,
+) -> List[Tuple[Dict[str, object], int]]:
+    handle = io.BytesIO(content)
+    return _parse_log_lines_with_offsets(
+        ((line.decode("utf-8", errors="replace"), start + handle.tell()) for line in handle),
+        source,
+    )
 
 
 def _selected_files(log_type: str) -> List[Tuple[str, Path]]:
@@ -236,33 +261,39 @@ def _read_records(
     offsets = _decode_cursor(cursor)
     next_offsets: Dict[str, int] = {}
     records: List[Dict[str, object]] = []
+    streams = []
 
     for source, path in _selected_files(log_type):
         key = str(path)
-        # 文件不存在时偏移归零，跳过该来源。
         if not path.exists():
             next_offsets[key] = 0
             continue
+        start = offsets.get(key, 0) if cursor else 0
         try:
-            file_size = path.stat().st_size
-            if cursor:
-                start = offsets.get(key, 0)
-                # 文件被清空/轮转时游标可能超过新文件大小，回退到 0 重新读。
+            with path.open("rb") as handle:
+                file_size = os.fstat(handle.fileno()).st_size
                 start = start if start <= file_size else 0
-                with path.open("rb") as handle:
-                    handle.seek(start)
-                    content = handle.read().decode("utf-8", errors="replace")
+                handle.seek(start)
+                content = handle.read(file_size - start)
+            # 增量读取只消费完整行，避免把尚未写完的 UTF-8 字符或记录切断。
+            if cursor:
+                content = content[:content.rfind(b"\n") + 1]
+            end = start + len(content)
+            entries = _parse_log_bytes(content, source, start)
+            pending = []
+            position = start
+            for record, record_end in entries:
+                if levels is None or record["level"] in levels:
+                    pending.append((record, position))
+                position = record_end
+            if cursor:
+                streams.append((key, pending, end))
+                next_offsets[key] = pending[0][1] if pending else end
             else:
-                content = path.read_text(encoding="utf-8", errors="replace")
-            next_offsets[key] = file_size
-            parsed = parse_log_lines(content.splitlines(), source)
-            # 级别过滤必须发生在截断之前：先取尾部 limit 条再过滤，会把更早的问题日志
-            # 直接丢掉（例如最近 1000 行全是 INFO 时导出结果为空）。
-            if levels is not None:
-                parsed = [record for record in parsed if record["level"] in levels]
-            # 首次读取取尾部 limit 条；增量读取返回游标之后全部新内容。
-            records.extend(parsed if cursor else parsed[-limit:])
+                records.extend(record for record, _ in pending[-limit:])
+                next_offsets[key] = end
         except OSError as exc:
+            next_offsets[key] = start
             records.append({
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
                 "level": "ERROR",
@@ -271,8 +302,21 @@ def _read_records(
                 "is_rate_limit": False,
             })
 
+    if cursor:
+        # 每个来源按文件顺序消费；只推进已返回记录及其后的过滤行，绝不越过待返回记录。
+        queue = [(str(entries[0][0]["timestamp"]), i, 0)
+                 for i, (_, entries, _) in enumerate(streams) if entries]
+        heapq.heapify(queue)
+        while queue and len(records) < limit:
+            _, stream_index, index = heapq.heappop(queue)
+            key, entries, end = streams[stream_index]
+            records.append(entries[index][0])
+            index += 1
+            next_offsets[key] = entries[index][1] if index < len(entries) else end
+            if index < len(entries):
+                heapq.heappush(queue, (str(entries[index][0]["timestamp"]), stream_index, index))
+
     records.sort(key=lambda item: str(item["timestamp"]))
-    # 多文件合并后按时间排序，最后统一截断到 limit 条。
     return records[-limit:], _encode_cursor(next_offsets)
 
 
