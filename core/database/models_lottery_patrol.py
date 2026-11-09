@@ -17,6 +17,11 @@
 """
 from datetime import datetime
 
+
+def _utcnow() -> datetime:
+    """巡检相关时间统一用 UTC（naive），避免本地时区 / 夏令时影响 24h / 72h 窗口计算。"""
+    return datetime.utcnow()
+
 from sqlalchemy import (
     Boolean,
     Column,
@@ -55,7 +60,7 @@ class PatrolScan(Base):
                     comment='running/completed/failed/cancelled/interrupted')
     partial = Column(Boolean, nullable=False, default=False, comment='是否不完整采集')
     partial_reason = Column(String(200), comment='不完整原因')
-    created_at = Column(DateTime, default=datetime.now, index=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
     completed_at = Column(DateTime)
 
 
@@ -121,8 +126,8 @@ class PatrolReport(Base):
     bili_code = Column(Integer)
     bili_message = Column(String(200))
     status = Column(String(24), nullable=False)
-    created_at = Column(DateTime, default=datetime.now, index=True)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     __table_args__ = (
         UniqueConstraint('request_key', 'rpid', name='ux_patrol_report_request_rpid'),
@@ -153,7 +158,7 @@ class PatrolPreference(Base):
     user_keywords = Column(JSON)
     default_report_content = Column(String(200))
     report_cooldown_until = Column(DateTime)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 
 class PatrolLlmCache(Base):
@@ -165,4 +170,4 @@ class PatrolLlmCache(Base):
     ai_score = Column(Integer)
     reason = Column(String(200))
     model = Column(String(100))
-    created_at = Column(DateTime, default=datetime.now, index=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)

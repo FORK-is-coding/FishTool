@@ -89,7 +89,7 @@ def test_count_attempts_excludes_not_attempted(db):
     store.insert_report_simple(_report_row(rpid=3, key="c", mode="dry_run"), "dry_run")
     store.insert_report_simple(_report_row(rpid=4, key="d", mode="native"), "native_opened")
     store.insert_report_simple(_report_row(rpid=5, key="e"), "skipped")
-    assert store.count_report_attempts(7, datetime.now() - timedelta(hours=24)) == 2
+    assert store.count_report_attempts(7, datetime.utcnow() - timedelta(hours=24)) == 2
     assert store.has_active_report(7, 123, 3) is False  # dry_run 不占位
 
 
@@ -104,9 +104,9 @@ def test_mark_native(db):
 
 def test_cooldown_roundtrip(db):
     assert store.get_cooldown() is None
-    store.set_cooldown(datetime.now() + timedelta(minutes=30))
+    store.set_cooldown(datetime.utcnow() + timedelta(minutes=30))
     assert store.get_cooldown() is not None
-    store.set_cooldown(datetime.now() - timedelta(minutes=1))
+    store.set_cooldown(datetime.utcnow() - timedelta(minutes=1))
     assert store.get_cooldown() is None
 
 
@@ -162,7 +162,7 @@ def test_prune_by_retention(db):
     store.finish_scan(sid, "completed")
     session = db.get_session()
     from core.database import PatrolScan
-    session.query(PatrolScan).update({"created_at": datetime.now() - timedelta(days=30)})
+    session.query(PatrolScan).update({"created_at": datetime.utcnow() - timedelta(days=30)})
     session.commit()
     session.close()
     out = store.prune(build_settings({}))

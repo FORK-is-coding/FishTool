@@ -148,7 +148,7 @@ class PatrolService:
                 "default_mode": s.report_default_mode, "proxy_available": ok, "proxy_unavailable_reason": why,
                 "daily_limit": s.report_daily_limit, "daily_remaining": reporter.daily_remaining(s, login["mid"]),
                 "max_per_task": s.report_max_per_task, "per_account_limit": s.report_per_account_limit,
-                "cooldown_seconds": int((cooldown - datetime.now()).total_seconds()) if cooldown else 0,
+                "cooldown_seconds": int((cooldown - datetime.utcnow()).total_seconds()) if cooldown else 0,
                 "proxy_consent_ok": prefs.get("proxy_consent_version") == PROXY_CONSENT_VERSION,
                 "proxy_enabled": bool(prefs.get("proxy_enabled")), "dry_run": s.report_dry_run,
                 "require_ai": s.report_require_ai, "stale_warn_hours": s.report_stale_warn_hours,
@@ -166,7 +166,7 @@ class PatrolService:
 
     async def run_scan(self, task_id: str, req: Dict[str, Any], *, progress: ProgressCallback,
                        is_cancelled: CancelCheck, on_scan_created: Callable[[int], None],
-                       resume_cursor: Optional[str] = None) -> Dict[str, Any]:
+                       resume_cursor: Optional[str] = None, resume_scan_id: Optional[int] = None) -> Dict[str, Any]:
         s = load_settings()
         found = reporter.read_account_cookie()
         if not found:
@@ -181,7 +181,19 @@ class PatrolService:
             meta = await collector.fetch_video_meta(req["target"])
             options = {"max_comments": int(req.get("max_comments") or s.max_comments_default),
                        "include_replies": bool(req.get("include_replies", True)), "mode": req.get("mode", "time")}
-            scan_id = store.create_scan(task_id, meta.to_dict(), scanner_mid, options, RULES_VERSION)
+            # 断点续采：恢复原批次，保留中断前已采集的评论，合并后续页。
+            prior: List[Dict[str, Any]] = []
+            if resume_scan_id is not None:
+                old = store.get_scan(resume_scan_id)
+                if old is None:
+                    raise ValueError("原扫描记录已不存在，请重新扫描")
+                scan_id = resume_scan_id
+                prior = store.all_comments(scan_id)
+                for it in prior:
+                    it["hits"] = it.get("rule_hits") or []
+                progress("resuming", 6, f"断点续采：已恢复 {len(prior)} 条评论")
+            else:
+                scan_id = store.create_scan(task_id, meta.to_dict(), scanner_mid, options, RULES_VERSION)
             on_scan_created(scan_id)
             try:
                 store.save_preferences({"include_replies": options["include_replies"]}, None)
@@ -197,8 +209,16 @@ class PatrolService:
             progress("rule_patrol", 88, f"正在规则巡检 {len(result.comments)} 条评论")
             compiled = compile_rules(prefs.get("user_keywords"))
             whitelist = set(int(m) for m in prefs.get("whitelist_mids") or [] if str(m).isdigit())
-            items = []
+            # 合并中断前的评论与新采集的评论（按 rpid 去重，旧数据保留原始字段）。
+            merged: Dict[int, Dict[str, Any]] = {}
+            for it in prior:
+                merged[int(it["rpid"])] = {k: it.get(k) for k in (
+                    "rpid", "root_rpid", "parent_rpid", "is_reply", "mid", "uname", "sign", "level",
+                    "is_vip", "official_type", "content", "ctime", "like", "rcount", "at_users")}
             for c in result.comments:
+                merged[int(c["rpid"])] = c
+            items = []
+            for c in merged.values():
                 scored = score_comment(c, compiled, s, whitelist=whitelist, owner_mid=meta.owner_mid,
                                        self_mid=scanner_mid)
                 items.append({**c, **scored})
@@ -272,7 +292,8 @@ class PatrolService:
                                        on_batch=apply, is_cancelled=is_cancelled)
         tiers = _tier_counts(by_rpid.values())
         judged_total = sum(1 for c in by_rpid.values() if c.get("ai_score") is not None)
-        store.update_scan_stats(scan_id, {"tiers": tiers, "judged": judged_total})
+        store.update_scan_stats(scan_id, {"tiers": tiers, "judged": judged_total,
+                                          "ai_attempted": len(result.results)})
         return {**result.to_dict(), "selected": len(chosen), "tiers": tiers}
 
     # ---------- 举报 ----------
@@ -318,7 +339,8 @@ class PatrolService:
             comments = store.get_comments_by_rpids(scan_id, req["rpids"])
             keep, skipped = reporter.validate_selection(
                 scan, comments, req["rpids"], mode="dry_run" if dry_run else "proxy", s=s, prefs=prefs,
-                account_mid=account.mid, confirmed_rpids=req.get("confirmed_rpids") or [])
+                account_mid=account.mid, confirmed_rpids=req.get("confirmed_rpids") or [],
+                acknowledge_unknown_rpids=req.get("acknowledge_unknown_rpids") or [])
             for item in skipped:
                 if item.get("reason_code") == "not_in_scan":
                     continue

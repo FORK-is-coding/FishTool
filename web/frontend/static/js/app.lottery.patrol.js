@@ -110,7 +110,7 @@
     async function apiWrite(path, method, body) {
         for (let attempt = 0; attempt < 2; attempt += 1) {
             const token = await getLocalToken(attempt > 0);
-            const headers = Object.assign({ 'Content-Type': 'application/json' }, token ? { 'X-Local-Token': token } : {});
+            const headers = Object.assign(body ? { 'Content-Type': 'application/json' } : {}, token ? { 'X-Local-Token': token } : {});
             try {
                 return await apiRequest(API_PREFIX + path, {
                     method: method,
@@ -202,11 +202,14 @@
     }
 
     async function refreshPreflight(target) {
+        const seq = (state.preflightSeq = (state.preflightSeq || 0) + 1);
+        const targetSnapshot = target || '';
         let data;
         try {
-            const response = await apiRead('/preflight', { target: target || '' });
+            const response = await apiRead('/preflight', { target: targetSnapshot });
             data = response.data || {};
         } catch (error) {
+            if (seq !== state.preflightSeq) return null;
             if (error.status === 404) {
                 setProgress(notice('AI 伪人巡检已在配置中关闭（patrol.enabled）。'));
                 ['patrol-scan-button', 'patrol-judge-button', 'patrol-report-button'].forEach(function (id) {
@@ -218,6 +221,8 @@
             setProgress(errorBlock('读取巡检状态失败：' + errorMessage(error)));
             return null;
         }
+        // 已有更新的 preflight 请求发出时，丢弃本次过期响应，避免覆盖用户的最新操作。
+        if (seq !== state.preflightSeq) return null;
         state.preflight = data;
         const badge = $('patrol-account-badge');
         const login = data.login || {};
@@ -1094,6 +1099,7 @@
         let sameAccountSkip = 0;
         Object.keys(byMid).forEach(function (mid) { sameAccountSkip += Math.max(0, byMid[mid].length - perAccount); });
         const needConfirm = picked.filter(function (c) { return c.disagreement || c.score_source !== 'rule+llm' || c.tier !== 'bot'; });
+        const unknownResult = picked.filter(function (c) { return c.report_status === 'unknown'; });
         const countTier = function (t) { return picked.filter(function (c) { return c.tier === t; }).length; };
 
         const body = [];
@@ -1129,6 +1135,18 @@
                 box.appendChild(label);
             });
             confirmWrap.appendChild(box);
+        }
+        if (unknownResult.length) {
+            confirmWrap.appendChild(el('p', 'patrol-warn', '以下评论上次提交结果未知，可能已到达 B站。如需重试，请逐条确认：'));
+            const ubox = el('div', 'patrol-confirm-list');
+            unknownResult.forEach(function (c) {
+                const label = el('label', 'lottery-toggle');
+                const input = el('input'); input.type = 'checkbox'; input.setAttribute('data-ack-unknown', String(c.rpid));
+                label.appendChild(input);
+                label.appendChild(el('span', '', c.uname + ' · 结果未知 · ' + (c.content || '').slice(0, 40)));
+                ubox.appendChild(label);
+            });
+            confirmWrap.appendChild(ubox);
         }
         // 代发专属
         const proxyWrap = el('div');
@@ -1207,10 +1225,13 @@
                 const mode = currentMode();
                 const confirmed = Array.prototype.slice.call(built.modal.querySelectorAll('[data-confirm]'))
                     .filter(function (n) { return n.checked; }).map(function (n) { return Number(n.getAttribute('data-confirm')); });
+                const ackUnknown = Array.prototype.slice.call(built.modal.querySelectorAll('[data-ack-unknown]'))
+                    .filter(function (n) { return n.checked; }).map(function (n) { return Number(n.getAttribute('data-ack-unknown')); });
                 const payload = {
                     rpids: picked.map(function (c) { return c.rpid; }),
                     mode: mode === 'proxy' && report.dry_run ? 'dry_run' : mode,
                     confirmed_rpids: confirmed,
+                    acknowledge_unknown_rpids: ackUnknown,
                     request_key: state.requestKeys.report
                 };
                 if (mode === 'proxy') {

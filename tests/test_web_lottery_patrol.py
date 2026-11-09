@@ -27,7 +27,8 @@ class _FakeService:
     async def preflight(self, target, client_host=""):
         return {"login": {"ok": True}, "video": None}
 
-    async def run_scan(self, task_id, req, *, progress, is_cancelled, on_scan_created, resume_cursor=None):
+    async def run_scan(self, task_id, req, *, progress, is_cancelled, on_scan_created, resume_cursor=None,
+                       resume_scan_id=None):
         sid = store.create_scan(task_id, META, 7, req, "v")
         on_scan_created(sid)
         store.upsert_comments(sid, [{"rpid": 1, "mid": 101, "uname": "=HYPERLINK(1)", "content": "@阿杰 看这个",
@@ -245,9 +246,10 @@ def test_proxy_requires_consent_before_enable(env):
 
 
 def test_proxy_blocked_for_non_loopback_client(env):
-    client, *_ = env
+    client, _svc, _m, mp = env
     sid = _scan(client)
     _enable_proxy(client)
+    mp.setattr(router_module, "load_settings", lambda: build_settings({"report": {"proxy_enabled": True}}))
     r = client.post(f"/api/lottery/patrol/scans/{sid}/report",
                     json={"rpids": [1], "mode": "proxy", "reason": 3, "request_key": "rk-123456"}, headers=_wh())
     # TestClient 的 client.host 是 "testclient"，不是回环地址
@@ -258,6 +260,7 @@ def test_proxy_allowed_from_loopback_and_astrbot_switch(env):
     client, _svc, _m, mp = env
     sid = _scan(client)
     _enable_proxy(client)
+    mp.setattr(router_module, "load_settings", lambda: build_settings({"report": {"proxy_enabled": True}}))
     mp.setattr(router_module, "_client_host", lambda request: "127.0.0.1")
     body = {"rpids": [1], "mode": "proxy", "reason": 3, "request_key": "rk-123456"}
     r = client.post(f"/api/lottery/patrol/scans/{sid}/report", json=body, headers=_wh())
@@ -277,6 +280,7 @@ def test_proxy_account_changed(env):
     client, _svc, _m, mp = env
     sid = _scan(client)
     _enable_proxy(client)
+    mp.setattr(router_module, "load_settings", lambda: build_settings({"report": {"proxy_enabled": True}}))
     mp.setattr(router_module, "_client_host", lambda request: "127.0.0.1")
     mp.setattr(reporter, "read_account_cookie", lambda: ("c", "j", 8))
     r = client.post(f"/api/lottery/patrol/scans/{sid}/report",

@@ -178,9 +178,10 @@ def make_batches(items: List[Dict[str, Any]], mapping: Dict[str, int], rpid_mid:
     return batches
 
 
-def cache_key(item: Dict[str, Any], identity: Dict[str, str]) -> str:
+def cache_key(item: Dict[str, Any], identity: Dict[str, str], focus: str = "") -> str:
     payload = {k: v for k, v in item.items() if k != "id"}
     raw = "|".join([RULES_VERSION, PROMPT_VERSION, identity.get("api_base", ""), identity.get("model", ""),
+                    (focus or "").strip()[:MAX_FOCUS_CHARS],
                     json.dumps(payload, ensure_ascii=False, sort_keys=True)])
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -275,7 +276,7 @@ async def judge(comments: Sequence[Dict[str, Any]], all_by_rpid: Dict[int, Dict[
         return result
     items, mapping = build_items(comments, all_by_rpid)
     identity = model_identity()
-    keys = {item["id"]: cache_key(item, identity) for item in items}
+    keys = {item["id"]: cache_key(item, identity, focus) for item in items}
     cached = store.get_llm_cache(keys.values(), s.judge_cache_days)
     pending: List[Dict[str, Any]] = []
     hit_batch: Dict[int, Dict[str, Any]] = {}

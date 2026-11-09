@@ -107,7 +107,7 @@ def test_preference_and_cache_roundtrip(manager):
     try:
         session.add(PatrolPreference(id=1, whitelist_mids=[1, 2], user_keywords=[]))
         session.add(PatrolLlmCache(cache_key="h" * 64, ai_score=80, reason="r", model="m",
-                                   created_at=datetime.now()))
+                                   created_at=datetime.utcnow()))
         session.commit()
         pref = session.get(PatrolPreference, 1)
         assert pref.revision == 0 and pref.proxy_enabled is False and pref.include_replies is True

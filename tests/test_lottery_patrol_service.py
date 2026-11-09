@@ -181,8 +181,13 @@ def test_proxy_report_unavailable_by_default(env):
                                    client_host="127.0.0.1", progress=_noop, is_cancelled=lambda: False))
 
 
-def _enable_proxy():
+def _enable_proxy(monkeypatch=None):
     store.save_preferences({"proxy_consent_version": PROXY_CONSENT_VERSION, "proxy_enabled": True}, None)
+    if monkeypatch is not None:
+        # 配置层默认关闭代发（安全默认）；这些用例显式打开配置层 + 界面开关 + 同意。
+        from modules.lottery.patrol.contracts import build_settings
+        settings = build_settings({"report": {"proxy_enabled": True}})
+        monkeypatch.setattr("modules.lottery.patrol.service.load_settings", lambda: settings)
 
 
 def test_proxy_report_end_to_end(env, monkeypatch):
@@ -191,7 +196,7 @@ def test_proxy_report_end_to_end(env, monkeypatch):
     out = _scan(svc)
     _consent()
     asyncio.run(svc.run_judge("t2", out["scan_id"], {"scope": "all"}, progress=_noop, is_cancelled=lambda: False))
-    _enable_proxy()
+    _enable_proxy(monkeypatch)
     rows = _by_name(out["scan_id"])
     res = asyncio.run(svc.run_report("t3", out["scan_id"], {
         "rpids": [rows["阿杰的大肥鱼"]["rpid"], rows["普通观众"]["rpid"]], "mode": "proxy", "reason": 0,
@@ -202,10 +207,10 @@ def test_proxy_report_end_to_end(env, monkeypatch):
     assert {s["reason_code"] for s in res["skipped"]} == {"not_bot"}
 
 
-def test_proxy_report_rejects_bad_reason_and_content(env):
+def test_proxy_report_rejects_bad_reason_and_content(env, monkeypatch):
     svc, _ = env
     out = _scan(svc)
-    _enable_proxy()
+    _enable_proxy(monkeypatch)
     for req, msg in (({"reason": 99, "content": "abc"}, "理由"), ({"reason": 0, "content": "a"}, "2–200")):
         with pytest.raises(ValueError, match=msg):
             asyncio.run(svc.run_report("t3", out["scan_id"], {"rpids": [1], "mode": "proxy", "request_key": "rk", **req},
@@ -215,7 +220,7 @@ def test_proxy_report_rejects_bad_reason_and_content(env):
 def test_proxy_report_account_changed(env, monkeypatch):
     svc, _ = env
     out = _scan(svc)
-    _enable_proxy()
+    _enable_proxy(monkeypatch)
 
     async def other():
         return reporter.Account(cookie=COOKIE, bili_jct="j", mid=8, uname="other", level=5)
@@ -227,12 +232,12 @@ def test_proxy_report_account_changed(env, monkeypatch):
                                    client_host="127.0.0.1", progress=_noop, is_cancelled=lambda: False))
 
 
-def test_dry_run_sends_nothing(env):
+def test_dry_run_sends_nothing(env, monkeypatch):
     svc, api = env
     out = _scan(svc)
     _consent()
     asyncio.run(svc.run_judge("t2", out["scan_id"], {"scope": "all"}, progress=_noop, is_cancelled=lambda: False))
-    _enable_proxy()
+    _enable_proxy(monkeypatch)
     rows = _by_name(out["scan_id"])
     res = asyncio.run(svc.run_report("t3", out["scan_id"], {"rpids": [rows["阿杰的大肥鱼"]["rpid"]], "mode": "dry_run",
                                                             "reason": 3, "request_key": "rk-d"},

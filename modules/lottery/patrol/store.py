@@ -87,7 +87,7 @@ def finish_scan(scan_id: int, status: str, *, partial: bool = False, partial_rea
             row.partial_reason = (partial_reason or "")[:200] or None
             if stats is not None:
                 row.stats = dict(stats)
-            row.completed_at = datetime.now()
+            row.completed_at = datetime.utcnow()
     except Exception as exc:  # noqa: BLE001 - 终态写失败只降级
         logger.warning("[巡检] 扫描终态写入失败: %s %s", scan_id, exc)
 
@@ -351,7 +351,7 @@ def finalize_report(report_id: int, status: str, bili_code: Optional[int], bili_
     with _session() as s:
         n = s.query(PatrolReport).filter(PatrolReport.id == int(report_id), PatrolReport.status == "sending").update(
             {"status": status, "bili_code": bili_code, "bili_message": (bili_message or "")[:200] or None,
-             "updated_at": datetime.now()}, synchronize_session=False)
+             "updated_at": datetime.utcnow()}, synchronize_session=False)
         return n == 1
 
 
@@ -379,7 +379,7 @@ def mark_native(report_id: int, done: bool) -> Optional[Dict[str, Any]]:
         if row is None or row.mode != "native" or row.status not in ("native_opened", "native_done"):
             return None
         row.status = "native_done" if done else "native_opened"
-        row.updated_at = datetime.now()
+        row.updated_at = datetime.utcnow()
         s.flush()
         result = _report_dict(row)
         scan_id, rpid = row.scan_id, row.rpid
@@ -388,7 +388,7 @@ def mark_native(report_id: int, done: bool) -> Optional[Dict[str, Any]]:
 
 
 def list_reports(days: int = 30, limit: int = 500) -> List[Dict[str, Any]]:
-    since = datetime.now() - timedelta(days=max(1, int(days)))
+    since = datetime.utcnow() - timedelta(days=max(1, int(days)))
     with _session() as s:
         rows = s.query(PatrolReport).filter(PatrolReport.created_at >= since).order_by(
             PatrolReport.id.desc()).limit(limit).all()
@@ -445,7 +445,7 @@ def save_preferences(patch: Dict[str, Any], expected_revision: Optional[int]) ->
             if key in _PREF_FIELDS:
                 setattr(row, key, value)
         row.revision = int(row.revision) + 1
-        row.updated_at = datetime.now()
+        row.updated_at = datetime.utcnow()
         s.flush()
         return _pref_dict(row)
 
@@ -456,7 +456,7 @@ def set_cooldown(until: datetime) -> None:
 
 def get_cooldown() -> Optional[datetime]:
     until = load_preferences().get("report_cooldown_until")
-    return until if isinstance(until, datetime) and until > datetime.now() else None
+    return until if isinstance(until, datetime) and until > datetime.utcnow() else None
 
 
 # ============ LLM 缓存 ============
@@ -465,7 +465,7 @@ def get_llm_cache(keys: Iterable[str], cache_days: int) -> Dict[str, Dict[str, A
     keys = list(keys)
     if not keys or cache_days <= 0:
         return {}
-    since = datetime.now() - timedelta(days=cache_days)
+    since = datetime.utcnow() - timedelta(days=cache_days)
     try:
         with _session() as s:
             rows = s.query(PatrolLlmCache).filter(PatrolLlmCache.cache_key.in_(keys),
@@ -489,7 +489,7 @@ def put_llm_cache(entries: Dict[str, Dict[str, Any]], model: str) -> None:
                 row.ai_score = value.get("ai_score")
                 row.reason = (value.get("reason") or "")[:200]
                 row.model = (model or "")[:100]
-                row.created_at = datetime.now()
+                row.created_at = datetime.utcnow()
     except Exception as exc:  # noqa: BLE001 - 缓存写失败不影响结果
         logger.warning("[巡检] 写入 AI 缓存失败: %s", exc)
 
@@ -523,7 +523,7 @@ def task_create(task_id: str, kind: str, request: Dict[str, Any], scan_id: Optio
         with _session() as s:
             s.add(Task(task_key=task_id, task_type=TASK_TYPES[kind], task_name=_TASK_NAMES[kind],
                        params={"request": request, "scan_id": scan_id}, status="running", progress=0.0,
-                       started_at=datetime.now()))
+                       started_at=datetime.utcnow()))
     except Exception as exc:  # noqa: BLE001 - 持久化失败只降级
         logger.warning("[巡检] 任务持久化失败（任务仍在内存中运行）: %s %s", task_id, exc)
 
@@ -550,10 +550,10 @@ def task_finish(task_id: str, status: str, message: str, result: Optional[Dict[s
                 row.result = result
                 row.progress = 1.0
             if status != "running":
-                row.completed_at = datetime.now()
+                row.completed_at = datetime.utcnow()
             else:
                 row.completed_at = None
-                row.started_at = datetime.now()
+                row.started_at = datetime.utcnow()
     except Exception as exc:  # noqa: BLE001
         logger.warning("[巡检] 任务状态持久化失败: %s %s %s", task_id, status, exc)
 
@@ -601,18 +601,18 @@ def recover_on_startup(retention_days: int) -> Dict[str, Any]:
             for row in stale:
                 row.status = "interrupted"
                 row.error = "服务重启，任务已中断"
-                row.completed_at = datetime.now()
+                row.completed_at = datetime.utcnow()
             outcome["interrupted"] = len(stale)
             s.query(PatrolScan).filter(PatrolScan.status == "running").update(
-                {"status": "interrupted", "completed_at": datetime.now()}, synchronize_session=False)
+                {"status": "interrupted", "completed_at": datetime.utcnow()}, synchronize_session=False)
             outcome["reports_unknown"] = s.query(PatrolReport).filter(PatrolReport.status == "sending").update(
-                {"status": "unknown", "bili_message": "服务重启时仍在提交，结果未知", "updated_at": datetime.now()},
+                {"status": "unknown", "bili_message": "服务重启时仍在提交，结果未知", "updated_at": datetime.utcnow()},
                 synchronize_session=False)
             s.query(PatrolComment).filter(PatrolComment.report_status == "queued").update(
                 {"report_status": "none"}, synchronize_session=False)
             s.query(PatrolComment).filter(PatrolComment.report_status == "sending").update(
                 {"report_status": "unknown"}, synchronize_session=False)
-            cutoff = datetime.now() - timedelta(days=max(1, int(retention_days)))
+            cutoff = datetime.utcnow() - timedelta(days=max(1, int(retention_days)))
             outcome["pruned_tasks"] = s.query(Task).filter(
                 Task.task_type.in_(types), Task.status.in_(["completed", "failed", "cancelled", "interrupted"]),
                 Task.completed_at.isnot(None), Task.completed_at < cutoff).delete(synchronize_session=False)
@@ -623,7 +623,7 @@ def recover_on_startup(retention_days: int) -> Dict[str, Any]:
 
 def prune(settings: PatrolSettings) -> Dict[str, int]:
     """按保留天数清理扫描（级联评论）、台账、AI 缓存。"""
-    now = datetime.now()
+    now = datetime.utcnow()
     out = {"scans": 0, "reports": 0, "llm_cache": 0}
     try:
         with _session() as s:

@@ -12,7 +12,7 @@ from core.request_budget import RequestQuotaExceeded
 from modules.lottery.patrol import reporter, store
 from modules.lottery.patrol.contracts import PROXY_CONSENT_VERSION, build_settings
 
-S = build_settings({})
+S = build_settings({"report": {"proxy_enabled": True}})
 COOKIE = "SESSDATA=secret-sess; bili_jct=csrf-token-123; DedeUserID=7"
 META = {"bvid": "BV1xx411c7mD", "aid": 123, "title": "T", "owner_mid": 9, "owner_name": "UP"}
 
@@ -124,7 +124,7 @@ def test_stop_codes(exc, cooldown):
 
 def test_cooldown_survives_reload():
     _run(_Api(BilibiliAPIError("x", bili_code=12019)), _scan(), [_c(1)])
-    assert store.load_preferences()["report_cooldown_until"] > datetime.now()
+    assert store.load_preferences()["report_cooldown_until"] > datetime.utcnow()
 
 
 def test_network_timeout_is_unknown_not_retried():
@@ -167,7 +167,7 @@ def test_dry_run_sends_nothing_and_does_not_block():
     out = _run(api, _scan(), [_c(1), _c(2)], dry_run=True)
     assert out["counts"] == {"dry_run": 2} and api.calls == []
     assert store.has_active_report(7, 123, 1) is False
-    assert store.count_report_attempts(7, datetime.now() - timedelta(hours=1)) == 0
+    assert store.count_report_attempts(7, datetime.utcnow() - timedelta(hours=1)) == 0
 
 
 def test_account_change_stops(monkeypatch):
@@ -250,7 +250,7 @@ def test_validate_daily_limit():
 
 def test_validate_stale_scan_blocks_proxy():
     scan = _scan()
-    scan["completed_at_dt"] = datetime.now() - timedelta(hours=80)
+    scan["completed_at_dt"] = datetime.utcnow() - timedelta(hours=80)
     keep, skipped = _validate([_c(1)], scan=scan)
     assert keep == [] and skipped[0]["reason_code"] == "stale"
 
@@ -311,9 +311,9 @@ def test_astrbot_switch(clean_env):
 
 
 def test_cooldown_and_circuit_block(clean_env):
-    store.set_cooldown(datetime.now() + timedelta(minutes=10))
+    store.set_cooldown(datetime.utcnow() + timedelta(minutes=10))
     assert "冷却" in reporter.proxy_report_available(S, PREFS_OK, "127.0.0.1")[1]
-    store.set_cooldown(datetime.now() - timedelta(minutes=1))
+    store.set_cooldown(datetime.utcnow() - timedelta(minutes=1))
     clean_env.setattr(reporter, "_ip_circuit_open", lambda: True)
     assert "熔断" in reporter.proxy_report_available(S, PREFS_OK, "127.0.0.1")[1]
 

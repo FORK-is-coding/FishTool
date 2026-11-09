@@ -171,7 +171,7 @@ def proxy_report_available(s: PatrolSettings, prefs: Dict[str, Any], client_host
         return False, "只允许在本机发起代发举报"
     cooldown = store.get_cooldown()
     if cooldown is not None:
-        minutes = max(1, int((cooldown - datetime.now()).total_seconds() // 60) + 1)
+        minutes = max(1, int((cooldown - datetime.utcnow()).total_seconds() // 60) + 1)
         return False, f"举报冷却中，约 {minutes} 分钟后可再试"
     if _ip_circuit_open():
         return False, "B站风控熔断中，请稍后再试"
@@ -245,12 +245,14 @@ def _skip(c: Dict[str, Any], code: str, reason: str) -> Dict[str, Any]:
 
 def validate_selection(scan: Dict[str, Any], comments: Sequence[Dict[str, Any]], requested_rpids: Sequence[int], *,
                        mode: str, s: PatrolSettings, prefs: Dict[str, Any], account_mid: Optional[int],
-                       confirmed_rpids: Sequence[int] = (), now: Optional[datetime] = None
+                       confirmed_rpids: Sequence[int] = (), acknowledge_unknown_rpids: Sequence[int] = (),
+                       now: Optional[datetime] = None
                        ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """返回 (待举报, 跳过列表)。mode: native / proxy / dry_run。"""
-    now = now or datetime.now()
+    now = now or datetime.utcnow()
     by_rpid = {int(c["rpid"]): c for c in comments}
     confirmed = {int(r) for r in confirmed_rpids}
+    ack_unknown = {int(r) for r in acknowledge_unknown_rpids}
     white = {int(m) for m in prefs.get("whitelist_mids") or [] if isinstance(m, int) or str(m).isdigit()}
     skipped: List[Dict[str, Any]] = []
     candidates: List[Dict[str, Any]] = []
@@ -275,6 +277,9 @@ def validate_selection(scan: Dict[str, Any], comments: Sequence[Dict[str, Any]],
             continue
         if c["rpid"] in active or c.get("report_status") in ("reported", "duplicate", "sending"):
             skipped.append(_skip(c, "already", "已举报或正在提交"))
+            continue
+        if c.get("report_status") == "unknown" and mode != "native" and c["rpid"] not in ack_unknown:
+            skipped.append(_skip(c, "unknown_result", "上次提交结果未知，可能已到达 B站；如需重试请单独确认"))
             continue
         if mode != "native":
             needs_confirm = bool(c.get("disagreement")) or c.get("score_source") != SOURCE_RULE_LLM
@@ -328,7 +333,7 @@ def validate_selection(scan: Dict[str, Any], comments: Sequence[Dict[str, Any]],
 def daily_remaining(s: PatrolSettings, account_mid: Optional[int]) -> int:
     if not account_mid:
         return s.report_daily_limit
-    used = store.count_report_attempts(account_mid, datetime.now() - timedelta(hours=24))
+    used = store.count_report_attempts(account_mid, datetime.utcnow() - timedelta(hours=24))
     return max(0, s.report_daily_limit - used)
 
 
@@ -440,7 +445,7 @@ async def run_proxy_batch(api: Any, account: Account, scan: Dict[str, Any], item
 
     if stop_error is not None:
         if stop_error.cooldown:
-            store.set_cooldown(datetime.now() + timedelta(minutes=s.report_cooldown_minutes))
+            store.set_cooldown(datetime.utcnow() + timedelta(minutes=s.report_cooldown_minutes))
         if stop_error.high:
             report_high_priority(stop_error, logger=logger, action="AI伪人巡检·代发举报",
                                  toast_title="举报已停止", toast_message=stop_error.message, source="lottery_patrol")

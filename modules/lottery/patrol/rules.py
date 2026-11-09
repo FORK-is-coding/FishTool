@@ -122,16 +122,21 @@ def compile_rules(user_keywords: Optional[Sequence[Dict[str, Any]]] = None,
 
 
 def _snippet(original: str, matched: str) -> str:
-    """优先返回原文中能找到的片段，便于前端高亮。"""
-    if not matched:
+    """返回原文中确实存在、可用于前端高亮的片段。
+
+    匹配在归一化文本上进行，归一化可能改变大小写 / 繁简 / 零宽字符。
+    只有在原文（或其小写形式）中能定位到子串时才返回该子串；定位不到返回空串，
+    前端对应地不高亮，避免把高亮打到错误位置。
+    """
+    if not matched or not original:
         return ""
-    if matched in (original or ""):
+    if matched in original:
         return matched
-    lowered = (original or "").lower()
+    lowered = original.lower()
     pos = lowered.find(matched)
     if pos >= 0:
         return original[pos:pos + len(matched)]
-    return matched
+    return ""
 
 
 def _lcs_len(a: str, b: str) -> int:

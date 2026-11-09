@@ -101,6 +101,7 @@ class ReportRequest(_Strict):
     reason: Optional[StrictInt] = Field(default=None, ge=0, le=99)
     content: Optional[str] = Field(default=None, max_length=200)
     confirmed_rpids: List[StrictInt] = Field(default_factory=list, max_length=50)
+    acknowledge_unknown_rpids: List[StrictInt] = Field(default_factory=list, max_length=50)
     accept_account_change: StrictBool = False
     request_key: str = Field(min_length=8, max_length=64)
 
@@ -212,12 +213,14 @@ def _fingerprint(kind: str, payload: Dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps([kind, payload], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
-def _start_scan(req: Dict[str, Any], *, task_id: Optional[str] = None, resume_cursor: Optional[str] = None) -> str:
+def _start_scan(req: Dict[str, Any], *, task_id: Optional[str] = None, resume_cursor: Optional[str] = None,
+                resume_scan_id: Optional[int] = None) -> str:
     tid = registry.create("scan", req, fingerprint=_fingerprint("scan", req), task_id=task_id)
     svc = get_service()
     registry.spawn(tid, _run_task(tid, "扫描", lambda: svc.run_scan(
         tid, req, progress=_progress_cb(tid), is_cancelled=_cancel_cb(tid),
-        on_scan_created=lambda sid: registry.set_scan(tid, sid), resume_cursor=resume_cursor)))
+        on_scan_created=lambda sid: registry.set_scan(tid, sid), resume_cursor=resume_cursor,
+        resume_scan_id=resume_scan_id)))
     return tid
 
 
@@ -408,8 +411,12 @@ async def resume_task(task_id: str) -> Dict[str, Any]:
             req = ScanRequest(**request_body).model_dump(mode="json")
         except Exception as exc:
             raise _http(409, "resume_invalid", "原任务参数无效，请重新扫描") from exc
-        # 断点续采需要新建扫描批次（旧批次已标记中断），这里按原参数重新扫描。
-        _start_scan(req, task_id=task_id)
+        # 断点续采：恢复原批次，从 checkpoint 的游标继续，合并中断前已采集的评论。
+        checkpoint = stored.get("checkpoint") or {}
+        resume_cursor = checkpoint.get("pagination_str")
+        resume_scan_id = stored.get("scan_id") or checkpoint.get("scan_id")
+        _start_scan(req, task_id=task_id, resume_cursor=resume_cursor,
+                    resume_scan_id=int(resume_scan_id) if resume_scan_id else None)
         return {"success": True, "task_id": task_id, "resumed": True}
     if registry.running_of("judge"):
         raise _http(409, "judge_running", "已有 AI 甄别任务在运行")
@@ -474,9 +481,13 @@ _CSV_RISKY = ("=", "+", "-", "@", "\t", "\r")
 
 
 def _csv_safe(value: Any) -> Any:
-    if isinstance(value, str) and value.startswith(_CSV_RISKY):
-        return "'" + value
-    return value
+    """防 CSV 公式注入：首字符及每个换行后的行首是危险字符时前置单引号。"""
+    if not isinstance(value, str) or not value:
+        return value
+    # 逐行处理，覆盖多行文本单元格中换行后的新行首。
+    lines = value.split("\n")
+    safe_lines = [("'" + line if line.startswith(_CSV_RISKY) else line) for line in lines]
+    return "\n".join(safe_lines)
 
 
 _TIER_LABEL = {"bot": "高度疑似", "suspect": "疑似", "human": "较像真人", "unknown": "证据不足", "whitelist": "白名单"}
