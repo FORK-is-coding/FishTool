@@ -12,6 +12,7 @@
 - ``-budget20261104``：语义折叠预算模式 / 停止报告 / 预估时间一轮改动的资源；
 - ``-flexgap20261105``：给语义预算模式补 flex gap 兜底，``style.flexgap.css`` 追加；
 - ``-fix20261107``：文件最后一次修改晚于其 ``?v=`` 最后一次修改的脚本（含之前版本号 PR 漏追加的，#92）。
+- ``-commentmode20261109``：抽奖视频评论采集方式（常规 / 楼中楼）改过的脚本与样式表，必须是这两个文件的最后一段后缀。
 """
 from pathlib import Path
 import re
@@ -68,6 +69,11 @@ BUMPED_FIX_1107 = {
     "js": ("app.config.js", "app.hotspot.js", "app.events.js", "app.lottery.js",
            "app.comment.semantic.js"),
 }
+# 抽奖视频评论采集方式 PR：常规 / 楼中楼选择栏与模式相关文案，两个抽奖资源追加 -commentmode20261109。
+BUMPED_COMMENTMODE = {
+    "js": ("app.lottery.js",),
+    "css": ("style.lottery.css",),
+}
 
 
 def _versions(kind: str) -> dict:
@@ -98,6 +104,7 @@ def test_assets_changed_in_ui_redesign_end_with_ui_suffix() -> None:
     later = (
         set(BUMPED_V029["js"]) | set(BUMPED_V029["css"]) | set(BUMPED_SEMANTIC["js"]) | set(BUMPED_V030["js"])
         | set(BUMPED_FLEXGAP_1105["css"]) | set(BUMPED_FIX_1107["js"])
+        | set(BUMPED_COMMENTMODE["js"]) | set(BUMPED_COMMENTMODE["css"])
     )
     for kind, names in BUMPED_UI_1101.items():
         versions = _versions(kind)
@@ -182,12 +189,27 @@ def test_semantic_budget_assets_carry_bumped_version() -> None:
 def test_assets_changed_after_last_bump_end_with_1107_suffix() -> None:
     """#92：文件改动晚于其 ?v= 的脚本追加 -fix20261107（只追加，不改历史后缀）。"""
     versions = _versions("js")
+    later = set(BUMPED_COMMENTMODE["js"])
     for name in BUMPED_FIX_1107["js"]:
         assert name in versions, f"index.html 未引用 {name}"
-        assert versions[name].endswith("-fix20261107"), f"{name} 版本号未更新: {versions[name]}"
+        assert "-fix20261107" in versions[name], f"{name} 版本号未更新: {versions[name]}"
+        if name not in later:
+            assert versions[name].endswith("-fix20261107"), f"{name} 版本号未更新: {versions[name]}"
     # 历史后缀保留：不把旧后缀替换掉
     assert "-fix20261030" in versions["app.config.js"]
     assert "-budget20261104" in versions["app.comment.semantic.js"]
+
+
+def test_lottery_comment_mode_assets_end_with_their_suffix() -> None:
+    """抽奖评论采集方式 PR 改过的脚本与样式表以 -commentmode20261109 结尾（只追加，不改历史后缀）。"""
+    for kind, names in BUMPED_COMMENTMODE.items():
+        versions = _versions(kind)
+        for name in names:
+            assert name in versions, f"index.html 未引用 {name}"
+            assert versions[name].endswith("-commentmode20261109"), f"{name} 版本号未更新: {versions[name]}"
+    # 历史后缀保留
+    assert "-fix20261107" in _versions("js")["app.lottery.js"]
+    assert "-ui20261101" in _versions("css")["style.lottery.css"]
 
 
 def test_each_asset_is_referenced_once() -> None:

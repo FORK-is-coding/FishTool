@@ -1,4 +1,4 @@
-﻿"""抽奖候选字段标准化工具。"""
+"""抽奖候选字段标准化工具。"""
 
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -318,4 +318,3 @@ def build_candidate_pool(
         seen_users.add(uid)
         pool.append(comment)
     return pool, excluded
-

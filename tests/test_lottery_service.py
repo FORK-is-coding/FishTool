@@ -170,6 +170,36 @@ def _raw_reply(rpid: str, uid: int, ctime: int = 1_700_000_000) -> dict:
 
 # ================================================================ 初始化与委托
 
+class _ContractCollector:
+    """契约级评论采集器：实现 collect_video_comments 契约。"""
+
+    def __init__(self, comments=None, error=None) -> None:
+        """配置返回的评论与可选异常。"""
+        self.comments = comments or []
+        self.error = error
+        self.calls = []
+
+    async def collect_video_comments(self, bvid, strategy=None, max_count=None):
+        """返回预置评论或抛出预置异常。"""
+        self.calls.append({"bvid": bvid, "strategy": strategy})
+        if self.error is not None:
+            raise self.error
+        return [dict(item) for item in self.comments]
+
+
+def _full_comment_row(uid: int, rpid: str, ctime: datetime, *, level: int = 6, vip_type: int = 0) -> dict:
+    """构造字段完整的评论行数据，供抽奖过滤直接使用。"""
+    return {
+        "rpid": rpid,
+        "uid": uid,
+        "uname": f"用户{uid}",
+        "content": "抽奖",
+        "ctime": ctime,
+        "level_info": {"current_level": level},
+        "vip": {"vipType": vip_type, "vipStatus": 1 if vip_type else 0},
+    }
+
+
 def test_init_defaults_cache_dir_under_data() -> None:
     """不传 cache_dir 时应落在 data/lottery_cache（仅计算路径，不落盘）。"""
     svc = LotteryService(BilibiliAPI())
@@ -438,13 +468,13 @@ def management_client(service, monkeypatch):
 
     service.api.cookie = "SESSDATA=test-only"
     monkeypatch.setattr("modules.lottery.service.BilibiliAPI", create_client)
-    monkeypatch.setattr(service._comment_rate_limiter, "acquire", AsyncMock())
+    monkeypatch.setattr(service.collector.rate_limiter, "acquire", AsyncMock())
     return client
 
 
 def test_video_comments_use_management_list_and_include_nested(service, management_client):
     progress = _ProgressRecorder()
-    comments, source = asyncio.run(service.get_comments(_video_target(), progress))
+    comments, source = asyncio.run(service.get_comments(_video_target(), progress, comment_mode="up_fulllist"))
     assert source == "crawler"
     assert [x["rpid"] for x in comments] == ["1", "2"]
     assert management_client.calls[-1] == (
@@ -464,7 +494,7 @@ def test_video_comments_paginate_deduplicate_rpid_but_preserve_uid_rules(service
         {"page": {"num": 1, "total": 3}, "list": [_managed_reply("1", 7), _managed_reply("2", 7)]},
         {"page": {"num": 2, "total": 3}, "list": [_managed_reply("2", 7), _managed_reply("3", 8)]},
     ]
-    comments, _ = asyncio.run(service.get_comments(_video_target()))
+    comments, _ = asyncio.run(service.get_comments(_video_target(), comment_mode="up_fulllist"))
     assert [x["rpid"] for x in comments] == ["1", "2", "3"]
     pool, excluded = build_candidate_pool(comments, True, False, None, None, None)
     assert [x["uid"] for x in pool] == [7, 8]
@@ -478,7 +508,7 @@ def test_video_comments_have_no_ten_thousand_comment_cutoff(service, management_
          "list": [_managed_reply(str(i), i) for i in range(start + 1, start + 51)]}
         for start in range(0, total, 50)
     ]
-    comments, _ = asyncio.run(service.get_comments(_video_target()))
+    comments, _ = asyncio.run(service.get_comments(_video_target(), comment_mode="up_fulllist"))
     assert len(comments) == total
     assert management_client.calls[-1][1]["pn"] == 201
 
@@ -487,7 +517,7 @@ def test_video_comments_have_no_ten_thousand_comment_cutoff(service, management_
 def test_video_comments_require_login(service, management_client, cookie):
     service.api.cookie = cookie
     with pytest.raises(ValueError, match="请先.*登录"):
-        asyncio.run(service.get_comments(_video_target()))
+        asyncio.run(service.get_comments(_video_target(), comment_mode="up_fulllist"))
     assert management_client.calls == []
 
 
@@ -495,7 +525,7 @@ def test_video_comments_pin_one_pool_account(service, management_client):
     from types import SimpleNamespace
     pool = SimpleNamespace(get_cookie=AsyncMock(return_value=SimpleNamespace(cookie_data="SESSDATA=pool-only")))
     service.api.cookie_pool = pool
-    asyncio.run(service.get_comments(_video_target()))
+    asyncio.run(service.get_comments(_video_target(), comment_mode="up_fulllist"))
     assert management_client.options["cookie"] == "SESSDATA=pool-only"
     pool.get_cookie.assert_awaited_once()
 
@@ -504,7 +534,7 @@ def test_video_comments_reject_empty_pool_instead_of_using_old_cookie(service, m
     from types import SimpleNamespace
     service.api.cookie_pool = SimpleNamespace(get_cookie=AsyncMock(return_value=None))
     with pytest.raises(ValueError, match="请先.*登录"):
-        asyncio.run(service.get_comments(_video_target()))
+        asyncio.run(service.get_comments(_video_target(), comment_mode="up_fulllist"))
     assert management_client.calls == []
 
 
@@ -513,7 +543,7 @@ def test_video_comments_reject_invalid_session_or_other_owner(service, managemen
     management_client.login["isLogin"] = logged_in
     management_client.owner = owner
     with pytest.raises(ValueError, match=error):
-        asyncio.run(service.get_comments(_video_target()))
+        asyncio.run(service.get_comments(_video_target(), comment_mode="up_fulllist"))
     assert not any(url.endswith("/fulllist") for url, _ in management_client.calls)
     assert management_client.closed
 
@@ -531,7 +561,7 @@ def test_incomplete_video_comments_never_become_draw_candidates(service, managem
     management_client.pages[0]["page"]["total"] = 3
     management_client.pages.append(bad_page)
     with pytest.raises(ValueError):
-        asyncio.run(service.get_comments(_video_target()))
+        asyncio.run(service.get_comments(_video_target(), comment_mode="up_fulllist"))
     assert management_client.closed
 
 
@@ -540,7 +570,7 @@ def test_video_comments_propagate_rate_limit_and_close_client(service, managemen
     management_client.pages[0]["page"]["total"] = 3
     management_client.pages.append(RateLimitError())
     with pytest.raises(RateLimitError):
-        asyncio.run(service.get_comments(_video_target()))
+        asyncio.run(service.get_comments(_video_target(), comment_mode="up_fulllist"))
     assert management_client.closed
 
 
@@ -549,7 +579,7 @@ def test_video_comments_accept_empty_video_and_ignore_old_snapshot(service, mana
         "complete": True, "saved_epoch_s": int(time.time()), "comment_count": 99,
     })
     management_client.pages = [{"page": {"num": 1, "total": 0}, "list": None}]
-    comments, source = asyncio.run(service.get_comments(_video_target()))
+    comments, source = asyncio.run(service.get_comments(_video_target(), comment_mode="up_fulllist"))
     assert comments == [] and source == "crawler"
 
 
@@ -1466,3 +1496,168 @@ def test_assessment_cache_invalidated_when_profile_or_focus_changes(service: Lot
     key_before = service._assessment_key(_full_profile(1, level=6), "模板A")
     key_after = service._assessment_key(_full_profile(1, level=2), "模板A")
     assert key_before != key_after
+
+
+# ================================================================ get_comments: standard 模式（公共评论接口 + 本地快照）
+
+
+def test_comment_row_to_dict_delegates_to_candidate() -> None:
+    """静态兼容入口应与 candidate 模块行为一致。"""
+    row = Comment()
+    row.rpid = "1"
+    row.uid = 9
+    row.uname = "u"
+    row.content = "c"
+    row.vip = {}
+
+    # 反例（规格 §6.6）：空 vip 是未知，不再回退为“非会员”。
+    assert LotteryService._comment_row_to_dict(row)["vip_label"] is None
+
+
+def test_load_video_comments_returns_rows_ordered_by_time(
+    service: LotteryService, isolated_db: DatabaseManager
+) -> None:
+    """本地复用应按评论时间升序返回。"""
+    _seed_video(
+        isolated_db,
+        "BV100",
+        [
+            _full_comment_row(1, "c2", datetime(2024, 5, 2)),
+            _full_comment_row(2, "c1", datetime(2024, 5, 1)),
+        ],
+    )
+
+    rows = service._load_video_comments("BV100")
+
+    assert [row["rpid"] for row in rows] == ["c1", "c2"]
+    assert rows[0]["level"] == 6
+
+
+def test_load_video_comments_returns_empty_for_unknown_video(service: LotteryService) -> None:
+    """未采集过的视频返回空列表，触发在线采集。"""
+    assert service._load_video_comments("BV_不存在") == []
+
+
+def test_load_video_comments_degrades_and_closes_session(
+    service: LotteryService, monkeypatch
+) -> None:
+    """数据库异常时降级为空列表，且会话必须被关闭。"""
+    session = _ExplodingSession()
+    monkeypatch.setattr("modules.lottery.service.get_session", lambda: session)
+
+    assert service._load_video_comments("BV100") == []
+    assert session.closed is True
+
+
+def test_get_comments_prefers_local_video_rows(
+    service: LotteryService, isolated_db: DatabaseManager
+) -> None:
+    """视频命中近期完整快照时应跳过在线采集并推送复用进度。"""
+    _seed_video(isolated_db, "BV200", [_full_comment_row(1, "c1", datetime(2024, 5, 1))])
+    # issue #5-6：本地有行还不够，必须有 TTL 内的完整采集标记才可复用。
+    service._cache.mark_video_snapshot("BV200", 1, complete=True)
+    collector = _ContractCollector(comments=[{"rpid": "crawler"}])
+    service.collector = collector
+    progress = _ProgressRecorder()
+
+    comments, source = asyncio.run(
+        asyncio.wait_for(service.get_comments(_video_target("BV200"), progress), timeout=5)
+    )
+
+    assert source == "local"
+    assert [row["rpid"] for row in comments] == ["c1"]
+    assert collector.calls == []
+    assert progress.stages == ["local_lookup", "local_reuse"]
+
+
+def test_get_comments_falls_back_to_full_video_collection(service: LotteryService) -> None:
+    """视频本地未命中时应以全量策略调用统一采集器。"""
+    from modules.comment.collector import CommentCollector
+
+    collector = _ContractCollector(comments=[{"rpid": "online", "uid": 5}])
+    service.collector = collector
+    progress = _ProgressRecorder()
+
+    comments, source = asyncio.run(
+        asyncio.wait_for(service.get_comments(_video_target("BV404"), progress), timeout=5)
+    )
+
+    assert source == "crawler"
+    assert [row["rpid"] for row in comments] == ["online"]
+    assert collector.calls == [{"bvid": "BV404", "strategy": CommentCollector.STRATEGY_FULL}]
+    assert progress.stages == ["local_lookup", "collecting_comments"]
+
+
+def test_get_comments_recollects_video_when_no_snapshot_mark(
+    service: LotteryService, isolated_db: DatabaseManager
+) -> None:
+    """视频本地只有普通采集留下的部分评论、没有完整快照标记时，必须重新完整采集。"""
+    from modules.comment.collector import CommentCollector
+
+    _seed_video(isolated_db, "BV300", [_full_comment_row(1, "partial", datetime(2024, 5, 1))])
+    collector = _ContractCollector(comments=[{"rpid": "partial", "uid": 1}, {"rpid": "more", "uid": 2}])
+    service.collector = collector
+
+    comments, source = asyncio.run(
+        asyncio.wait_for(service.get_comments(_video_target("BV300"), None), timeout=5)
+    )
+
+    assert source == "crawler"
+    assert [row["rpid"] for row in comments] == ["partial", "more"]
+    assert collector.calls == [{"bvid": "BV300", "strategy": CommentCollector.STRATEGY_FULL}]
+    # 完整采集后写入快照标记，TTL 内再次抽奖可直接复用。
+    snapshot = service._cache.load_video_snapshot("BV300")
+    assert snapshot["complete"] is True and snapshot["comment_count"] == 2
+
+
+def test_get_comments_reuses_video_rows_after_full_collection(
+    service: LotteryService, isolated_db: DatabaseManager
+) -> None:
+    """FULL 采集落库并标记后，TTL 内第二次读取应走本地复用。"""
+    _seed_video(isolated_db, "BV301", [_full_comment_row(1, "c1", datetime(2024, 5, 1))])
+    collector = _ContractCollector(comments=[{"rpid": "c1", "uid": 1}])
+    service.collector = collector
+
+    asyncio.run(asyncio.wait_for(service.get_comments(_video_target("BV301"), None), timeout=5))
+    comments, source = asyncio.run(
+        asyncio.wait_for(service.get_comments(_video_target("BV301"), None), timeout=5)
+    )
+
+    assert source == "local"
+    assert [row["rpid"] for row in comments] == ["c1"]
+    assert len(collector.calls) == 1
+
+
+def test_get_comments_recollects_video_when_snapshot_expired(
+    service: LotteryService, isolated_db: DatabaseManager
+) -> None:
+    """视频快照超过 TTL 时不复用，避免漏掉缓存之后新增的评论。"""
+    _seed_video(isolated_db, "BV302", [_full_comment_row(1, "old", datetime(2024, 5, 1))])
+    _write_snapshot_file(
+        service._cache.video_snapshot_path("BV302"),
+        {"complete": True, "saved_epoch_s": int(time.time()) - 601, "comment_count": 1},
+    )
+    collector = _ContractCollector(comments=[{"rpid": "old", "uid": 1}, {"rpid": "new", "uid": 2}])
+    service.collector = collector
+
+    comments, source = asyncio.run(
+        asyncio.wait_for(service.get_comments(_video_target("BV302"), None), timeout=5)
+    )
+
+    assert source == "crawler"
+    assert [row["rpid"] for row in comments] == ["old", "new"]
+
+
+def test_get_comments_does_not_mark_video_snapshot_when_save_failed(
+    service: LotteryService, isolated_db: DatabaseManager
+) -> None:
+    """落库失败时不能标记快照，否则下次会把不完整的本地行当作完整候选集。"""
+    collector = _ContractCollector(comments=[{"rpid": "x", "uid": 1}])
+    collector.last_save_result = {"success": False, "saved_count": 0, "warning": "落库失败"}
+    service.collector = collector
+
+    asyncio.run(asyncio.wait_for(service.get_comments(_video_target("BV303"), None), timeout=5))
+
+    assert service._cache.load_video_snapshot("BV303") is None
+
+

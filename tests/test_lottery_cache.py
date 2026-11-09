@@ -229,11 +229,25 @@ def test_load_dynamic_snapshot_tolerates_legacy_payload(cache: LotteryCache, raw
 @pytest.mark.parametrize("raw", ["{坏 JSON", json.dumps([1, 2])])
 def test_load_snapshots_return_none_when_corrupted(cache: LotteryCache, raw: str) -> None:
     """快照文件损坏或顶层不是对象时返回 None。"""
-    path = cache.dynamic_path("D_bad")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(raw, encoding="utf-8")
+    for path in (cache.dynamic_path("D_bad"), cache.video_snapshot_path("BV_bad")):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(raw, encoding="utf-8")
 
     assert cache.load_dynamic_snapshot("D_bad") is None
+    assert cache.load_video_snapshot("BV_bad") is None
+
+
+def test_video_snapshot_round_trip(cache: LotteryCache, tmp_path: Path) -> None:
+    """视频快照标记可往返，缺失时返回 None。"""
+    assert cache.video_snapshot_path("BV1") == tmp_path / "lottery_cache" / "video_BV1.json"
+    assert cache.load_video_snapshot("BV1") is None
+
+    cache.mark_video_snapshot("BV1", 3)
+
+    snapshot = cache.load_video_snapshot("BV1")
+    assert snapshot["complete"] is True
+    assert snapshot["comment_count"] == 3
+    assert type(snapshot["saved_epoch_s"]) is int
 
 
 # ------------------------------------------------- 用户画像缓存

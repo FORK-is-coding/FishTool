@@ -11,7 +11,7 @@
     <!-- 内嵌空图标，避免浏览器默认请求 /favicon.ico 产生无关 404 console 错误。 -->
     <link rel="icon" href="data:,">
     <!-- 版本参数用于让 8000 端口在修复后主动获取最新前端资源，避免浏览器继续使用旧缓存。 -->
-    <link rel="stylesheet" href="/static/css/style.lottery.css?v=split-20260824-ui20261101">
+    <link rel="stylesheet" href="/static/css/style.lottery.css?v=split-20260824-ui20261101-commentmode20261109">
 <link rel="stylesheet" href="/static/css/style.resident.css?v=split-20260824-ui20261101">
 <link rel="stylesheet" href="/static/css/style.base.css?v=split-20260824-ui20261101-v029ui20261101">
 <link rel="stylesheet" href="/static/css/style.pages.css?v=ui-20261026-ui20261101">
@@ -818,7 +818,7 @@
                     <span class="ph-no">06</span>
                     <div class="ph-title"><span class="ch-tag">lottery</span><h1>抽奖工具</h1></div>
                     <span class="ph-hollow" aria-hidden="true">LOTTERY</span>
-                    <p class="subtitle">先核对内容，再采集评论完成真人筛选或随机抽取。视频需登录发布者账号，评论范围包含楼中楼。</p>
+                    <p class="subtitle">先核对内容，再采集评论完成真人筛选或随机抽取。视频可选常规采集，或登录发布者账号后读取包含楼中楼的完整评论。</p>
                 </div>
 
                 <div class="lottery-layout">
@@ -833,6 +833,14 @@
                         <div class="form-group">
                             <label for="lottery-filter-target">视频 BV 号或动态完整链接</label>
                             <input id="lottery-filter-target" class="form-control" type="text" placeholder="BV1xx... 或 https://t.bilibili.com/...">
+                        </div>
+                        <div class="form-group lottery-comment-mode-field">
+                            <label for="lottery-filter-comment-mode">视频评论采集方式</label>
+                            <select id="lottery-filter-comment-mode" class="form-control lottery-select" data-lottery-target="lottery-filter-target" onchange="syncLotteryCommentMode('lottery-filter')">
+                                <option value="standard" selected>常规（任意视频）</option>
+                                <option value="up_fulllist">楼中楼（仅限本人视频）</option>
+                            </select>
+                            <small id="lottery-filter-comment-mode-hint" class="lottery-comment-mode-hint">读取公开评论区，近 10 分钟内有完整快照时直接复用；楼中楼回复可能不全。</small>
                         </div>
                         <div class="form-group">
                             <label for="lottery-focus-template">AI 判定侧重点模板</label>
@@ -868,7 +876,7 @@
                                 <p class="dashboard-eyebrow">RANDOM DRAW</p>
                                 <h2>评论区随机抽奖</h2>
                             </div>
-                            <span class="lottery-badge success">视频评论实时采集</span>
+                            <span class="lottery-badge success">两种采集方式</span>
                         </div>
                         <div class="lottery-draw-controls">
                             <div class="form-group lottery-target-field">
@@ -879,13 +887,14 @@
                                 <label for="lottery-winner-count">中奖人数</label>
                                 <input id="lottery-winner-count" class="form-control" type="number" value="1" min="1" max="100">
                             </div>
-                            <div class="form-group">
-                                <label for="lottery-comment-mode">评论采集方式</label>
-                                <select id="lottery-comment-mode" class="form-control lottery-select">
-                                    <option value="standard">常规（公共接口，任何视频）</option>
-                                    <option value="up_fulllist">楼中楼（仅限本人视频）</option>
-                                </select>
-                            </div>
+                        </div>
+                        <div class="form-group lottery-comment-mode-field">
+                            <label for="lottery-draw-comment-mode">视频评论采集方式</label>
+                            <select id="lottery-draw-comment-mode" class="form-control lottery-select" data-lottery-target="lottery-draw-target" onchange="syncLotteryCommentMode('lottery-draw')">
+                                <option value="standard" selected>常规（任意视频）</option>
+                                <option value="up_fulllist">楼中楼（仅限本人视频）</option>
+                            </select>
+                            <small id="lottery-draw-comment-mode-hint" class="lottery-comment-mode-hint">读取公开评论区，近 10 分钟内有完整快照时直接复用；楼中楼回复可能不全。</small>
                         </div>
                         <div class="lottery-filter-grid" aria-label="候选用户筛选条件">
                             <label class="lottery-toggle lottery-vip-toggle"><input id="lottery-vip-only" type="checkbox"><span>仅限大会员</span></label>
@@ -1026,7 +1035,7 @@
 <script src="/static/js/app.config.js?v=split-20260824-fix20261030-fix20261107"></script>
 <script src="/static/js/app.up.js?v=report5-20261026-fix20261027-ui20261101"></script>
 <script src="/static/js/app.auth.js?v=split-20260824-fix20261027-fix20261030-ui20261101-v029ui20261101"></script>
-<script src="/static/js/app.lottery.js?v=welcomefix-20261026-fix20261027-fix20261030-v029ui20261101-fix20261107"></script>
+<script src="/static/js/app.lottery.js?v=welcomefix-20261026-fix20261027-fix20261030-v029ui20261101-fix20261107-commentmode20261109"></script>
 <script src="/static/js/app.ui.js?v=split-20261026-toast-fix20261030-v029ui20261101"></script>
 <!-- 语义折叠实验面板：依赖 app.core.js 工具与 app.ui.js 的 mountAppModal/showAppConfirm，须在二者之后加载。 -->
 <script src="/static/js/app.comment.semantic.js?v=semantic-20261102-budget20261104-fix20261107"></script>

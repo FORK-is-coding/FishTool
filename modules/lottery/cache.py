@@ -1,4 +1,4 @@
-﻿"""抽奖评论与用户画像的本地 JSON 缓存。
+"""抽奖评论与用户画像的本地 JSON 缓存。
 
 画像缓存（``user_profiles.json``）采用 **schema_version=3** 的分组空间结构：
 
@@ -746,4 +746,3 @@ class LotteryCache:
             os.replace(temporary, target)
         except (OSError, TypeError) as exc:
             logger.warning("写入%s缓存失败，不影响本次结果: %s", label, exc)
-
