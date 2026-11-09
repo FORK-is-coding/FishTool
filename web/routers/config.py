@@ -276,6 +276,12 @@ async def _reject_blocked_resolution(base_url: str) -> None:
             resolved = ipaddress.ip_address(str(info[4][0]).split('%', 1)[0])
         except ValueError:
             continue
+        if resolved.version == 6 and resolved.is_link_local:
+            # 解析结果里的 IPv6 link-local（fe80::/10）是正常现象：Windows 解析本机或局域网
+            # 机器名时，会在局域网 IP 之外附带网卡的 fe80:: 地址。它不是元数据地址，
+            # 也不内嵌 IPv4，按它拦截会误伤用机器名访问的局域网模型服务。
+            # 手写成 [fe80::1] 的字面量仍由 _validate_models_url 拦截。
+            continue
         reason = _blocked_address_reason(resolved)
         if reason:
             raise HTTPException(status_code=400, detail=f"{reason}（域名解析结果）")

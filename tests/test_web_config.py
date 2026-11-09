@@ -593,10 +593,12 @@ def test_llm_models_rejects_metadata_and_link_local(client, monkeypatch, base_ur
     ("resolved", "blocked"),
     [
         ("169.254.169.254", True),   # 169.254.169.254.nip.io 这类域名
+        ("169.254.170.2", True),     # IPv4 link-local 仍拦截（如 ECS 任务凭据端点）
         ("fd00:ec2::254", True),
         ("::ffff:169.254.169.254", True),
         ("127.0.0.1", False),        # 解析到本机的域名照常放行（本地模型服务）
         ("203.0.113.7", False),
+        ("fe80::287f:77ac:2f2:7826", False),  # Windows 解析机器名时附带的网卡地址
     ],
 )
 def test_resolution_check_rejects_domains_resolving_to_metadata(monkeypatch, resolved, blocked):
@@ -617,6 +619,38 @@ def test_resolution_check_rejects_domains_resolving_to_metadata(monkeypatch, res
         with pytest.raises(config_module.HTTPException) as excinfo:
             run()
         assert excinfo.value.status_code == 400
+    else:
+        run()
+
+
+@pytest.mark.parametrize(
+    ("addresses", "blocked"),
+    [
+        # 局域网机器名：IPv4 + 网卡 fe80:: 地址，必须放行
+        (["10.7.5.39", "fe80::287f:77ac:2f2:7826"], False),
+        (["192.168.1.20", "fe80::1"], False),
+        # 只要有一个结果是元数据地址就拦截，跟同时解析出的其他地址无关
+        (["203.0.113.7", "169.254.169.254"], True),
+        (["fe80::1", "fd00:ec2::254"], True),
+    ],
+)
+def test_resolution_check_with_multiple_results(monkeypatch, addresses, blocked):
+    """多个解析结果逐个检查：fe80:: 不再连累同名的局域网 IPv4，元数据地址仍一票否决。"""
+    import asyncio
+    import socket
+
+    async def _fake_resolve(host):
+        return [
+            (socket.AF_INET6 if ":" in item else socket.AF_INET, socket.SOCK_STREAM, 6, "", (item, 0))
+            for item in addresses
+        ]
+
+    monkeypatch.setattr(config_module, "_resolve_host", _fake_resolve)
+    run = lambda: asyncio.run(config_module._reject_blocked_resolution("http://lan-box:1234/v1"))  # noqa: E731
+
+    if blocked:
+        with pytest.raises(config_module.HTTPException):
+            run()
     else:
         run()
 
