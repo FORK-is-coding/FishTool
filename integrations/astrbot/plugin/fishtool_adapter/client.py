@@ -28,7 +28,8 @@ class EngineClient:
         )
 
     def _headers(self) -> dict:
-        return {LOCAL_TOKEN_HEADER: self.sup.token, "Accept": "application/json"}
+        # X-FishTool-Proxy 只用于日志定位，后端不以它做安全判断。
+        return {LOCAL_TOKEN_HEADER: self.sup.token, "Accept": "application/json", "X-FishTool-Proxy": "astrbot"}
 
     async def request(self, method: str, path: str, *, query: dict | None = None, json=None, timeout: float = 120) -> httpx.Response:
         """发请求到引擎，返回原始响应。

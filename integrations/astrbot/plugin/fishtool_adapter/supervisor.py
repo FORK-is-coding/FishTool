@@ -117,6 +117,9 @@ class EngineSupervisor:
             "PYTHONIOENCODING": "utf-8",
             "PYTHONDONTWRITEBYTECODE": "1",
             "NO_PROXY": "127.0.0.1,localhost",
+            # AI 伪人巡检：标记由 AstrBot 启动；后台「允许代发举报」开关只认 "1"，修改后需重启引擎。
+            "FISHTOOL_EMBEDDED_BY": "astrbot",
+            "FISHTOOL_ASTRBOT_ALLOW_PROXY_REPORT": "1" if self.cfg.get("allow_proxy_report") else "0",
         }
         for key in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"):
             env.pop(key, None)

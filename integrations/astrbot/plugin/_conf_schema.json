@@ -41,6 +41,12 @@
         "default": false,
         "description": "禁止 Open API Key 调用写接口与凭据接口",
         "hint": "默认关闭：API Key 与面板登录同等可用。把 API Key 交给第三方时建议打开。"
+      },
+      "allow_proxy_report": {
+        "type": "bool",
+        "default": false,
+        "description": "允许 AI 伪人巡检代发举报",
+        "hint": "默认关闭：插件版只能在 B站页面手动举报。打开后，FishTool 里还需单独开启并确认；举报使用引擎当前登录的 B站账号发出，频繁或不当举报可能导致账号受限。能访问 AstrBot 管理面板或持有 API Key 的人都可能触发，请只在自用时打开。修改后需重启引擎生效。"
       }
     }
   },
