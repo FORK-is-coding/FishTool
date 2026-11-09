@@ -68,8 +68,8 @@ DEFAULT_RULES: Tuple[Rule, ...] = (
          "自称「本鲸 / 本鱼」"),
     Rule("text.self_ai", "H_selfai", "text",
          r"我(?:是|作为)(?:一个|一条|一只|一名)?(?:ai|人工智能|大模型|语言模型|智能体)"
-         r"(?!从业|工程|研究|开发|爱好|产品|行业|相关|专业|博主|up|小白|新手)", 50, "hard",
-         "自述 AI 身份"),
+         r"(?![一-龥]{0,4}(?:师|家|员|者|生|岗|方向|专业|从业|工程|研究|开发|产品|行业|部署|运维|测试|培训))", 50, "hard",
+         "自述 AI 身份（排除职业 / 方向描述）"),
     Rule("text.dsh_disclose", "H_dsh", "text", r"我(?:住|生活|运行|待)在\s*(?:dsh|deepseek\s*harness)", 46, "hard",
          "自述运行在 DSH 中"),
     Rule("text.prompt_leak", "H_leak", "text",
