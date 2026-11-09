@@ -149,59 +149,18 @@ document.querySelectorAll('.nav-item').forEach(item => {
 
 // ============ 工具函数 ============
 
-// 写接口统一防护（#79）：后端对所有非 GET/HEAD/OPTIONS 的 API 请求要求 X-Local-Token。
-// token 由 GET /api/local-token 下发（只对同源页面可读，跨站页面读不到），首次写请求前取一次并缓存。
-const LOCAL_TOKEN_HEADER = 'X-Local-Token';
-const LOCAL_TOKEN_SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS'];
-let localTokenPromise = null;
-
-function isWriteMethod(method) {
-    return LOCAL_TOKEN_SAFE_METHODS.indexOf(String(method || 'GET').toUpperCase()) === -1;
-}
-
-// 取本机写请求 token；并发写请求共用同一个 promise，避免重复拉取。
-async function fetchLocalWriteToken(force) {
-    if (force) localTokenPromise = null;
-    if (!localTokenPromise) {
-        localTokenPromise = fetch(`${API_BASE}/local-token`, { headers: { 'Content-Type': 'application/json' } })
-            .then(response => (response.ok ? response.json() : null))
-            .then(payload => {
-                const data = payload && payload.data ? payload.data : null;
-                return data && typeof data.token === 'string' ? data.token : null;
-            })
-            .catch(() => null);
-    }
-    return localTokenPromise;
-}
-
-// 发请求并按需附带 token；403 local_token_required 时清缓存重取一次（服务重启后 token 会变）。
-async function sendApiRequest(url, options) {
-    const build = async (token) => {
-        const headers = {
-            'Content-Type': 'application/json',
-            ...(options.headers || {})
-        };
-        if (token) headers[LOCAL_TOKEN_HEADER] = token;
-        return fetch(`${API_BASE}${url}`, { ...options, headers });
-    };
-
-    if (!isWriteMethod(options.method)) return build(null);
-    let response = await build(await fetchLocalWriteToken(false));
-    if (response.status === 403) {
-        const payload = await response.clone().json().catch(() => null);
-        if (payload && payload.detail === 'local_token_required') {
-            response = await build(await fetchLocalWriteToken(true));
-        }
-    }
-    return response;
-}
-
 // 统一封装 fetch 请求：自动拼接 API_BASE、带 JSON 头；失败时可选提示。
 // showError=false 用于轮询类静默请求，避免高频失败打断用户操作。
 async function apiRequest(url, options = {}, showError = true) {
     let responseStatus = 0;
     try {
-        const response = await sendApiRequest(url, options);
+        const response = await fetch(`${API_BASE}${url}`, {
+            headers: {
+                'Content-Type': 'application/json',
+                ...options.headers
+            },
+            ...options
+        });
         responseStatus = response.status;
         
         if (!response.ok) {

@@ -244,24 +244,40 @@ def test_generate_retries_without_json_mode_when_endpoint_rejects_it(monkeypatch
 
 
 @pytest.mark.parametrize("detail", [
-    '{"error":{"code":"context_length_exceeded","message":"This model\'s maximum context length is 8192 tokens"}}',
+    # 不少兼容端点拒绝 response_format 时不说原因：中文报文、笼统参数错误、空报文
+    '{"error":{"code":"1210","message":"API 调用参数有误，请检查文档"}}',
+    '{"error":"Invalid argument"}',
     '{"error":{"code":"invalid_request_error","message":"messages is required"}}',
     "",
 ])
-def test_generate_does_not_retry_400_without_json_mode_signal(monkeypatch, detail):
-    """#105：400/422 只要没明确点名 JSON 模式，就不降级重试——重试必然同样失败。
-
-    context_length_exceeded 这类错误重试一次会白烧一整份全量诊断提示词，
-    还把真实原因伪装成“端点拒绝 JSON 模式”。
-    """
+def test_generate_retries_400_even_without_json_mode_keyword(monkeypatch, detail):
+    """400/422 默认去掉参数重试一次：不能要求报文点名 response_format 才降级。"""
     fake = _FakeLLMClient(json_mode_error=_api_error(400, detail=detail))
+    _patch_client(monkeypatch, fake)
+
+    result = asyncio.run(AIDiagnosisReporter().generate(SAMPLE_SELF_DATA))
+
+    assert result["success"] is True
+    assert [c["response_format"] for c in fake.chat_calls] == [{"type": "json_object"}, None]
+
+
+@pytest.mark.parametrize("status", [400, 422])
+def test_generate_does_not_retry_context_length_exceeded(monkeypatch, status):
+    """#106：输入超长与 JSON 模式无关，去掉参数重试也必然失败，不白烧一次全量提示词。"""
+    detail = (
+        '{"error":{"message":"This model\'s maximum context length is 8192 tokens. '
+        + "However, your messages resulted in 9100 tokens. " * 6
+        + '","type":"invalid_request_error","param":"messages","code":"context_length_exceeded"}}'
+    )
+    assert len(detail) > 300  # 长报文：曾因 detail 截断而提不出错误码
+    fake = _FakeLLMClient(json_mode_error=_api_error(status, detail=detail))
     _patch_client(monkeypatch, fake)
 
     result = asyncio.run(AIDiagnosisReporter().generate(SAMPLE_SELF_DATA))
 
     assert result["success"] is False
     assert len(fake.chat_calls) == 1
-    assert fake.chat_calls[0]["response_format"] == {"type": "json_object"}
+    assert "context_length_exceeded" in result["error"]
 
 
 def test_generate_keeps_upstream_error_code_on_context_length_exceeded(monkeypatch):

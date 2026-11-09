@@ -31,6 +31,28 @@ _tag_cloud_tasks = {}
 # 词云后台协程的强引用集合：事件循环只持弱引用，不留引用可能被 GC 提前回收；
 # 任务完成时由 done callback 自动移除，避免长期驻留。
 _tag_cloud_task_refs: set = set()
+# 已结束词云任务在内存中的保留时长（秒），与分析任务一致；超时记录在创建新任务时清理。
+_TAG_CLOUD_TASK_TTL_SECONDS = 3600
+
+
+def _prune_tag_cloud_tasks() -> None:
+    """清理已结束且超过 TTL 的词云任务记录，避免任务表只增不减。
+
+    只在创建新任务时调用；运行中的任务永远不清理，查询接口不会读到「消失的任务」。
+    旧记录没有 ``finished_monotonic`` 时按 ``started_monotonic`` 计时。
+    """
+    if not _tag_cloud_tasks:
+        return
+    now = time.monotonic()
+    expired = [
+        task_id
+        for task_id, task in _tag_cloud_tasks.items()
+        if task.get("status") != "running"
+        and now - float(task.get("finished_monotonic") or task.get("started_monotonic") or now)
+        > _TAG_CLOUD_TASK_TTL_SECONDS
+    ]
+    for task_id in expired:
+        _tag_cloud_tasks.pop(task_id, None)
 
 
 def _update_tag_cloud_task(task_id: str, stage: str, progress: int, message: str) -> None:
@@ -58,11 +80,13 @@ async def _run_tag_cloud_task(task_id: str, request: "TagCloudRequest") -> None:
         _tag_cloud_tasks[task_id].update(
             status="completed", stage="completed", progress=100,
             message="词云生成完成", estimated_seconds=0, result=result,
+            finished_monotonic=time.monotonic(),
         )
     except Exception as exc:
         logger.exception("词云后台任务失败 task=%s", task_id)
         _tag_cloud_tasks[task_id].update(
-            status="failed", message=f"生成词云失败: {exc}", estimated_seconds=0
+            status="failed", message=f"生成词云失败: {exc}", estimated_seconds=0,
+            finished_monotonic=time.monotonic(),
         )
 
 

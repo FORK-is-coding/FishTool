@@ -32,7 +32,7 @@
 """
 from fastapi import APIRouter, HTTPException, Query
 # 从 pydantic 导入符号
-from pydantic import BaseModel, Field, StrictInt, field_validator, model_validator
+from pydantic import BaseModel, Field, StrictInt, field_validator
 # 从 typing 导入符号
 from typing import Optional, Dict, Any, List
 # 从 datetime 导入符号
@@ -123,39 +123,25 @@ _METADATA_HOSTNAMES = {
 }
 
 # IPv4/IPv6 的 link-local 网段（169.254.0.0/16、fe80::/10）。
-# 注意：这里刻意不封 127.0.0.1 和私网段——本地 Ollama / LM Studio 是合法用法。
+# 注意：这里刻意不封 127.0.0.1 和私网段——本地 Ollama / LM Studio / 局域网模型服务
+# 是合法用法，且前端允许传入尚未保存的新地址来刷新模型列表。
 _LINK_LOCAL_NETWORKS = (
     ipaddress.ip_network("169.254.0.0/16"),
     ipaddress.ip_network("fe80::/10"),
 )
 
-# 连接失败 / HTTP 状态码异常的统一定案（#81）：
-# 旧实现分别返回“HTTP 401”“无法连接…”等不同文案，攻击者可据此区分
-# 端口是否开放、服务是否存活，形成端口探测 oracle。
-_UNREACHABLE_MESSAGE = "无法连接模型服务，请检查 Base URL 与 API Key"
 
-
-def _is_private_hostname(hostname: str) -> bool:
-    """判断主机名是否属于环回/私网/本地网络（不触发 DNS 查询）。"""
-    if hostname in {"localhost", "localhost.localdomain"}:
-        return True
-    if hostname.endswith((".localhost", ".local", ".internal", ".lan", ".home", ".corp")):
-        return True
-    return False
-
-
-def _validate_models_url(base_url: str, *, trusted_base_url: str = "") -> str:
+def _validate_models_url(base_url: str) -> str:
     """校验外部模型服务的 Base URL，并拼出标准的 /models 端点（#81）。
 
     校验规则：
     - 只允许 http / https；
     - 拒绝 URL 内嵌用户名/密码（避免把凭据塞进请求地址）；
     - 拒绝云元数据服务地址（169.254.169.254、metadata.google.internal 等）；
-    - 拒绝 IPv4/IPv6 link-local 与未指定地址（0.0.0.0、::）；
-    - 环回/私网/本地主机名默认拒绝，只有与已保存的 ``llm.api_base`` 完全一致时放行。
+    - 拒绝 IPv4/IPv6 link-local 与未指定地址（0.0.0.0、::）。
 
-    最后一条是本地 Ollama / LM Studio 的兼容口子：用户必须先显式保存本地
-    Base URL，服务端才会向该地址发起请求，不能由一次请求临时指定内网目标。
+    环回与私网地址照常放行：本地 / 局域网模型服务是合法用法；本接口只接受本机同源
+    请求，且使用已保存密钥时 base_url 必须等于已保存地址（见 get_llm_models）。
 
     返回：
         拼接好的 /models 请求地址。
@@ -179,10 +165,6 @@ def _validate_models_url(base_url: str, *, trusted_base_url: str = "") -> str:
     if hostname in _METADATA_HOSTNAMES:
         raise HTTPException(status_code=400, detail="Base URL 指向云服务元数据地址，已拒绝")
 
-    trusted = bool(trusted_base_url) and (
-        _normalize_base_url(base_url) == _normalize_base_url(trusted_base_url)
-    )
-
     try:
         address = ipaddress.ip_address(hostname)
     except ValueError:
@@ -196,16 +178,6 @@ def _validate_models_url(base_url: str, *, trusted_base_url: str = "") -> str:
             if network.version == address.version
         ):
             raise HTTPException(status_code=400, detail="Base URL 指向 link-local 地址，已拒绝")
-        if (address.is_private or address.is_loopback or address.is_reserved) and not trusted:
-            raise HTTPException(
-                status_code=400,
-                detail="Base URL 指向内网或环回地址；如使用本地模型服务，请先保存该地址",
-            )
-    elif _is_private_hostname(hostname) and not trusted:
-        raise HTTPException(
-            status_code=400,
-            detail="Base URL 指向内网或环回地址；如使用本地模型服务，请先保存该地址",
-        )
 
     # 兼容用户填写带或不带末尾斜杠的地址，并固定访问标准模型端点。
     return urljoin(parts.geturl().rstrip('/') + '/', 'models')
@@ -233,17 +205,18 @@ class LLMConfigRequest(BaseModel):
     """LLM 配置更新请求体
     # 用新值覆盖旧值，保持数据一致
 
-    字段说明（全部可选，只写入请求里真正提供的字段，未提供的一律保持原值）：
-    - api_key: 大模型 API 密钥，保存时走加密存储；空白视为非法，不是“清空密钥”
+    字段说明：
+    - api_key: 必填，大模型 API 密钥，保存时走加密存储；空白视为非法（不是“清空密钥”）
     - base_url: API 地址，省略则保留已保存地址
     - model: 模型名，省略则保留已保存模型
     - daily_token_limit: 每日 token 上限，可选
 
-    为什么不再给 base_url/model 默认值（#91）：
-    旧模型给这两个字段填了 OpenAI 默认值，于是“只想换密钥”的请求会把
-    用户已保存的地址与模型悄悄重置回默认值。
+    api_key 保持必填：改地址必须同时提供密钥，不能把已保存密钥与新地址拼接
+    （与 PUT /config/ 拒写 llm.api_base 的约束一致）。
+    base_url/model 不再给 OpenAI 默认值（#91）：否则“只换密钥”的请求会把
+    已保存的地址与模型悄悄重置回默认值。
     """
-    api_key: Optional[str] = None
+    api_key: str
     base_url: Optional[str] = None
     model: Optional[str] = None
     # 全局每日 token 上限：0 表示不限制；None 表示不修改
@@ -260,14 +233,6 @@ class LLMConfigRequest(BaseModel):
         if not value:
             raise ValueError('字段不能为空字符串；不修改请省略该字段')
         return value
-
-    @model_validator(mode='after')
-    def _require_at_least_one_field(self):
-        """至少要提供一个要更新的字段，空请求体 422（#91）。"""
-        provided = (self.api_key, self.base_url, self.model, self.daily_token_limit)
-        if all(item is None for item in provided):
-            raise ValueError('至少需要提供一个要更新的字段')
-        return self
 
 
 class LLMModelsRequest(BaseModel):
@@ -430,43 +395,38 @@ async def get_llm_models(request: LLMModelsRequest):
         if not base_url:
             return {"success": False, "models": [], "message": "请先填写 Base URL"}
 
-        # 空白字符串与 None 等价，都表示“本次没有提供密钥”（#87）：
-        # 前端页面加载时会带 api_key=""，不能据此判定用户填了空密钥。
-        provided_key = (request.api_key or '').strip()
-        if provided_key:
-            api_key = provided_key
-        else:
-            # 回退已保存密钥；此时只允许访问已保存的地址，
+        if request.api_key is None:
+            # None 表示请求未提供密钥，回退已保存密钥；此时只允许访问已保存的地址，
             # 防止调用方指定任意 base_url 把已保存密钥随 Authorization 头发出去。
+            # 前端在输入框为空时省略 api_key 字段（#87），走的就是这条回退路径。
             api_key = (config.get_secret('llm_api_key') or '').strip()
             if api_key and _normalize_base_url(base_url) != _normalize_base_url(saved_base_url):
                 raise HTTPException(
                     status_code=400,
                     detail="使用已保存的 API Key 时只能查询已保存的 Base URL；切换地址请同时填写 API Key",
                 )
+        else:
+            # 空字符串表示用户明确未填写，不能回退旧密钥。
+            api_key = request.api_key.strip()
         if not api_key:
             return {"success": False, "models": [], "message": "请先填写 API Key"}
 
-        # 地址白名单校验（#81）：只允许 http/https，拒绝内嵌凭据、
-        # 云元数据地址与 link-local；环回/私网只允许访问已保存的地址。
-        models_url = _validate_models_url(base_url, trusted_base_url=saved_base_url)
+        # 地址校验（#81）：只允许 http/https，拒绝内嵌凭据、云元数据地址、
+        # link-local 与未指定地址；本地 / 局域网模型服务照常可用。
+        models_url = _validate_models_url(base_url)
         headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
-        # 禁止跟随重定向：否则公开地址可以 302 到内网地址，绕过上面的地址校验。
+        # 禁止跟随重定向：否则公开地址可以 302 到元数据地址，绕过上面的地址校验。
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
             response = await client.get(models_url, headers=headers)
         if response.status_code >= 300:
-            # 不区分“连不上”与“HTTP 4xx/5xx”，统一文案，避免被用来探测端口/服务（#81）。
-            logger.warning(
-                "模型列表请求失败：status=%s url=%s", response.status_code, models_url
-            )
-            return {"success": False, "models": [], "message": _UNREACHABLE_MESSAGE}
+            # 不返回完整响应正文，避免第三方错误内容污染前端或泄露敏感信息。
+            return {
+                "success": False,
+                "models": [],
+                "message": f"模型列表请求失败（HTTP {response.status_code}）"
+            }
 
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            # 只对“响应正文不是 JSON”给出专门提示，其余异常一律走统一文案
-            logger.warning("模型服务返回非法 JSON: %s", exc, exc_info=True)
-            return {"success": False, "models": [], "message": "模型服务返回的不是有效 JSON"}
+        payload = response.json()
         raw_models = payload.get('data', []) if isinstance(payload, dict) else []
         models: List[str] = []
         for item in raw_models:
@@ -483,19 +443,17 @@ async def get_llm_models(request: LLMModelsRequest):
         raise
     except httpx.TimeoutException as exc:
         logger.warning("获取模型列表超时: %s", exc, exc_info=True)
-        return {"success": False, "models": [], "message": _UNREACHABLE_MESSAGE}
+        return {"success": False, "models": [], "message": "获取模型列表超时，请检查 Base URL"}
     except httpx.RequestError as exc:
         logger.warning("连接模型服务失败: %s", exc, exc_info=True)
-        # 与 HTTP 错误共用一个文案：细节只留在服务端日志里，前端拿到的信息不构成探测面
-        return {"success": False, "models": [], "message": _UNREACHABLE_MESSAGE}
+        return {"success": False, "models": [], "message": f"无法连接模型服务：{exc}"}
     except ValueError as exc:
-        # 地址解析等意料之外的取值错误也统一文案：不同异常文本会变成探测信号
-        logger.warning("模型列表请求参数无效: %s", exc, exc_info=True)
-        return {"success": False, "models": [], "message": _UNREACHABLE_MESSAGE}
+        logger.warning("模型服务返回非法 JSON: %s", exc, exc_info=True)
+        return {"success": False, "models": [], "message": "模型服务返回的不是有效 JSON"}
     except Exception as exc:
-        # 兜底保护路由稳定性；细节只写日志，不回传给前端（#81）
+        # 兜底保护路由稳定性，同时保留足够的错误上下文帮助排查。
         logger.error("获取模型列表失败: %s", exc, exc_info=True)
-        return {"success": False, "models": [], "message": _UNREACHABLE_MESSAGE}
+        return {"success": False, "models": [], "message": f"获取模型列表失败：{exc}"}
 
 
 @router.post("/llm")
@@ -517,11 +475,10 @@ async def update_llm_config(request: LLMConfigRequest):
         # 赋值并准备后续使用
         config = ConfigManager()
         
-        # 只写请求里真正提供的字段（#91）：
-        # 旧实现给 base_url/model 填了 OpenAI 默认值并总是写入，导致“只想换密钥”
-        # 的请求把已保存的地址与模型一起重置掉；空 key 还会把已存密钥清空。
-        if request.api_key is not None:
-            config.save_secret('llm_api_key', request.api_key)
+        # 密钥必填并总是写入；base_url/model 只写请求里真正提供的（#91）：
+        # 旧实现给这两个字段填了 OpenAI 默认值并总是写入，导致“只想换密钥”
+        # 的请求把已保存的地址与模型一起重置掉。
+        config.save_secret('llm_api_key', request.api_key)
         if request.base_url is not None:
             config.set('llm.api_base', request.base_url)
         if request.model is not None:

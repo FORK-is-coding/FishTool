@@ -145,7 +145,6 @@ def test_lottery_button_endpoints_return_non_404(monkeypatch: pytest.MonkeyPatch
         无；任一按钮接口为 404 时测试失败。
     """
     from fastapi.testclient import TestClient
-    from web.local_guard import get_local_guard
     from web.main import app
     from web.routers import lottery
 
@@ -185,16 +184,14 @@ def test_lottery_button_endpoints_return_non_404(monkeypatch: pytest.MonkeyPatch
         "estimated_seconds": 0, "result": {}, "started_monotonic": 0,
     }
 
-    with TestClient(app, base_url="http://127.0.0.1:8000") as client:
-        # 真实 app 的写接口要求本机 token（全局写保护中间件）；测试直接取进程内单例的 token。
-        headers = {"X-Local-Token": get_local_guard().issue_token()}
+    with TestClient(app) as client:
         checks = [
-            ("内容预览", client.post("/api/lottery/preview", json={"target": "BV1xx411c7mD"}, headers=headers), 200),
-            ("真人筛选", client.post("/api/lottery/filter/tasks", json={"target": "BV1xx411c7mD"}, headers=headers), 202),
-            ("单UID快筛", client.post("/api/lottery/quick-filter", json={"uid": 42}, headers=headers), 200),
-            ("中奖名单校验", client.post("/api/lottery/verify-winners", json={"winners": [{"uid": 42}]}, headers=headers), 200),
-            ("随机抽奖", client.post("/api/lottery/draw/tasks", json={"target": "BV1xx411c7mD"}, headers=headers), 202),
-            ("任务轮询", client.get("/api/lottery/tasks/route-proof", headers=headers), 200),
+            ("内容预览", client.post("/api/lottery/preview", json={"target": "BV1xx411c7mD"}), 200),
+            ("真人筛选", client.post("/api/lottery/filter/tasks", json={"target": "BV1xx411c7mD"}), 202),
+            ("单UID快筛", client.post("/api/lottery/quick-filter", json={"uid": 42}), 200),
+            ("中奖名单校验", client.post("/api/lottery/verify-winners", json={"winners": [{"uid": 42}]}), 200),
+            ("随机抽奖", client.post("/api/lottery/draw/tasks", json={"target": "BV1xx411c7mD"}), 202),
+            ("任务轮询", client.get("/api/lottery/tasks/route-proof"), 200),
         ]
 
     for button_name, response, expected_status in checks:
@@ -343,36 +340,14 @@ def test_lottery_routes_are_mounted() -> None:
 
 
 def test_verify_winners_without_draw_returns_product_message(monkeypatch: pytest.MonkeyPatch) -> None:
-    """没有任何中奖名单来源（无 winners、无 task_id）时返回可直接展示的产品提示。"""
+    """服务端没有中奖名单时必须返回前端可直接展示的产品提示。"""
     from fastapi.testclient import TestClient
-    from web.local_guard import get_local_guard
     from web.main import app
     from web.routers import lottery
 
-    # #80：不再存在跨任务的全局中奖名单回退
-    assert not hasattr(lottery, "_latest_winners")
-    monkeypatch.setattr(lottery, "_tasks", {})
-    with TestClient(app, base_url="http://127.0.0.1:8000") as client:
-        headers = {"X-Local-Token": get_local_guard().issue_token()}
-        response = client.post("/api/lottery/verify-winners", json={}, headers=headers)
+    monkeypatch.setattr(lottery, "_latest_winners", [])
+    with TestClient(app) as client:
+        response = client.post("/api/lottery/verify-winners", json={})
 
     assert response.status_code == 400
     assert response.json()["detail"] == "请先进行抽奖！"
-
-
-def test_verify_winners_with_unknown_task_returns_404(monkeypatch: pytest.MonkeyPatch) -> None:
-    """#80：给了不存在的 task_id 时明确 404，而不是退回到任何历史名单。"""
-    from fastapi.testclient import TestClient
-    from web.local_guard import get_local_guard
-    from web.main import app
-    from web.routers import lottery
-
-    monkeypatch.setattr(lottery, "_tasks", {})
-    with TestClient(app, base_url="http://127.0.0.1:8000") as client:
-        headers = {"X-Local-Token": get_local_guard().issue_token()}
-        response = client.post(
-            "/api/lottery/verify-winners", json={"task_id": "gone"}, headers=headers
-        )
-
-    assert response.status_code == 404
-    assert "不存在或已过期" in response.json()["detail"]

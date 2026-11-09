@@ -36,17 +36,14 @@ def test_readme_points_logs_to_data_dir():
     assert not re.search(r"日志在 `logs/`", text)
 
 
-def test_config_yaml_has_no_dead_server_block():
-    """监听端口来自命令行参数（app.py 的 --port，默认 8000），yaml 里的 server 段没人读。"""
-    text = _read("config/config.yaml")
-    assert not re.search(r"(?m)^server:", text), "config/config.yaml 的 server 段是死配置"
-    assert "port: 8080" not in text
-
-
 def test_docs_and_entrypoint_agree_on_default_port():
-    """文档说的 8000 必须和入口的默认值一致（曾经出现文档 8000 / 配置 8080 的错位）。"""
+    """文档说的默认端口必须和入口一致（曾经出现文档 8000 / 配置 8080 的错位）。
+
+    只检查“把 8080 写成默认访问地址”的说法；文档可以合法地提到 8080（例如 CORS
+    同时放行 8000/8080），不能用“全文不许出现 8080”来卡。
+    """
     app = (ROOT / "app.py").read_text("utf-8")
-    assert 'default=8000' in app
+    assert re.search(r"default\s*=\s*8000", app), "app.py 的默认端口不再是 8000，请同步文档"
     for name in ("README.md", "QUICKSTART.md", "STRUCTURE.md"):
         text = _read(name)
-        assert "8080" not in text, f"{name} 仍在写 8080"
+        assert not re.search(r"https?://(?:localhost|127\.0\.0\.1):8080", text), f"{name} 把 8080 写成了访问地址"

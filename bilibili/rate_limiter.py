@@ -262,22 +262,22 @@ class RateLimiter:
         try:
             key = f'{budget_key}:{cookie_key}'
             effective_limit = min(limit, self.cookie_budget_limit)
-            # 等待放到共享锁外：否则一个 Cookie 的等待会阻塞其它 Cookie 的预算检查。
-            waited = False
-            while True:
-                async with self._lock:
-                    history = self.cookie_request_history.setdefault(key, deque())
-                    now = time.monotonic()
-                    while history and now - history[0] >= window:
-                        history.popleft()
-                    if len(history) < effective_limit or waited:
-                        # 等待过一次后条件仍不满足（时钟未推进/并发抢先）也放行本次，
-                        # 避免 sleep 无法推进时钟时死循环；下一轮请求会继续按窗口限流。
-                        history.append(now)
-                        return
-                    wait_seconds = max(window - (now - history[0]), 0.0)
+            # 锁内只预约本次的发送时刻并写入窗口，sleep 放到共享锁外：
+            # 否则一个 Cookie 的等待会阻塞其它 Cookie 的预算检查。
+            # 预约时刻 = 窗口内倒数第 limit 次请求滑出窗口的时刻，因此并发请求会
+            # 各自拿到不同的时刻，任一窗口内放行次数都不超过 limit。
+            async with self._lock:
+                history = self.cookie_request_history.setdefault(key, deque())
+                now = time.monotonic()
+                while history and now - history[0] >= window:
+                    history.popleft()
+                slot = now
+                if len(history) >= effective_limit:
+                    slot = max(now, history[-effective_limit] + window)
+                history.append(slot)
+                wait_seconds = slot - now
+            if wait_seconds > 0:
                 logger.info("%s接口触发单Cookie滑动窗口，等待%.2f秒", budget_key, wait_seconds)
-                waited = True
                 await asyncio.sleep(wait_seconds)
         except Exception as exc:
             logger.error("%s接口滑动窗口限频失败: %s", budget_key, exc, exc_info=True)

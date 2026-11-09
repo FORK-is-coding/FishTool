@@ -105,6 +105,7 @@ def client(monkeypatch):
     monkeypatch.setattr(lottery_module, "get_service", lambda: service)
     monkeypatch.setattr(lottery_module, "fetch_target_metadata", _fake_fetch_target)
     monkeypatch.setattr(lottery_module, "_tasks", {})
+    monkeypatch.setattr(lottery_module, "_latest_winners", [])
     monkeypatch.setattr(lottery_module, "_run_filter_task", _noop_async)
     monkeypatch.setattr(lottery_module, "_run_draw_task", _noop_async)
 
@@ -233,92 +234,20 @@ def test_quick_filter_rejects_non_positive_uid(client):
 # ---------------------------------------------------------------------------
 
 
-def _seed_draw_task(task_id: str, winners, status: str = "completed", kind: str = "draw"):
-    """在内存任务表里预置一条抽奖任务，供 verify-winners 按 task_id 读取。"""
-    lottery_module._tasks[task_id] = {
-        "task_id": task_id,
-        "kind": kind,
-        "status": status,
-        "stage": status,
-        "progress": 100,
-        "message": "完成",
-        "estimated_seconds": 0,
-        "started_monotonic": 1.0,
-        "result": {"winners": winners},
-    }
-    return task_id
-
-
 def test_verify_winners_requires_non_empty_list(client):
-    """既未带名单也没给 task_id 时应返回 400，不再回退全局快照。"""
+    """请求与服务端均无名单时应返回 400。"""
     response = client.post("/api/lottery/verify-winners", json={"winners": []})
     assert response.status_code == 400
     assert response.json()["detail"] == "请先进行抽奖！"
 
 
-def test_verify_winners_reads_winners_from_task(client):
-    """#80：未带名单时按 task_id 读取该次抽奖的中奖名单。"""
-    _seed_draw_task("draw-1", [{"uid": 5, "uname": "旧中奖者"}])
+def test_verify_winners_reuses_latest_snapshot(client, monkeypatch):
+    """请求未带名单时应复用最近一次中奖快照。"""
+    monkeypatch.setattr(lottery_module, "_latest_winners", [{"uid": 5, "uname": "旧中奖者"}])
 
-    response = client.post("/api/lottery/verify-winners", json={"task_id": "draw-1"})
+    response = client.post("/api/lottery/verify-winners", json={})
     assert response.status_code == 200
     assert _FakeLotteryService.state["last_winners"] == [{"uid": 5, "uname": "旧中奖者"}]
-
-
-def test_verify_winners_does_not_use_latest_draw_of_another_task(client):
-    """#80 回归：同时存在多次抽奖时按 task_id 取对应任务，不会错配到最近一次。"""
-    _seed_draw_task("draw-a", [{"uid": 1}])
-    _seed_draw_task("draw-b", [{"uid": 2}])
-
-    client.post("/api/lottery/verify-winners", json={"task_id": "draw-a"})
-    assert _FakeLotteryService.state["last_winners"] == [{"uid": 1}]
-
-    client.post("/api/lottery/verify-winners", json={"task_id": "draw-b"})
-    assert _FakeLotteryService.state["last_winners"] == [{"uid": 2}]
-
-
-def test_verify_winners_request_list_wins_over_task_id(client):
-    """请求显式带名单时以请求为准，task_id 不再参与。"""
-    _seed_draw_task("draw-1", [{"uid": 5}])
-    winners = [{"uid": 8, "uname": "指定"}]
-
-    response = client.post("/api/lottery/verify-winners", json={"winners": winners, "task_id": "draw-1"})
-    assert response.status_code == 200
-    assert _FakeLotteryService.state["last_winners"] == winners
-
-
-def test_verify_winners_unknown_task_returns_404(client):
-    """#80：task_id 不存在时明确报错，而不是静默使用其它任务的名单。"""
-    response = client.post("/api/lottery/verify-winners", json={"task_id": "no-such-task"})
-    assert response.status_code == 404
-    assert "不存在或已过期" in response.json()["detail"]
-
-
-def test_verify_winners_rejects_non_draw_task(client):
-    """筛选任务没有中奖名单，按参数错误 400 处理。"""
-    _seed_draw_task("filter-1", [], kind="filter")
-
-    response = client.post("/api/lottery/verify-winners", json={"task_id": "filter-1"})
-    assert response.status_code == 400
-    assert "不是随机抽奖任务" in response.json()["detail"]
-
-
-@pytest.mark.parametrize("status", ["running", "cancelled", "failed"])
-def test_verify_winners_rejects_unfinished_draw_task(client, status):
-    """未完成的抽奖任务没有可校验的名单，返回 409。"""
-    _seed_draw_task("draw-x", [], status=status)
-
-    response = client.post("/api/lottery/verify-winners", json={"task_id": "draw-x"})
-    assert response.status_code == 409
-
-
-def test_verify_winners_reports_completed_draw_without_winners(client):
-    """完成但没有中奖者时给出可读错误，而不是空名单 500/400 混淆。"""
-    _seed_draw_task("draw-empty", [])
-
-    response = client.post("/api/lottery/verify-winners", json={"task_id": "draw-empty"})
-    assert response.status_code == 400
-    assert response.json()["detail"] == "该抽奖任务没有中奖名单，请重新抽奖"
 
 
 def test_verify_winners_uses_request_list(client):
@@ -629,12 +558,13 @@ def test_run_draw_task_rejects_reversed_date_range(monkeypatch):
     assert "draw_kwargs" not in _FakeLotteryService.state
 
 
-def test_run_draw_task_success_records_winners_on_task(monkeypatch):
-    """抽奖成功应落 completed，中奖名单写入该任务结果（不再有模块级全局快照）。"""
+def test_run_draw_task_success_updates_latest_winners(monkeypatch):
+    """抽奖成功应落 completed 并把中奖名单写入快照。"""
     _FakeLotteryService.reset()
     monkeypatch.setattr(lottery_module, "get_service", lambda: _FakeLotteryService())
     monkeypatch.setattr(lottery_module, "fetch_target_metadata", _fake_fetch_target)
     monkeypatch.setattr(lottery_module, "_tasks", {})
+    monkeypatch.setattr(lottery_module, "_latest_winners", [])
     task_id = lottery_module._create_task("draw")
 
     request = type(
@@ -657,9 +587,7 @@ def test_run_draw_task_success_records_winners_on_task(monkeypatch):
 
     task = lottery_module._tasks[task_id]
     assert task["status"] == "completed"
-    assert task["result"]["winners"] == [{"uid": 9, "uname": "中奖者"}]
-    # #80：名单只挂在任务上，模块级全局变量已移除
-    assert not hasattr(lottery_module, "_latest_winners")
+    assert lottery_module._latest_winners == [{"uid": 9, "uname": "中奖者"}]
 
     kwargs = _FakeLotteryService.state["draw_kwargs"]
     assert kwargs["vip_only"] is True
@@ -714,10 +642,12 @@ def test_cancelled_task_is_not_reused_by_same_body(client, spawned):
     assert second["task_id"] != first["task_id"]
 
 
-def test_cancel_stops_running_draw_task(monkeypatch):
-    """真实后台协程卡在等待中时取消：协程收到 CancelledError、强引用释放、状态落 cancelled。"""
+def test_cancel_stops_running_draw_and_keeps_latest_winners(monkeypatch):
+    """真实后台协程卡在等待中时取消：协程收到 CancelledError、强引用释放、中奖名单快照不变。"""
+    previous = [{"uid": 1, "uname": "上一轮中奖者"}]
     monkeypatch.setattr(lottery_module, "_tasks", {})
     monkeypatch.setattr(lottery_module, "_background_tasks", {})
+    monkeypatch.setattr(lottery_module, "_latest_winners", list(previous))
     monkeypatch.setattr(lottery_module, "fetch_target_metadata", _fake_fetch_target)
     reached = {}
 
@@ -759,7 +689,7 @@ def test_cancel_stops_running_draw_task(monkeypatch):
     assert task["status"] == "cancelled"
     assert task["stage"] == "cancelled"
     assert task_id not in lottery_module._background_tasks
-    assert task["result"] is None
+    assert lottery_module._latest_winners == previous
     assert lottery_module._find_running_task("fp-draw") is None
 
 
@@ -837,28 +767,23 @@ def test_task_lifecycle_is_persisted_and_queryable_after_restart(client, spawned
     assert "request" not in data
 
 
-def test_startup_marks_running_interrupted_and_keeps_winners_per_task(client, spawned, task_db):
-    """启动收尾：遗留 running 标为 interrupted，不自动续跑；中奖名单仍按任务可读。"""
+def test_startup_marks_running_interrupted_and_restores_winners(client, spawned, task_db, monkeypatch):
+    """启动收尾：遗留 running 标为 interrupted，不自动续跑；并恢复最近一次中奖名单。"""
     from web.routers import lottery_store
 
     lottery_store.create("done-draw", "draw", {"target": "BV1", "winner_count": 1})
     lottery_store.finish("done-draw", "completed", "完成", {"winners": [{"uid": 9}]})
     lottery_store.create("left-running", "filter", {"target": "BV1xx411c7mD"})
+    monkeypatch.setattr(lottery_module, "_latest_winners", [])
 
     outcome = lottery_module.recover_tasks_on_startup(retention_days=7)
 
     assert outcome["interrupted"] == 1
     assert _row(task_db, "left-running").status == "interrupted"
-    # #80：不再把「最近一次中奖名单」塞回模块级全局变量
-    assert not hasattr(lottery_module, "_latest_winners")
+    assert lottery_module._latest_winners == [{"uid": 9}]
     assert spawned == []  # 不自动续跑
     data = client.get("/api/lottery/tasks/left-running").json()["data"]
     assert data["status"] == "interrupted"
-
-    # 重启后内存任务表为空，verify-winners 仍能按 task_id 从持久化记录读到该次名单
-    response = client.post("/api/lottery/verify-winners", json={"task_id": "done-draw"})
-    assert response.status_code == 200
-    assert _FakeLotteryService.state["last_winners"] == [{"uid": 9}]
 
 
 def test_resume_interrupted_task_reuses_same_id_and_params(client, spawned, task_db):

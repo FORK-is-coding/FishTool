@@ -199,8 +199,19 @@ def test_status_with_valid_cookie(client):
     assert body["logged_in"] is True
     assert body["user"] == {"uid": 42, "name": "测试UP"}
     assert body["cookie_masked"]
-    assert _FakeCookieLoginHelper.last_validate_kwargs == {"allow_during_cooldown": True}
-    assert _FakeCookieLoginHelper.last_user_kwargs == {"allow_during_cooldown": True}
+
+
+def test_status_never_skips_domain_cooldown(client):
+    """/auth/status 每次加载页面都会调用：不能跳过分域冷却（否则冷却期刷新会持续外发 nav，
+    把 15 分钟冷却一路翻倍）。只有扫码轮询这类用户显式的一次性动作才允许跳过。"""
+    _FakeCookieLoginHelper.last_validate_kwargs = {"sentinel": True}
+    _FakeCookieLoginHelper.last_user_kwargs = {"sentinel": True}
+    _FakeConfig.store[auth_module.COOKIE_SECRET_KEY] = "SESSDATA=abcdefgh1234; bili_jct=zzz"
+
+    client.get("/api/auth/status")
+
+    assert not _FakeCookieLoginHelper.last_validate_kwargs.get("allow_during_cooldown")
+    assert not _FakeCookieLoginHelper.last_user_kwargs.get("allow_during_cooldown")
 
 
 def test_status_with_invalid_cookie_marks_invalid(client):

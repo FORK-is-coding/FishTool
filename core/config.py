@@ -121,8 +121,17 @@ class ConfigManager:
                 # 密钥文件被截断/损坏（例如写盘时进程被杀）时，旧行为是在这里抛
                 # ValueError 让整个进程起不来。改为备份损坏文件后重建新密钥（#124）。
                 backup = self._backup_broken_file(self.key_path)
+                # .secrets 必须一并改名备份：新密钥解不开旧密文，下一次 save_secret
+                # 就会用新密钥覆盖 .secrets，旧 Cookie / API Key 即使找回旧 .key 也无法恢复。
+                # 备份后 .secrets 不存在，_load_config 按“首次运行”处理，不会再触发解密报错。
+                secrets_backup = (
+                    self._backup_broken_file(self.secrets_path)
+                    if self.secrets_path.exists() else None
+                )
                 logger.error(
-                    f"加密密钥文件损坏，已备份到 {backup} 并重新生成新密钥: {e}"
+                    f"加密密钥文件损坏，已备份到 {backup}"
+                    f"{f'（加密配置已备份到 {secrets_backup}）' if secrets_backup else ''}"
+                    f"，并重新生成新密钥；恢复旧密钥后把两个备份改回原名即可找回原有登录态: {e}"
                 )
 
         # 首次运行（或密钥损坏后重建），生成新的随机密钥
@@ -312,11 +321,36 @@ class ConfigManager:
                 secrets['llm_api_key'] = legacy
                 self._write_secrets()
                 logger.warning("已把明文 llm.api_key 迁移进加密 secrets")
-            # secrets 里本来就有密钥时，以 secrets 为准，只清掉明文残留
+            # secrets 里本来就有密钥时，以 secrets 为准，只清掉明文残留。
+            # 明文可能在 config.yaml，也可能在 user_config.yaml（合并后才出现在 _config 里）：
+            # 必须从它实际所在的文件里删，并且只重写那个文件的原始内容。
+            # 旧做法 save_config() 会把合并后的配置写进 config.yaml，而 user_config.yaml
+            # 里的明文原样保留，于是每次实例化都重写一次 config.yaml，迁移永远完成不了。
+            for path in (self.main_config_path, self.user_config_path):
+                self._strip_plaintext_api_key_from_file(path)
             llm.pop('api_key', None)
-            self.save_config()
         except Exception as e:  # noqa: BLE001 - 迁移失败不应阻断启动
             logger.error(f"迁移明文 llm.api_key 失败，保留原值待下次重试: {e}", exc_info=True)
+
+    def _strip_plaintext_api_key_from_file(self, path: Path) -> None:
+        """从单个 YAML 文件里删除非空的明文 ``llm.api_key``，只重写该文件本身。
+
+        文件不存在、读不出、或其中没有非空明文时不做任何写入，保证迁移幂等。
+
+        Args:
+            path: config.yaml 或 user_config.yaml 的路径。
+        """
+        if not path.exists():
+            return
+        raw = yaml.safe_load(path.read_text(encoding='utf-8'))
+        llm_node = raw.get('llm') if isinstance(raw, dict) else None
+        value = llm_node.get('api_key') if isinstance(llm_node, dict) else None
+        if not isinstance(value, str) or not value.strip():
+            return
+        llm_node.pop('api_key', None)
+        payload = yaml.dump(raw, allow_unicode=True, default_flow_style=False)
+        self._atomic_write_text(path, payload, mode=0o644)
+        logger.warning("已从 %s 删除明文 llm.api_key", path.name)
     
     def _migrate_llm_daily_limit(self, user_config: Dict[str, Any]) -> None:
         """把 config.yaml 中仍为旧默认值的全局每日 token 上限迁移到新默认值（只做一次）。

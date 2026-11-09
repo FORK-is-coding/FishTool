@@ -49,6 +49,8 @@ _FINISHED_TASK_TTL_SECONDS = 3600
 _INTERNAL_TASK_KEYS = frozenset({"started_monotonic", "finished_monotonic", "fingerprint"})
 # 运行中后台协程的强引用（task_id -> asyncio.Task），防止事件循环只持弱引用导致任务被回收；完成后自动释放。
 _background_tasks: Dict[str, "asyncio.Task[None]"] = {}
+# 最近一次抽奖的中奖名单快照，供校验接口复用。
+_latest_winners: List[Dict[str, Any]] = []
 
 
 # 视频或动态目标请求体。
@@ -73,10 +75,8 @@ class QuickFilterRequest(BaseModel):
 class VerifyWinnersRequest(BaseModel):
     """中奖名单一键真人校验请求。"""
 
-    # 待校验的中奖名单，可选：显式传入优先，否则按 task_id 回读该任务的结果。
-    winners: List[Dict[str, Any]] = Field(default_factory=list, max_length=100, description="待校验的中奖名单；为空时按 task_id 读取该次抽奖的结果")
-    # 抽奖任务 ID，可选：未显式传 winners 时用它定位中奖名单，避免跨任务错配。
-    task_id: Optional[str] = Field(None, max_length=64, description="抽奖任务ID；未传 winners 时按它读取该任务的中奖名单")
+    # 待校验的中奖名单，可选。
+    winners: List[Dict[str, Any]] = Field(default_factory=list, max_length=100, description="当前抽奖中奖名单；为空时读取服务端最近一次结果")
     # AI 判定侧重点模板，可选。
     focus_template: Optional[str] = Field(None, max_length=1200, description="AI判定侧重点模板")
 
@@ -329,6 +329,8 @@ async def _run_filter_task(task_id: str, request: FilterTaskRequest) -> None:
 # 后台执行随机抽奖全流程。
 async def _run_draw_task(task_id: str, request: DrawTaskRequest) -> None:
     """后台执行目标复核、评论数据准备和随机抽取。"""
+    # 修改模块级最近中奖名单。
+    global _latest_winners
     # 全程异常捕获，失败统一落库。
     try:
         # 获取抽奖服务单例。
@@ -355,15 +357,15 @@ async def _run_draw_task(task_id: str, request: DrawTaskRequest) -> None:
             include_indeterminate=request.include_indeterminate,
             focus_template=request.focus_template,
         )
-        # 中奖名单随任务结果一起保存（result.winners），校验接口按 task_id 回读，
-        # 不再维护跨任务的模块级快照。
+        # 保存本次中奖名单快照，供后续校验接口复用。
+        _latest_winners = [dict(item) for item in result.get("winners") or []]
         # 成功后写入中奖名单与完整结果。
         _tasks[task_id].update(
             status="completed", stage="completed", progress=100,
             message="抽奖完成，中奖名单已生成", estimated_seconds=0, result=result,
         )
     except asyncio.CancelledError:
-        # 用户取消：不会写入任何中奖名单，任务保持 cancelled，校验接口按 task_id 也读不到名单。
+        # 用户取消：中奖名单只在上方成功分支写入，取消时 _latest_winners 保持上一次结果，不会出现半份名单。
         _mark_cancelled(task_id)
         raise
     except Exception as exc:
@@ -406,47 +408,12 @@ async def quick_filter(request: QuickFilterRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=502, detail=f"UID分析失败: {exc}") from exc
 
 
-def _task_snapshot(task_id: str) -> Optional[Dict[str, Any]]:
-    """按 task_id 取任务状态：先查内存任务表，再回落持久化记录。
-
-    Args:
-        task_id: 任务 ID。
-
-    Returns:
-        Optional[Dict[str, Any]]: 任务状态；不存在时返回 None。
-    """
-    # 同一次服务生命周期内，内存表是最新且最快的来源。
-    task = _tasks.get(task_id)
-    if task is not None:
-        return task
-    # 服务重启后内存会清空，此时回读持久化记录（恢复逻辑同样用它）。
-    return lottery_store.load(task_id)
-
-
 @router.post("/verify-winners")
 # 中奖名单真人校验接口。
 async def verify_winners(request: VerifyWinnersRequest) -> Dict[str, Any]:
-    """优先复用本地画像，一键校验请求名单或指定抽奖任务的中奖名单。"""
-    # 请求显式携带名单时以请求为准。
-    winners = [dict(item) for item in request.winners] if request.winners else []
-    # 未携带名单但给了 task_id 时，按任务回读该次抽奖的结果，避免跨任务错配。
-    if not winners and request.task_id:
-        # task_id 指向的任务必须真实存在。
-        task = _task_snapshot(request.task_id)
-        if task is None:
-            # 任务已被清理或从未创建：给出明确错误，而不是退回全局快照。
-            raise HTTPException(status_code=404, detail="抽奖任务不存在或已过期，请重新抽奖")
-        # 只有随机抽奖任务才有中奖名单。
-        if task.get("kind") != "draw":
-            raise HTTPException(status_code=400, detail="该任务不是随机抽奖任务，没有中奖名单")
-        # 任务未完成（运行中/已取消/失败）时没有可校验的名单。
-        if task.get("status") != "completed":
-            raise HTTPException(status_code=409, detail="该抽奖任务尚未完成，暂无可校验的中奖名单")
-        result = task.get("result") or {}
-        winners = [dict(item) for item in result.get("winners") or []]
-        # 任务完成但没有中奖者（评论不足等）：明确告知而不是 500。
-        if not winners:
-            raise HTTPException(status_code=400, detail="该抽奖任务没有中奖名单，请重新抽奖")
+    """优先复用本地画像，一键校验请求名单或最近一次中奖名单。"""
+    # 请求未携带名单时复用最近一次抽奖结果。
+    winners = request.winners or _latest_winners
     # 名单为空时提示先抽奖。
     if not winners:
         # 未抽奖不能校验。
@@ -635,10 +602,9 @@ async def resume_task(task_id: str) -> Dict[str, Any]:
 
 # 服务启动时恢复任务状态。
 def recover_tasks_on_startup(retention_days: Optional[int] = None) -> Dict[str, Any]:
-    """把上次进程遗留的运行中任务标为已中断、清理过期记录。
+    """把上次进程遗留的运行中任务标为已中断、清理过期记录，并恢复最近一次中奖名单。
 
     不自动续跑：续跑会消耗 B 站请求配额与 LLM token，须由用户在页面上点「继续执行」。
-    中奖名单不再恢复到模块级快照：校验接口按 task_id 直接回读该任务的持久化结果。
 
     Args:
         retention_days: 已结束任务保留天数；``None`` 时读取 ``lottery.task_retention_days``。
@@ -646,6 +612,8 @@ def recover_tasks_on_startup(retention_days: Optional[int] = None) -> Dict[str, 
     Returns:
         ``lottery_store.recover_on_startup`` 的统计结果。
     """
+    # 修改模块级最近中奖名单。
+    global _latest_winners
     # 未显式传入时读取配置，非法值回退默认。
     if retention_days is None:
         try:
@@ -658,6 +626,10 @@ def recover_tasks_on_startup(retention_days: Optional[int] = None) -> Dict[str, 
             retention_days = lottery_store.DEFAULT_RETENTION_DAYS
     # 执行持久化层收尾。
     outcome = lottery_store.recover_on_startup(retention_days)
+    # 重启后「校验中奖名单」仍能使用上一次的结果。
+    if outcome.get("latest_winners") and not _latest_winners:
+        # 只在内存为空时恢复，不覆盖本次进程内的新结果。
+        _latest_winners = list(outcome["latest_winners"])
     # 有中断任务时记一条日志。
     if outcome.get("interrupted"):
         # 便于排查。

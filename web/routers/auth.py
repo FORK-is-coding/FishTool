@@ -109,21 +109,15 @@ async def get_auth_status():
         if not cookie:
             return {"success": True, "logged_in": False, "user": None, "cookie_masked": ""}
 
-        # 实测 Cookie 有效性（nav 接口 isLogin）。状态查询同样属于用户显式
-        # 发起的登录态检查，不能被采集任务留下的域冷却误判成 Cookie 失效；
-        # IP 级熔断仍由底层闸门拦截。
-        valid = await CookieLoginHelper.validate_cookie(
-            cookie, allow_during_cooldown=True
-        )
+        # 实测 Cookie 有效性（nav 接口 isLogin）
+        valid = await CookieLoginHelper.validate_cookie(cookie)
         if not valid:
             logger.warning("[auth] 本地Cookie已失效，需重新扫码")
             return {"success": True, "logged_in": False, "user": None,
                     "cookie_masked": "", "invalid": True}
 
         # 拉取用户信息
-        user = await CookieLoginHelper.get_user_info(
-            cookie, allow_during_cooldown=True
-        )
+        user = await CookieLoginHelper.get_user_info(cookie)
         return {
             "success": True,
             "logged_in": True,

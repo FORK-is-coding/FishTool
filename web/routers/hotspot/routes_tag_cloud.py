@@ -9,7 +9,17 @@ import uuid
 from fastapi import HTTPException
 
 from . import router
-from .deps import TagCloudGenerator, ValidationError, _spawn_tag_cloud_task, _tag_cloud_tasks, get_api
+from .deps import (
+    TagCloudGenerator,
+    ValidationError,
+    _prune_tag_cloud_tasks,
+    _spawn_tag_cloud_task,
+    _tag_cloud_tasks,
+    get_api,
+)
+
+# 查询接口不对外暴露的内部计时字段。
+_TAG_CLOUD_INTERNAL_KEYS = frozenset({"started_monotonic", "finished_monotonic"})
 from .schemas import TagCloudRequest
 
 
@@ -19,6 +29,8 @@ async def start_tag_cloud_task(request: TagCloudRequest):
     if not TagCloudGenerator.is_collectable_zone(request.zone_name):
         raise HTTPException(status_code=400, detail=f"未知的分区名称: {request.zone_name}")
     task_id = uuid.uuid4().hex
+    # 先清理过期任务，避免内存表只增不减（与分析任务一致）。
+    _prune_tag_cloud_tasks()
     _tag_cloud_tasks[task_id] = {
         "task_id": task_id,
         "status": "running",
@@ -41,7 +53,7 @@ async def get_tag_cloud_task(task_id: str):
     if not task:
         raise HTTPException(status_code=404, detail="词云任务不存在或已过期")
     return {"success": True, "data": {
-        key: value for key, value in task.items() if key != "started_monotonic"
+        key: value for key, value in task.items() if key not in _TAG_CLOUD_INTERNAL_KEYS
     }}
 
 @router.post("/tag-cloud")

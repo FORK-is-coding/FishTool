@@ -44,7 +44,7 @@ def engine_cfg(raw: dict | None) -> dict:
     raw = raw if isinstance(raw, dict) else {}
     d = DEFAULT_ENGINE_CFG
     return {
-        "autostart": _as_bool(raw.get("autostart"), d["autostart"]),
+        "autostart": _as_bool_lenient(raw.get("autostart"), d["autostart"]),
         "python": _as_str(raw.get("python")),
         "pip_index_url": _as_str(raw.get("pip_index_url")),
         "port": _as_int(raw.get("port"), d["port"], minimum=0, maximum=65535),
@@ -52,7 +52,7 @@ def engine_cfg(raw: dict | None) -> dict:
             raw.get("request_timeout_s"), d["request_timeout_s"], minimum=1, maximum=3600),
         "long_request_timeout_s": _as_int(
             raw.get("long_request_timeout_s"), d["long_request_timeout_s"], minimum=1, maximum=86400),
-        "block_api_key_write": _as_bool(raw.get("block_api_key_write"), d["block_api_key_write"]),
+        "block_api_key_write": _as_bool_lenient(raw.get("block_api_key_write"), d["block_api_key_write"]),
     }
 
 
@@ -78,6 +78,30 @@ ALERT_LEVELS = ("high", "medium", "low")
 
 def _as_bool(value, default: bool) -> bool:
     return value if isinstance(value, bool) else default
+
+
+_TRUE_STRINGS = frozenset({"true", "1", "yes", "on"})
+_FALSE_STRINGS = frozenset({"false", "0", "no", "off"})
+
+
+def _as_bool_lenient(value, default: bool) -> bool:
+    """宽松布尔：额外接受 ``"true"``/``"false"`` 等字符串与 0/1，其他值回退默认值。
+
+    只用于引擎段的开关。改造前 ``engine_cfg`` 原样透传，下游按真值判断，手改成
+    ``block_api_key_write: "true"`` 时防护是开着的；严格 ``_as_bool`` 会把它回落成
+    默认 False，悄悄关掉 API Key 写保护。
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _TRUE_STRINGS:
+            return True
+        if text in _FALSE_STRINGS:
+            return False
+    return default
 
 
 def _as_int(value, default: int, *, minimum: int, maximum: int) -> int:

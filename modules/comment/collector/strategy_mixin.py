@@ -7,7 +7,7 @@
 """
 import json
 from typing import List, Dict, Any, Optional, Set
-from core.exceptions import BilibiliAPIError
+from core.exceptions import BilibiliAPIError, RateLimitError
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -68,7 +68,7 @@ class CommentStrategyMixin:
             logger.error(f"采集热门评论失败: {e}")
             return []
 
-    async def _collect_normal_comments(self, bvid: str, limit: Optional[int] = 100) -> List[Dict[str, Any]]:
+    async def _collect_normal_comments(self, bvid: str, limit: int = 100) -> List[Dict[str, Any]]:
         """采集普通评论（按时间排序）
         
         调用 B 站评论 API mode=2，按时间倒序获取评论。
@@ -76,7 +76,7 @@ class CommentStrategyMixin:
         
         Args:
             bvid: 视频BV号
-            limit: 限制数量；None 表示不限制，由 is_end / 游标耗尽收敛
+            limit: 限制数量
             
         Returns:
             普通评论列表
@@ -97,8 +97,7 @@ class CommentStrategyMixin:
             pagination_str: Optional[str] = None
 
             # reply/main 使用 cursor，而不是 pn；重复页立即停止防止虚高统计。
-            # limit is None 表示不限制：只靠 is_end / 游标耗尽 / 重复页保护收敛。
-            while limit is None or len(comments) < limit:
+            while len(comments) < limit:
                 await self.rate_limiter.acquire(endpoint='comment')
                 params = {
                     'oid': oid,
@@ -141,7 +140,11 @@ class CommentStrategyMixin:
                 pagination_str = json.dumps({'offset': str(next_offset)}, separators=(',', ':'))
 
             return comments[:limit]
-            
+
+        except RateLimitError:
+            # 429 / -509 重试耗尽：必须向上抛。吞成 [] 会让完整采集把只含热门评论的
+            # 结果当成全量（抽奖会据此标记完整快照），与限频前「直接报错」的行为不一致。
+            raise
         except BilibiliAPIError as e:
             logger.error(f"采集普通评论失败: {e}")
             return []
@@ -168,9 +171,8 @@ class CommentStrategyMixin:
         # 热门阶段完成，回写进度；limit=None 表示全量无上限
         self._update_progress(bvid, phase='full', collected=len(hot_comments), limit=max_count)
         
-        # 再采集全部普通评论；max_count=None 表示不限制（comments[:None] 即全量），
-        # 终止条件由 is_end / next_offset 与重复页保护保证，不再静默截断成 10000。
-        normal_comments = await self._collect_normal_comments(bvid, limit=max_count)
+        # 再采集全部普通评论
+        normal_comments = await self._collect_normal_comments(bvid, limit=max_count or 10000)
         
         # 复用统一合并逻辑，确保 full 与 normal 的 rpid 语义一致。
         all_comments = self._merge_comments_by_rpid(hot_comments + normal_comments)

@@ -541,7 +541,7 @@ def test_chat_completion_model_not_found_gives_hint(llm_env):
 
 
 def test_chat_completion_error_message_excludes_upstream_body(llm_env):
-    """#108：上游原始响应体不进异常消息，截断后只放 detail，状态码保持不变。
+    """#108：上游原始响应体不进异常消息，只放 detail，状态码保持不变。
 
     message 会经 ai_report['error'] 与 /api/analysis/self-diagnosis 响应原样交给调用方，
     网关错误体常回显 API Key 片段与内部 trace id，不能顺带出去。
@@ -562,9 +562,8 @@ def test_chat_completion_error_message_excludes_upstream_body(llm_env):
     assert "sk-live" not in str(err)
     assert "trace-internal-42" not in str(err)
     assert err.status_code == 400
-    # detail 保留截断后的原始体，供上层受控归类，长度有上限
-    assert err.detail.startswith('{"error":{"code":"context_length_exceeded"')
-    assert len(err.detail) == llm_module.UPSTREAM_ERROR_DETAIL_LIMIT == 300
+    # detail 保留完整原始体，供上层受控归类；不截断，否则长 JSON 报文会被切坏
+    assert err.detail == body
 
 
 def test_chat_completion_error_logs_only_status(llm_env):
@@ -718,7 +717,7 @@ def test_chat_completion_stream_status_error_on_raise_for_status(llm_env):
 
 
 def test_chat_completion_stream_error_message_excludes_body(llm_env):
-    """#108（流式分支）：原始响应体同样不进 message，只截断后放 detail。"""
+    """#108（流式分支）：原始响应体同样不进 message，只放 detail。"""
     client = _make_client()
     body = "sk-live-abc123" + "z" * 1000
     client.client.stream_response = _AsyncLineResponse(
@@ -736,8 +735,7 @@ def test_chat_completion_stream_error_message_excludes_body(llm_env):
     err = excinfo.value
     assert str(err) == "流式请求失败: HTTP 500"
     assert err.status_code == 500
-    assert err.detail.startswith("sk-live")  # detail 仍是截断后的原始体
-    assert len(err.detail) == llm_module.UPSTREAM_ERROR_DETAIL_LIMIT
+    assert err.detail == body  # detail 是完整原始体，只在进程内供归类
     assert "sk-live" not in str(err)
 
 

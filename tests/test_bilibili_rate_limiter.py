@@ -611,6 +611,30 @@ def test_concurrent_acquire_keeps_configured_rate_in_wall_clock():
     assert marks[-1] - marks[0] >= 0.16
 
 
+def test_cookie_budget_holds_limit_under_concurrency():
+    """并发请求不能让同一窗口内的放行次数超过 limit（充电接口的风控保护）。"""
+    limiter = RateLimiter()
+    limit, window, count = 2, 0.3, 6
+
+    async def _scenario() -> list:
+        """并发发起 count 次预算申请，记录各自的放行时刻。"""
+        marks: list = []
+
+        async def _one() -> None:
+            await limiter.acquire_cookie_budget("burst", limit=limit, window=window)
+            marks.append(_time.monotonic())
+
+        await asyncio.gather(*(_one() for _ in range(count)))
+        return sorted(marks)
+
+    marks = asyncio.run(_scenario())
+
+    # 留 30ms 余量吸收调度抖动：任一长度为 window 的区间内最多放行 limit 次
+    worst = max(sum(1 for m in marks if start <= m < start + window - 0.03) for start in marks)
+    assert worst <= limit, marks
+    assert marks[-1] - marks[0] >= window * (count // limit - 1) - 0.03
+
+
 def test_cookie_budget_wait_does_not_block_other_cookies():
     """一个 Cookie 的窗口等待不得在共享锁内阻塞其它 Cookie 的预算检查（#103）。"""
     limiter = RateLimiter()

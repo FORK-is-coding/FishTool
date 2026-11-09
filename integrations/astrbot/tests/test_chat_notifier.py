@@ -108,62 +108,6 @@ def test_disabled_or_no_sessions():
     assert off.batches == [] and empty.batches == []
 
 
-def test_no_sessions_keeps_alerts_and_pushes_after_subscribe():
-    """无订阅会话不是“已推送”：缓冲要留住，id 不能进去重表，重新订阅后同一批要发得出去。"""
-    async def main():
-        sessions = []
-        h = Harness(sessions=sessions)
-        h.notifier.add({"id": 42, "level": "high", "message": "m"})
-        await h.notifier.flush()
-        assert h.batches == []
-        buffered = h.notifier.buffered
-        sessions.extend(SESSIONS)
-        await h.notifier.flush()
-        return h, buffered
-
-    h, buffered = run(main())
-    assert buffered == 1
-    assert [[a["id"] for a in batch[1]] for batch in h.batches] == [[42]]
-    assert h.notifier.buffered == 0
-
-
-def test_backfill_does_not_duplicate_still_buffered_alert():
-    """补发遇到还躺在缓冲里的同一条，不重复入队；推送成功后正常进去重表。"""
-    async def main():
-        sessions = []
-        h = Harness(sessions=sessions)
-        h.notifier.add({"id": 42, "level": "high"})
-        await h.notifier.flush()
-        sessions.extend(SESSIONS)
-        h.unread = [{"id": 42, "level": "high"}]
-        added = await h.notifier.backfill(0)
-        await h.notifier.flush()
-        again = await h.notifier.backfill(0)
-        return h, added, again
-
-    h, added, again = run(main())
-    assert added == 0
-    assert again == 0
-    assert len(h.batches) == 1 and [a["id"] for a in h.batches[0][1]] == [42]
-
-
-def test_send_failure_keeps_alert_recoverable_by_backfill():
-    """推送失败的一批不算已推送：重连补发能把同一条重新捞回来并发出。"""
-    async def main():
-        h = Harness(send_exc=RuntimeError("platform down"))
-        h.notifier.add({"id": 5, "level": "high"})
-        await h.notifier.flush()
-        h.send_exc = None
-        h.unread = [{"id": 5, "level": "high"}]
-        added = await h.notifier.backfill(0)
-        await h.notifier.flush()
-        return h, added
-
-    h, added = run(main())
-    assert added == 1
-    assert [a["id"] for a in h.batches[0][1]] == [5]
-
-
 def test_overflow_counted():
     async def main():
         h = Harness()

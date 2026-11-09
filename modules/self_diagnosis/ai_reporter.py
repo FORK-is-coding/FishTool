@@ -20,19 +20,16 @@ logger = get_logger(__name__)
 
 #: OpenAI 兼容的 JSON 模式：要求服务端只返回一个 JSON 对象（DeepSeek、通义、OpenAI 等支持）。
 JSON_RESPONSE_FORMAT = {"type": "json_object"}
-#: 端点不认识 response_format 时常见的返回码；但 400/422 本身不代表“不支持 JSON 模式”。
+#: 端点不认识 response_format 时常见的返回码；只有这两种情况才去掉参数重试。
 _UNSUPPORTED_PARAM_STATUS = (400, 422)
-#: 上游响应里明确抱怨 JSON 模式的信号。只有状态码命中且响应体命中其中之一，
-#: 才判定为“端点不支持 response_format”并去掉参数重试。
-#: 其他 400/422（context_length_exceeded、参数非法、内容审核等）重试必然同样失败，
-#: 白烧一次全量诊断提示词，还会把真实原因伪装成“端点拒绝 JSON”。
-_JSON_MODE_REJECT_MARKERS = (
-    "response_format",
-    "response format",
-    "json_object",
-    "json mode",
-    "jsonmode",
-)
+#: 400/422 里去掉 response_format 重试也必然失败的错误码（#106）：
+#: 输入超长与 JSON 模式无关，重试只会再烧一次全量诊断提示词。
+#: 刻意只列已知错误码、不反向要求报文点名 JSON 模式：不少兼容端点（含中文报文、
+#: 空报文、``{"error":"Invalid argument"}``）拒绝该参数时根本不说原因。
+_NON_RETRYABLE_ERROR_CODES = frozenset({
+    "context_length_exceeded",
+    "string_above_max_length",
+})
 #: 单条亮点最大长度：模型偶尔把整段说明塞进 highlights，过长会撑坏前端卡片。
 _MAX_HIGHLIGHT_CHARS = 80
 #: 对外 error 字段（状态码 + 错误码）长度上限，确保任何拼装都不会膨胀。
@@ -197,34 +194,31 @@ class AIDiagnosisReporter:
         return text[:_MAX_ERROR_CHARS]
 
     @staticmethod
-    def _rejects_json_mode(exc: LLMAPIError) -> bool:
-        """判断这次 400/422 是否真的在抱怨 JSON 模式参数。
+    def _should_retry_without_json_mode(exc: LLMAPIError) -> bool:
+        """判断这次失败是否值得去掉 ``response_format`` 重试一次。
 
-        只有状态码命中 ``_UNSUPPORTED_PARAM_STATUS`` 且 detail 里出现
-        ``response_format`` / ``json_object`` / ``json mode`` 之类的信号才返回 True。
-        取不到 detail（旧调用方、非 JSON 端点）视为“不是 JSON 模式问题”，直接抛出。
+        400/422 默认重试（与引入 JSON 模式时的约定一致：兼容端点拒绝该参数时
+        常常不说原因）；只有能从 detail 提炼出 ``_NON_RETRYABLE_ERROR_CODES``
+        里的错误码时才不重试。其他状态码一律不重试。
         """
         if getattr(exc, "status_code", None) not in _UNSUPPORTED_PARAM_STATUS:
             return False
-        detail = str(getattr(exc, "detail", "") or "").lower()
-        if not detail:
-            return False
-        return any(marker in detail for marker in _JSON_MODE_REJECT_MARKERS)
+        code = _extract_error_code(getattr(exc, "detail", "")).lower()
+        return code not in _NON_RETRYABLE_ERROR_CODES
 
     async def _chat_json(self, client: LLMClient, prompt: str) -> str:
-        """请求模型并要求服务端返回 JSON 对象；端点明确不支持 JSON 模式时去掉参数重试一次。
+        """请求模型并要求服务端返回 JSON 对象；端点不支持 JSON 模式时去掉参数重试一次。
 
         提示词里已经要求输出 JSON，这里再用 ``response_format`` 让服务端强制约束。
-        部分 OpenAI 兼容端点不认识这个参数，会返回 400/422 并在响应体里点名
-        ``response_format`` / ``json_object`` / ``json mode``；这时才退回只靠提示词约束。
-        其他错误（401、429、5xx、网络，以及 400/422 里的 context_length_exceeded 等）
-        原样抛出，不重试——它们重试一次也必然失败，只会白烧一次全量诊断提示词。
+        部分 OpenAI 兼容端点不认识这个参数，会返回 400/422；这时退回只靠提示词约束。
+        400/422 里已知与 JSON 模式无关的错误码（如 context_length_exceeded）不重试；
+        其他错误（401、429、5xx、网络）原样抛出，不重试。
         """
         kwargs = {"system": self.SYSTEM_PROMPT, "temperature": 0.35}
         try:
             return await client.simple_chat(prompt, response_format=JSON_RESPONSE_FORMAT, **kwargs)
         except LLMAPIError as exc:
-            if not self._rejects_json_mode(exc):
+            if not self._should_retry_without_json_mode(exc):
                 raise
             logger.warning(
                 "[AI自诊] 端点拒绝 JSON 模式（HTTP %s），改为只用提示词约束重试",

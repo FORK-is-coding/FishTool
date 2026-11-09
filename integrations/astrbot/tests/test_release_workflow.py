@@ -59,14 +59,20 @@ def _manifest_includes() -> list[str]:
     return [line.strip() for line in lines if line.strip() and not line.strip().startswith(("#", "!"))]
 
 
-def _event_paths(event: str) -> list[str]:
-    """取 on.<event>.paths 里的模式列表（纯文本解析，不依赖 PyYAML）。"""
-    text = WORKFLOW.read_text("utf-8")
-    block = re.search(rf"(?ms)^  {event}:\n((?:    .*\n|\n)+)", text)
+def _event_paths(event: str, text: str | None = None) -> list[str]:
+    """取 on.<event>.paths 里的模式列表（纯文本解析，不依赖 PyYAML）。
+
+    只用 ``(?m)``、不用 ``(?s)``：``.`` 不能跨行，否则 ``(?:    .*\\n)+`` 会一路吞到文件末尾，
+    把 pull_request 段乃至 jobs 里的引号字符串都算进 push 段，守护形同虚设。
+    事件段到下一个两格缩进的键（或顶层键）为止；paths 列表到第一条非 ``      - `` 行为止。
+    """
+    text = WORKFLOW.read_text("utf-8") if text is None else text
+    block = re.search(rf"(?m)^  {event}:[ \t]*\n((?:(?:    [^\n]*)?\n)+?)(?=^  ?\S|\Z)", text)
     assert block, f"workflow 缺少 on.{event} 段"
-    paths = re.search(r"(?ms)^    paths:\n((?:      - .*\n)+)", block.group(1))
+    paths = re.search(r"(?m)^    paths:[ \t]*\n((?:      [^\n]*\n)+)", block.group(1))
     assert paths, f"on.{event} 缺少 paths 过滤"
-    return re.findall(r'"([^"]+)"', paths.group(1))
+    items = [line for line in paths.group(1).splitlines() if line.lstrip().startswith("- ")]
+    return [m.group(1) for line in items for m in [re.search(r'"([^"]+)"', line)] if m]
 
 
 def _covers(pattern: str, entry: str) -> bool:
@@ -83,6 +89,21 @@ def test_workflow_paths_cover_engine_manifest():
         patterns = _event_paths(event)
         for entry in includes:
             assert any(_covers(p, entry) for p in patterns), f"on.{event}.paths 未覆盖 {entry}"
+
+
+def test_event_paths_parser_is_scoped_to_one_event():
+    """解析器自检：只从 push 段删掉 core/**，必须能被发现（防止正则跨段吞并）。"""
+    text = WORKFLOW.read_text("utf-8")
+    push_start = text.index("\n  push:\n")
+    pr_start = text.index("\n  pull_request:\n")
+    push_section = text[push_start:pr_start]
+    assert '      - "core/**"\n' in push_section
+    mutated = text[:push_start] + push_section.replace('      - "core/**"\n', "", 1) + text[pr_start:]
+
+    assert "core/**" not in _event_paths("push", mutated)
+    assert "core/**" in _event_paths("pull_request", mutated)
+    # 真实文件里两段各自独立解析，数量与段内条目一致
+    assert len(_event_paths("push")) == push_section.count('      - "')
 
 
 def test_release_job_gate_requires_tag_or_dispatch():

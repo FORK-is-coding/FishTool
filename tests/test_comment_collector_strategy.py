@@ -15,7 +15,7 @@ import asyncio
 
 import pytest
 
-from core.exceptions import BilibiliAPIError
+from core.exceptions import BilibiliAPIError, RateLimitError, Status429Error
 from modules.comment.collector import CommentCollector
 
 
@@ -226,6 +226,28 @@ def test_collect_normal_comments_swallows_api_error() -> None:
     assert asyncio.run(collector._collect_normal_comments("BV1", limit=100)) == []
 
 
+@pytest.mark.parametrize("error", [Status429Error("url", 60), RateLimitError(60)])
+def test_collect_normal_comments_propagates_rate_limit(error) -> None:
+    """429 / -509 重试耗尽必须向上抛：吞成 [] 会让完整采集把热门评论当全量（抽奖会标记完整快照）。"""
+    page1 = {
+        "replies": [_reply(i) for i in range(1, 21)],
+        "cursor": {"is_end": False, "pagination_reply": {"next_offset": "x"}},
+    }
+    collector, _, _ = _collector([page1, error])
+
+    with pytest.raises(RateLimitError):
+        asyncio.run(collector._collect_normal_comments("BV1", limit=100))
+
+
+def test_collect_all_comments_propagates_rate_limit_instead_of_hot_only() -> None:
+    """完整采集遇到限频时整体失败，不返回只含热门评论的“完整”结果。"""
+    hot = {"replies": [_reply(i) for i in range(1, 4)]}
+    collector, _, _ = _collector([hot, Status429Error("url", 60)])
+
+    with pytest.raises(RateLimitError):
+        asyncio.run(collector._collect_all_comments("BV1", None))
+
+
 # --------------------------------------------------------------------- 完整采集
 
 def test_collect_all_comments_merges_and_dedups() -> None:
@@ -254,8 +276,8 @@ def test_collect_all_comments_merges_and_dedups() -> None:
     assert CommentCollector.get_progress("BV1")["collected"] == 3
 
 
-def test_collect_all_comments_passes_none_limit_when_max_none() -> None:
-    """max_count 为 None 表示不限制：limit 原样传 None，不再静默截断成 10000。"""
+def test_collect_all_comments_uses_default_limit_when_max_none() -> None:
+    """max_count 为 None 时普通评论按 10000 拉取。"""
     collector, _, _ = _collector([])
 
     async def _hot(bvid):
@@ -274,23 +296,7 @@ def test_collect_all_comments_passes_none_limit_when_max_none() -> None:
 
     asyncio.run(collector._collect_all_comments("BV1", max_count=None))
 
-    assert calls["limit"] is None
-
-
-def test_collect_normal_comments_none_limit_keeps_all_pages() -> None:
-    """limit=None 时 comments[:None] 返回全量，翻页仍由 is_end 收敛。"""
-    collector, api, _ = _collector([
-        {
-            "replies": [_reply(1), _reply(2)],
-            "cursor": {"pagination_reply": {"next_offset": "a"}},
-        },
-        {"replies": [_reply(3)], "cursor": {"is_end": True}},
-    ])
-
-    comments = asyncio.run(collector._collect_normal_comments("BV1", limit=None))
-
-    assert [item["rpid"] for item in comments] == [1, 2, 3]
-    assert len(api.calls) == 2
+    assert calls["limit"] == 10000
 
 
 def test_collect_all_comments_only_hot() -> None:

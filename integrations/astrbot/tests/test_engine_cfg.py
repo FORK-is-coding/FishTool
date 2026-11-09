@@ -40,11 +40,16 @@ def test_timeouts(raw, expected):
 
 
 @pytest.mark.parametrize("raw,expected", [
-    ({"autostart": "false"}, True),        # 字符串不是 bool，回落默认（默认是开）
+    ({"autostart": "false"}, False),       # 手改配置常见的字符串写法按字面意思解析
     ({"autostart": False}, False),
-    ({"autostart": 0}, True),
-    ({"block_api_key_write": "true"}, False),   # 默认关；字符串不再被当真值
+    ({"autostart": 0}, False),
+    ({"autostart": "maybe"}, True),        # 认不出的值回落默认（默认是开）
+    ({"block_api_key_write": "true"}, True),    # 不能把字符串 "true" 悄悄当成关
+    ({"block_api_key_write": "TRUE "}, True),
+    ({"block_api_key_write": 1}, True),
     ({"block_api_key_write": True}, True),
+    ({"block_api_key_write": "off"}, False),
+    ({"block_api_key_write": [1]}, False),      # 认不出的类型回落默认（默认关）
 ])
 def test_booleans(raw, expected):
     key = next(iter(raw))

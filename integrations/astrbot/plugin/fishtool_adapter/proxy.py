@@ -40,8 +40,7 @@ LONG_PREFIXES = (
 )
 
 #: 前端先请求这两个接口拿 token 再带 X-Local-Token 写请求；真实 token 不交给 iframe，转发时由 client 注入。
-#: ``local-token`` 是统一写接口防护（#79）的通用入口，插件内前端同样走它。
-TOKEN_PATHS = {"local-token", "analysis/benchmark/local-token", "comment/semantic/local-token"}
+TOKEN_PATHS = {"analysis/benchmark/local-token", "comment/semantic/local-token"}
 
 #: block_api_key_write 打开时，API Key 调用这些前缀的任意方法都会被拒。
 CREDENTIAL_PREFIXES = ("auth/", "config/", "config", "analysis/benchmark/", "comment/semantic/")
@@ -120,12 +119,7 @@ class EngineProxy:
         if sub in TOKEN_PATHS and method == "GET":
             return envelope(200, {"success": True, "data": {"token": "proxy-managed", "header": "X-Local-Token"}})
 
-        key = "long_request_timeout_s" if is_long_request(sub) else "request_timeout_s"
-        try:
-            timeout = float(self.cfg[key])
-        except (KeyError, TypeError, ValueError):
-            # 配置收敛（constants.engine_cfg）已经兜过一层，这里再保一手：超时非法就用默认 120 秒。
-            timeout = 120.0
+        timeout = float(self.cfg["long_request_timeout_s"] if is_long_request(sub) else self.cfg["request_timeout_s"])
         try:
             status, payload = await self.client.call(method, f"/api/{sub}", query=_clean_query(query), json=body_json, timeout=timeout)
         except EngineUnavailable as exc:

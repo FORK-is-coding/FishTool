@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -288,6 +289,49 @@ def test_run_task_marks_failed_on_exception(monkeypatch):
     assert task["status"] == "failed"
     assert "生成词云失败" in task["message"]
     assert task["estimated_seconds"] == 0
+
+
+def test_prune_tag_cloud_tasks_drops_only_expired_finished(monkeypatch):
+    """创建新任务前清理已结束且超过 TTL 的记录；运行中的任务一律保留。"""
+    now = time.monotonic()
+    ttl = deps_module._TAG_CLOUD_TASK_TTL_SECONDS
+    tasks = {
+        "old-running": {"status": "running", "started_monotonic": now - ttl * 2},
+        "old-done": {"status": "completed", "started_monotonic": now - ttl * 3,
+                     "finished_monotonic": now - ttl - 5},
+        "legacy-done": {"status": "failed", "started_monotonic": now - ttl - 10},
+        "fresh-done": {"status": "completed", "started_monotonic": now - 20,
+                       "finished_monotonic": now - 10},
+    }
+    monkeypatch.setattr(deps_module, "_tag_cloud_tasks", tasks)
+
+    deps_module._prune_tag_cloud_tasks()
+
+    assert set(tasks) == {"old-running", "fresh-done"}
+
+
+def test_run_tag_cloud_task_records_finish_time(monkeypatch):
+    """任务结束（成功或失败）时写入 finished_monotonic，供 TTL 清理计时。"""
+
+    class _Boom:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def generate_cloud_data(self, **_kwargs):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(deps_module, "TagCloudGenerator", _Boom)
+    monkeypatch.setattr(deps_module, "get_api", lambda: object())
+    deps_module._tag_cloud_tasks["t-fin"] = {
+        "status": "running", "started_monotonic": time.monotonic(), "progress": 2,
+    }
+    request = SimpleNamespace(zone_name="游戏", limit=10, top_n=5)
+
+    asyncio.run(deps_module._run_tag_cloud_task("t-fin", request))
+
+    task = deps_module._tag_cloud_tasks["t-fin"]
+    assert task["status"] == "failed"
+    assert isinstance(task["finished_monotonic"], float)
 
 
 def test_spawn_tag_cloud_task_holds_reference_until_done(monkeypatch):
