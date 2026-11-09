@@ -291,6 +291,12 @@ async def logout():
                 # 重新扫码同一账号再退出，会按 DedeUserID 把历史会话一并撤销。
                 warning = "Cookie 池清理未完成，采集任务可能仍在使用旧登录态；请重新扫码登录同一账号后再退出一次"
         config.save_secret(COOKIE_SECRET_KEY, '')
+        # 退出后立即停止 AI 伪人巡检的运行中任务（尤其是代发举报），避免继续用旧登录态发请求。
+        try:
+            from web.routers import lottery_patrol
+            lottery_patrol.cancel_all_tasks(reason="已退出登录")
+        except Exception as _patrol_err:  # noqa: BLE001 - 取消失败不影响退出
+            logger.warning(f"[auth] 取消巡检任务失败（不影响退出）: {_patrol_err}")
         logger.info("[auth] 已清除登录态")
         if warning:
             return {"success": True, "message": "已清除登录态", "warning": warning}
