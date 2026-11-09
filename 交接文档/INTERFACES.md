@@ -144,6 +144,22 @@
 
 限流：评论专用 `RateLimiter`，默认间隔 4 秒；完整评论可能产生大量请求，必须有上限或明确用户确认。
 
+### `GET /x/v2/reply/up/fulllist`（UP 主评论管理列表）
+
+代码入口：`modules/lottery/service.py` 的 `LotteryService._collect_video_comments`，抽奖与真人筛选在 `comment_mode="up_fulllist"` 时调用。
+
+前提：必须带登录态 Cookie，且只能查询**当前登录账号自己发布的视频**。调用前先用 `/x/web-interface/nav` 取 `mid`，再用 `/x/web-interface/view?aid=...` 校验 `owner.mid` 一致，不一致直接拒绝，不发 fulllist 请求。Cookie 在一轮采集内固定，不随 Cookie 池轮换。
+
+入参：`oid=aid`、`type=1`、`order=1`、`filter=-1`（全部状态）、`pn` 页码（从 1 起）、`ps=50`（上限）。
+
+出参：`data.page.num` 当前页、`data.page.total` 评论总数（含楼中楼）、`data.list` 评论数组；楼中楼与一级评论在同一列表里，按 `rpid` 去重。
+
+完整性校验（任一不满足即报错，不返回部分名单）：`page.num` 等于请求页码；`total` 为非负整数且翻页期间不变；每条评论的 `oid`/`type` 与目标一致、有 `rpid` 和 `member.mid`；累计条数恰好等于 `total` 才结束。
+
+限流：复用评论采集器的 `RateLimiter`（与 `reply/main` 同一个，约 4 秒一页），外层仍走共享限频器与 429 退避。没有条数上限，耗时约为 `ceil(total/50) × 4` 秒。
+
+注意：这是创作中心网页使用的接口，不在公开文档里。若返回结构变化，上面的校验会让采集直接失败，此时先比对 `page` / `list` 字段，不要放宽校验。
+
 ## 6. 扫码登录接口
 
 ### `GET passport.bilibili.com/x/passport-login/web/qrcode/generate`

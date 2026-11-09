@@ -53,6 +53,13 @@ _background_tasks: Dict[str, "asyncio.Task[None]"] = {}
 _latest_winners: List[Dict[str, Any]] = []
 
 
+#: 视频评论采集方式：standard=公共评论接口（任意视频，复用近期完整快照）；
+#: up_fulllist=UP 主评论管理接口（仅限当前登录账号发布的视频，含全部楼中楼，每次实时采集）。
+#: 只影响视频目标，动态目标忽略该字段。
+CommentMode = Literal["standard", "up_fulllist"]
+_COMMENT_MODE_DESCRIPTION = "视频评论采集方式：standard=常规（任意视频）；up_fulllist=楼中楼（仅限本人视频）"
+
+
 # 视频或动态目标请求体。
 class TargetRequest(BaseModel):
     """视频或动态目标请求。"""
@@ -87,6 +94,8 @@ class FilterTaskRequest(TargetRequest):
 
     # AI 判定侧重点模板，可选。
     focus_template: Optional[str] = Field(None, max_length=1200, description="AI判定侧重点模板")
+    # 视频评论采集方式，默认常规模式（与改动前行为一致）。
+    comment_mode: CommentMode = Field("standard", description=_COMMENT_MODE_DESCRIPTION)
 
 
 # 随机抽奖任务请求体。
@@ -111,7 +120,8 @@ class DrawTaskRequest(TargetRequest):
     date_start: Optional[date] = Field(None, description="评论开始日期（含）")
     # 评论结束日期（含）。
     date_end: Optional[date] = Field(None, description="评论结束日期（含）")
-
+    # 视频评论采集方式，默认常规模式（与改动前行为一致）。
+    comment_mode: CommentMode = Field("standard", description=_COMMENT_MODE_DESCRIPTION)
 
 # 获取或创建抽奖服务单例。
 def get_service() -> LotteryService:
@@ -293,6 +303,16 @@ def _progress(task_id: str, stage: str, percent: int, message: str) -> None:
     )
 
 
+def _comment_mode_kwargs(request: Any) -> Dict[str, Any]:
+    """把请求里的评论采集方式转换成服务层关键字参数。
+
+    常规模式不传参，沿用服务层默认值；只有选择楼中楼时才显式传 ``comment_mode``。
+    这样不认识该参数的旧服务替身与调用方保持可用。
+    """
+    mode = getattr(request, "comment_mode", "standard") or "standard"
+    return {} if mode == "standard" else {"comment_mode": mode}
+
+
 # 后台执行真人筛选全流程。
 async def _run_filter_task(task_id: str, request: FilterTaskRequest) -> None:
     """后台执行目标确认、评论复用/采集、画像采集和 AI 分类。"""
@@ -309,6 +329,7 @@ async def _run_filter_task(task_id: str, request: FilterTaskRequest) -> None:
             target,
             request.focus_template,
             lambda stage, percent, message: _progress(task_id, stage, percent, message),
+            **_comment_mode_kwargs(request),
         )
         # 成功后写入完整结果并标记完成。
         _tasks[task_id].update(
@@ -343,7 +364,6 @@ async def _run_draw_task(task_id: str, request: DrawTaskRequest) -> None:
         if request.date_start and request.date_end and request.date_start > request.date_end:
             # 日期区间倒置直接报错。
             raise ValueError("评论开始日期不能晚于结束日期")
-        # 执行随机抽奖，日期转成当天起止时刻参与过滤。
         result = await service.draw(
             target,
             request.winner_count,
@@ -356,6 +376,7 @@ async def _run_draw_task(task_id: str, request: DrawTaskRequest) -> None:
             real_only=request.real_only,
             include_indeterminate=request.include_indeterminate,
             focus_template=request.focus_template,
+            **_comment_mode_kwargs(request),
         )
         # 保存本次中奖名单快照，供后续校验接口复用。
         _latest_winners = [dict(item) for item in result.get("winners") or []]
