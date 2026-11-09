@@ -115,6 +115,10 @@ class RateLimiter:
         
         # 并发安全锁
         self._lock = asyncio.Lock()
+
+        # 下一次允许发送请求的单调时钟时刻（秒）。
+        # 锁内只做"预占槽位"，等待全部在锁外完成，避免并发请求互相排队。
+        self._next_slot: Optional[float] = None
     
     def _add_jitter(self, delay: float) -> float:
         """为延迟添加随机抖动，避免请求模式被识别
@@ -171,11 +175,9 @@ class RateLimiter:
         
         流程：
         1. 检查熔断状态，熔断中直接抛异常
-        # 验证状态/条件，决定下一步分支
-        2. 补充令牌（按时间线性累积）
-        3. 令牌不足则等待（带随机抖动）
-        # 阻塞直到条件满足或超时
-        4. 消耗令牌并记录请求历史
+        2. 锁内预占下一个发送时刻（相邻请求间隔 = rate + 随机抖动），记录请求历史
+        3. 锁外睡到预占时刻；醒来后再检查一次熔断
+        令牌余额（tokens）只用于统计和首次调用的初始等待，不再决定是否放行。
         
         Args:
             endpoint: API端点（用于日志）
@@ -183,60 +185,65 @@ class RateLimiter:
         Note:
             此方法会自动添加随机抖动，避免请求模式被识别
             # 将元素加入容器/布局
+
+            锁内只预占"下一次可发送时刻"并算出等待时长，真正的 sleep 放在锁外。
+            这样并发调用按 rate 间隔排队放行，既不会因为醒后 ``tokens = 1.0``
+            让实际速率翻倍，也不会让一个长等待持锁阻塞其它请求。
         """
         async with self._lock:
-            # 检查熔断状态
-            # 熔断中直接拒绝，避免继续打爆接口
-            if self.is_circuit_open:
-                # 计算结果存入 elapsed
-                # 对输入做运算得到结果
-                elapsed = datetime.now() - self.circuit_open_time
-                # 边界/有效性检查
-                if elapsed < self.circuit_reset_timeout:
-                    # 赋值并准备后续使用
-                    remaining = (self.circuit_reset_timeout - elapsed).total_seconds()
-                    # 抛出异常中断流程
-                    raise CircuitBreakerError(
-                        f"熔断保护中，请{int(remaining)}秒后重试"
-                    )
-                # 分支判断
-                else:
-                    # 熔断超时，重置状态
-                    # 熔断窗口结束，允许重新尝试
-                    self._reset_circuit()
-            
-            # 补充令牌
-            # 先按时间补充，再判断是否足够
-            # 根据条件走向不同处理分支
+            # 检查熔断状态：熔断中直接拒绝，避免继续打爆接口
+            self._raise_if_circuit_open()
+
+            # 补充令牌（仅用于余额统计与首次折算，判定以预占槽位为准）
             self._refill_tokens()
-            
-            # 等待令牌
-            # 令牌不足 1 个时计算等待时间并睡眠
-            # 对输入做运算得到结果
-            if self.tokens < 1.0:
-                # 计算结果存入 base_wait_time
-                # 对输入做运算得到结果
-                base_wait_time = (1.0 - self.tokens) * self.rate
-                # 添加随机抖动
-                # 将元素加入容器/布局
-                wait_time = self._add_jitter(base_wait_time)
-                logger.debug(f"限频等待 {wait_time:.2f}秒 (基础:{base_wait_time:.2f}秒): {endpoint}")
-                # 异步等待结果
-                await asyncio.sleep(wait_time)
-                # 等待结束后令牌已补满
-                # 阻塞直到条件满足或超时
-                self.tokens = 1.0
-            
-            # 消耗令牌
-            self.tokens -= 1.0
-            
+
+            now = time.monotonic()
+            if self._next_slot is None:
+                # 首次调用：满令牌立即可发，余额不足则按缺口折算初始等待（保留旧语义）。
+                deficit = max(0.0, 1.0 - self.tokens)
+                self._next_slot = now + (self._add_jitter(deficit * self.rate) if deficit > 0 else 0.0)
+
+            # 本次请求占用当前槽位；下一个请求至少排在一个抖动后的间隔之后。
+            wait_time = max(0.0, self._next_slot - now)
+            self._next_slot = max(self._next_slot, now) + self._add_jitter(self.rate)
+
+            # 扣减令牌用于统计口径；不再用 ``tokens = 1.0`` 覆盖真实余额。
+            self.tokens = max(0.0, self.tokens - 1.0)
+
             # 记录请求
             # 追加到定长队列，保留最近100条
             self.request_history.append({
                 'endpoint': endpoint,
                 'timestamp': datetime.now()
             })
-    
+
+        if wait_time > 0:
+            logger.debug(f"限频等待 {wait_time:.2f}秒: {endpoint}")
+            # 等待在锁外进行：其它协程可以继续预占后续槽位，不会队头阻塞。
+            # 被取消的等待者不归还已预占的槽位：后续请求只会更保守，不会超发。
+            await asyncio.sleep(wait_time)
+            # 睡眠期间可能已触发熔断（如别的请求连续 429）：醒来后必须再查一次，
+            # 否则已排队的请求会无视熔断照常放行。
+            async with self._lock:
+                self._raise_if_circuit_open()
+
+    def _raise_if_circuit_open(self) -> None:
+        """熔断仍在保护期内时抛 CircuitBreakerError；保护期已过则重置熔断。
+
+        调用方必须持有 ``self._lock``。
+
+        Raises:
+            CircuitBreakerError: 熔断保护中。
+        """
+        if not self.is_circuit_open:
+            return
+        elapsed = datetime.now() - self.circuit_open_time
+        if elapsed < self.circuit_reset_timeout:
+            remaining = (self.circuit_reset_timeout - elapsed).total_seconds()
+            raise CircuitBreakerError(f"熔断保护中，请{int(remaining)}秒后重试")
+        # 熔断窗口结束，允许重新尝试
+        self._reset_circuit()
+
     async def acquire_cookie_budget(
         self,
         cookie_key: str,
@@ -257,19 +264,25 @@ class RateLimiter:
         """
         try:
             key = f'{budget_key}:{cookie_key}'
+            # 至少为 1：limit<=0 时 history[-0] 会取到窗口里最早的一项，语义错误。
+            effective_limit = max(1, min(int(limit), int(self.cookie_budget_limit)))
+            # 锁内只预约本次的发送时刻并写入窗口，sleep 放到共享锁外：
+            # 否则一个 Cookie 的等待会阻塞其它 Cookie 的预算检查。
+            # 预约时刻 = 窗口内倒数第 limit 次请求滑出窗口的时刻，因此并发请求会
+            # 各自拿到不同的时刻，任一窗口内放行次数都不超过 limit。
             async with self._lock:
                 history = self.cookie_request_history.setdefault(key, deque())
                 now = time.monotonic()
                 while history and now - history[0] >= window:
                     history.popleft()
-                if len(history) >= min(limit, self.cookie_budget_limit):
-                    wait_seconds = max(window - (now - history[0]), 0.0)
-                    logger.info("%s接口触发单Cookie滑动窗口，等待%.2f秒", budget_key, wait_seconds)
-                    await asyncio.sleep(wait_seconds)
-                    now = time.monotonic()
-                    while history and now - history[0] >= window:
-                        history.popleft()
-                history.append(now)
+                slot = now
+                if len(history) >= effective_limit:
+                    slot = max(now, history[-effective_limit] + window)
+                history.append(slot)
+                wait_seconds = slot - now
+            if wait_seconds > 0:
+                logger.info("%s接口触发单Cookie滑动窗口，等待%.2f秒", budget_key, wait_seconds)
+                await asyncio.sleep(wait_seconds)
         except Exception as exc:
             logger.error("%s接口滑动窗口限频失败: %s", budget_key, exc, exc_info=True)
             raise

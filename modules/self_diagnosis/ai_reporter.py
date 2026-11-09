@@ -22,6 +22,22 @@ logger = get_logger(__name__)
 JSON_RESPONSE_FORMAT = {"type": "json_object"}
 #: 端点不认识 response_format 时常见的返回码；只有这两种情况才去掉参数重试。
 _UNSUPPORTED_PARAM_STATUS = (400, 422)
+#: 400/422 里去掉 response_format 重试也必然失败的错误码（#105）：
+#: 输入超长与 JSON 模式无关，重试只会再烧一次全量诊断提示词。
+#: 刻意只列已知错误码、不反向要求报文点名 JSON 模式：不少兼容端点（含中文报文、
+#: 空报文、``{"error":"Invalid argument"}``）拒绝该参数时根本不说原因。
+#: 已知局限：通义（DashScope）超长返回笼统的 ``invalid_parameter_error``，与“参数不支持”
+#: 同码无法区分，这类端点超长时仍会多重试一次；宁可多烧一次，也不误伤 JSON 模式降级。
+_NON_RETRYABLE_ERROR_CODES = frozenset({
+    "context_length_exceeded",
+    "string_above_max_length",
+})
+#: 单条亮点最大长度：模型偶尔把整段说明塞进 highlights，过长会撑坏前端卡片。
+_MAX_HIGHLIGHT_CHARS = 80
+#: 对外 error 字段（状态码 + 错误码）长度上限，确保任何拼装都不会膨胀。
+_MAX_ERROR_CHARS = 120
+#: 错误码只允许这些字符；上游把正文塞进 error/code 时不会通过。
+_ERROR_CODE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 
 
 class _ResponseFormatError(LLMError):
@@ -29,6 +45,53 @@ class _ResponseFormatError(LLMError):
 
     单独成类，是为了和网络错误、超时等同样属于 LLMError 的失败区分开，给出不同的提示。
     """
+
+
+def _error_code_candidates(detail: Any) -> list[str]:
+    """从上游错误体里列出全部合法的错误码候选，绝不把正文透出去。
+
+    上游错误体（``LLMAPIError.detail``）常见形态是
+    ``{"error": {"code": "context_length_exceeded", "message": "...", ...}}``，
+    里面可能回显 API Key 片段、内部 trace id 或请求片段。这里按 JSON 解析后只取
+    ``error.code`` / ``error.type`` / 顶层 ``code``，且必须匹配 ``_ERROR_CODE_RE``；
+    非 JSON 报文（HTML 网关页、纯文本）或 ``error`` 为字符串时返回空列表。
+    """
+    text = str(detail or "").strip()
+    if not text:
+        return []
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        return []
+    raw: list[Any] = []
+    if isinstance(data, dict):
+        error = data.get("error")
+        if isinstance(error, dict):
+            raw = [error.get("code"), error.get("type")]
+        # 顶层 code 是常见的结构化错误码；``error`` 为字符串时直接丢弃，
+        # 否则整段上游正文会被当作错误码透给前端。
+        raw.append(data.get("code"))
+    codes: list[str] = []
+    for item in raw:
+        if isinstance(item, bool) or not isinstance(item, (str, int)):
+            continue
+        code = str(item).strip()
+        if _ERROR_CODE_RE.fullmatch(code) and code not in codes:
+            codes.append(code)
+    return codes
+
+
+def _extract_error_code(detail: Any) -> str:
+    """取一个对外展示用的错误码；优先非纯数字的语义码，取不到返回空串。
+
+    vLLM 等端点会给 ``{"error": {"code": 400, "type": "context_length_exceeded"}}``：
+    纯数字 code 只是状态码的重复，``type`` 才是有用的信息。
+    """
+    codes = _error_code_candidates(detail)
+    for code in codes:
+        if not code.isdigit():
+            return code
+    return codes[0] if codes else ""
 
 
 class AIDiagnosisReporter:
@@ -83,7 +146,9 @@ class AIDiagnosisReporter:
             return {
                 "success": False,
                 "message": message,
-                "error": str(exc),
+                # 只写状态码/错误码：error 会随 /api/analysis/self-diagnosis 响应原样交给调用方，
+                # 而 LLMAPIError.detail 里可能有上游响应体（回显 key、trace id），不往这里带。
+                "error": self._safe_error(exc),
                 "generated_at": datetime.now().isoformat(),
             }
         finally:
@@ -125,18 +190,51 @@ class AIDiagnosisReporter:
             return "请求失败", "请求模型时网络异常或超时，请检查网络后重新自诊。"
         return "内部错误", "AI调研生成时出现内部错误，请重新自诊；持续出现请查看日志。"
 
+    @staticmethod
+    def _safe_error(exc: Exception) -> str:
+        """构造可对外的 error 字段，绝不复述上游响应体。
+
+        ``LLMAPIError`` 的 message 已由 ``LLMClient`` 收敛成“HTTP 状态码”，detail 里才可能有
+        上游正文；这里只用 JSON 解析提炼错误码，拼成「HTTP 400 context_length_exceeded」。
+        其他异常（截断、每日上限、网络、内部错误）本身不含上游报文，保持原有 ``str(exc)``。
+        """
+        if not isinstance(exc, LLMAPIError):
+            return str(exc)
+        status = getattr(exc, "status_code", None)
+        code = _extract_error_code(getattr(exc, "detail", ""))
+        if not code and str(exc).startswith("LLM模型不存在"):
+            # model_not_found 是 LLMClient 自己判定的归类，不含上游正文，保留可检索的错误码。
+            code = "model_not_found"
+        label = f"HTTP {status}" if status else "无状态码"
+        text = f"{label} {code}".strip() if code else label
+        return text[:_MAX_ERROR_CHARS]
+
+    @staticmethod
+    def _should_retry_without_json_mode(exc: LLMAPIError) -> bool:
+        """判断这次失败是否值得去掉 ``response_format`` 重试一次。
+
+        400/422 默认重试（与引入 JSON 模式时的约定一致：兼容端点拒绝该参数时
+        常常不说原因）；只有能从 detail 提炼出 ``_NON_RETRYABLE_ERROR_CODES``
+        里的错误码时才不重试。其他状态码一律不重试。
+        """
+        if getattr(exc, "status_code", None) not in _UNSUPPORTED_PARAM_STATUS:
+            return False
+        codes = {code.lower() for code in _error_code_candidates(getattr(exc, "detail", ""))}
+        return not (codes & _NON_RETRYABLE_ERROR_CODES)
+
     async def _chat_json(self, client: LLMClient, prompt: str) -> str:
         """请求模型并要求服务端返回 JSON 对象；端点不支持 JSON 模式时去掉参数重试一次。
 
         提示词里已经要求输出 JSON，这里再用 ``response_format`` 让服务端强制约束。
         部分 OpenAI 兼容端点不认识这个参数，会返回 400/422；这时退回只靠提示词约束。
+        400/422 里已知与 JSON 模式无关的错误码（如 context_length_exceeded）不重试；
         其他错误（401、429、5xx、网络）原样抛出，不重试。
         """
         kwargs = {"system": self.SYSTEM_PROMPT, "temperature": 0.35}
         try:
             return await client.simple_chat(prompt, response_format=JSON_RESPONSE_FORMAT, **kwargs)
         except LLMAPIError as exc:
-            if getattr(exc, "status_code", None) not in _UNSUPPORTED_PARAM_STATUS:
+            if not self._should_retry_without_json_mode(exc):
                 raise
             logger.warning(
                 "[AI自诊] 端点拒绝 JSON 模式（HTTP %s），改为只用提示词约束重试",
@@ -170,6 +268,32 @@ class AIDiagnosisReporter:
             ],
         }
 
+    @staticmethod
+    def _normalize_highlights(raw: Any) -> list[str]:
+        """把 highlights 收敛成最多 3 条非空字符串。
+
+        模型偶尔不按结构返回：字符串如果被直接迭代会切成单字、字典被迭代成键名、
+        数字直接抛 TypeError。这里对非列表值安全降级——字符串整体当一条亮点（不切字），
+        其他类型当没有亮点，元素统一转字符串并截断。
+        """
+        if isinstance(raw, str):
+            items: list[Any] = [raw]
+        elif isinstance(raw, (list, tuple)):
+            items = list(raw)
+        else:
+            items = []
+        highlights: list[str] = []
+        for item in items:
+            if isinstance(item, (dict, list, tuple, set)) or item is None:
+                # 嵌套结构没有可展示的语义，跳过而不是把键名/字符串化结果当亮点。
+                continue
+            text = str(item).strip()
+            if text:
+                highlights.append(text[:_MAX_HIGHLIGHT_CHARS])
+            if len(highlights) >= 3:
+                break
+        return highlights
+
     def _parse_response(self, content: str) -> dict[str, Any]:
         """解析并校验 LLM JSON 响应。
 
@@ -183,16 +307,18 @@ class AIDiagnosisReporter:
             ValueError: 响应不含有效 JSON 或必要字段为空。
         """
         text = str(content or "").strip()
-        # 宽容匹配第一对花括号，兼容模型偶尔输出的前后缀文本。
-        match = re.search(r"\{[\s\S]*\}", text)
-        if not match:
+        # 从第一个 "{" 起用 raw_decode 增量解析：它只吃一个完整 JSON 值，
+        # 模型在 JSON 后面追加的自然语言（哪怕带 "}"，如“补充说明见 {附录}”）不会被吞进来。
+        # 旧的贪婪正则 r"\{[\s\S]*\}" 会匹配到最后一个 "}"，导致 JSONDecodeError。
+        start = text.find("{")
+        if start < 0:
             raise _ResponseFormatError("LLM未返回JSON对象")
-        data = json.loads(match.group(0))
+        data, _end = json.JSONDecoder().raw_decode(text[start:])
         if not isinstance(data, dict):
             raise _ResponseFormatError("LLM返回的JSON不是对象")
         report = str(data.get("report") or "").strip()
         commentary = str(data.get("commentary") or "").strip()
-        highlights = [str(item).strip() for item in data.get("highlights", []) if str(item).strip()][:3]
+        highlights = self._normalize_highlights(data.get("highlights"))
         # report 与 commentary 为空视为无效响应，触发上层降级。
         if not report or not commentary:
             raise _ResponseFormatError("LLM报告字段不完整")

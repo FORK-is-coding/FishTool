@@ -45,6 +45,10 @@ LOG_DIR = DEFAULT_LOG_DIR
 LOG_FILES = _get_log_files()
 # 合法日志级别集合，过滤与规范化共用。
 LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+# 查询参数级别的别名表：前端与用户常用简写，参数侧必须在过滤前翻译成标准级别。
+LEVEL_ALIASES = {"WARN": "WARNING", "ERR": "ERROR", "CRIT": "CRITICAL", "FATAL": "CRITICAL"}
+# 「问题日志」视图（导出与排查）使用的级别集合。
+PROBLEM_LEVELS = frozenset({"WARNING", "ERROR", "CRITICAL"})
 # 清除控制台写入文件时残留的 ANSI 颜色转义序列。
 ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 TEXT_LOG_PATTERN = re.compile(
@@ -66,10 +70,48 @@ def _serialize_text(value: object) -> str:
 
 
 def _normalize_level(value: object) -> str:
-    """规范化日志级别，未知级别按 INFO 展示。"""
+    """规范化**日志行**里的级别字段，未知级别按 INFO 展示。"""
     level = str(value or "INFO").upper()
     # 未知级别统一按 INFO 处理，避免前端渲染异常。
     return level if level in LEVELS else "INFO"
+
+
+def _parse_levels_param(levels: Optional[str]) -> set[str]:
+    """解析 ``levels`` 查询参数，返回实际生效的级别集合。
+
+    与 :func:`_normalize_level` 的「行解析」语义刻意分开：行解析对未知值兜底成 INFO，
+    但查询参数若照搬这套兜底，``levels=ERROR,WARN`` 会被折成 ``{INFO, ERROR}`` 并静默
+    返回 INFO 行。参数侧因此做严格校验：支持 WARN/ERR/CRIT/FATAL 别名，其余未知值 422。
+
+    Args:
+        levels: 逗号分隔的级别参数；空值表示不过滤（全部级别）。
+
+    Returns:
+        set[str]: 标准级别集合。
+
+    Raises:
+        HTTPException: 422，携带未知级别与可选值列表。
+    """
+    items = [item.strip() for item in (levels or "").split(",") if item.strip()]
+    if not items:
+        # 不传或传空串时保持原有语义：返回全部级别。
+        return set(LEVELS)
+    parsed: set[str] = set()
+    unknown: List[str] = []
+    for item in items:
+        token = item.upper()
+        level = token if token in LEVELS else LEVEL_ALIASES.get(token)
+        if level is None:
+            unknown.append(item)
+        else:
+            parsed.add(level)
+    if unknown:
+        options = sorted(LEVELS | set(LEVEL_ALIASES))
+        raise HTTPException(
+            status_code=422,
+            detail=f"未知日志级别: {', '.join(unknown)}；可选值: {', '.join(options)}",
+        )
+    return parsed
 
 
 def _parse_json_log(line: str, source_hint: str) -> Optional[Dict[str, object]]:
@@ -174,8 +216,23 @@ def _decode_cursor(cursor: Optional[str]) -> Dict[str, int]:
         raise ValidationError("cursor", "无效的日志增量游标") from exc
 
 
-def _read_records(log_type: str, cursor: Optional[str], limit: int) -> Tuple[List[Dict[str, object]], str]:
-    """读取首次尾部日志或游标之后的增量日志。"""
+def _read_records(
+    log_type: str,
+    cursor: Optional[str],
+    limit: int,
+    levels: Optional[set[str]] = None,
+) -> Tuple[List[Dict[str, object]], str]:
+    """读取首次尾部日志或游标之后的增量日志。
+
+    Args:
+        log_type: 日志视图（all/app/error/crawler/risk）。
+        cursor: 增量游标；None 表示首次拉取。
+        limit: 时间排序后最多返回的条数。
+        levels: 需要保留的级别集合；None 表示不过滤。
+
+    Returns:
+        ``(records, next_cursor)``：按时间升序、已截断到 limit 的日志与下一个游标。
+    """
     offsets = _decode_cursor(cursor)
     next_offsets: Dict[str, int] = {}
     records: List[Dict[str, object]] = []
@@ -199,6 +256,10 @@ def _read_records(log_type: str, cursor: Optional[str], limit: int) -> Tuple[Lis
                 content = path.read_text(encoding="utf-8", errors="replace")
             next_offsets[key] = file_size
             parsed = parse_log_lines(content.splitlines(), source)
+            # 级别过滤必须发生在截断之前：先取尾部 limit 条再过滤，会把更早的问题日志
+            # 直接丢掉（例如最近 1000 行全是 INFO 时导出结果为空）。
+            if levels is not None:
+                parsed = [record for record in parsed if record["level"] in levels]
             # 首次读取取尾部 limit 条；增量读取返回游标之后全部新内容。
             records.extend(parsed if cursor else parsed[-limit:])
         except OSError as exc:
@@ -237,17 +298,23 @@ async def get_logs(
     cursor: Optional[str] = None,
 ):
     """返回结构化日志；传入 cursor 时只返回新增内容。"""
-    requested_levels = {_normalize_level(item.strip()) for item in levels.split(",") if item.strip()}
-    # 读取日志是磁盘 IO，放到线程池避免阻塞事件循环。
+    # 参数侧严格解析级别（别名 + 422），与日志行解析的 INFO 兜底分开。
+    requested_levels = _parse_levels_param(levels)
+    # 读取日志是磁盘 IO，放到线程池避免阻塞事件循环；级别过滤下推到读取阶段，
+    # 保证「先过滤再截断」，较早年月的问题日志不会被最近的低级别日志挤掉。
     try:
-        records, next_cursor = await asyncio.to_thread(_read_records, log_type, cursor, limit)
+        records, next_cursor = await asyncio.to_thread(
+            _read_records, log_type, cursor, limit, requested_levels
+        )
     except (ValueError, ValidationError) as exc:
         # 非法游标直接 400，让前端重置游标重新拉取。
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    filtered = _filter_records(records, requested_levels or LEVELS, keyword)
+    filtered = _filter_records(records, requested_levels, keyword)
     return {
         "success": True,
         "log_type": log_type,
+        # 回显实际生效的级别，便于前端与排查时确认参数确实被识别。
+        "levels": sorted(requested_levels),
         "records": filtered,
         "returned": len(filtered),
         "cursor": next_cursor,
@@ -286,10 +353,12 @@ async def export_problem_logs(log_type: str = "all", full: bool = False) -> Plai
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
     try:
-        records, _ = await asyncio.to_thread(_read_records, log_type, None, 1000)
+        # 级别过滤在读取阶段完成，再按时间取最近 1000 条，避免「先截断再过滤」丢掉更早的问题日志。
+        problems, _ = await asyncio.to_thread(
+            _read_records, log_type, None, 1000, set(PROBLEM_LEVELS)
+        )
     except (ValueError, ValidationError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    problems = _filter_records(records, {"WARNING", "ERROR", "CRITICAL"}, None)
     body = "\n".join(
         f"[{item['timestamp']}] [{item['level']}] [{item['source']}] {item['message']}"
         for item in problems

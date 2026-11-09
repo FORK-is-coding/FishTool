@@ -1,4 +1,4 @@
-"""全局跨站写请求拦截与 WebSocket Origin 校验测试。
+"""跨站写请求防护与 WebSocket Origin 校验测试。
 
 背景：CORS 白名单只阻止跨站页面读取响应，不阻止请求执行。跨站网页可用
 ``fetch(url, {method: 'POST', mode: 'no-cors', body: new Blob([json])})`` 发出不带
@@ -6,9 +6,10 @@ Content-Type 的请求，FastAPI 仍按 JSON 解析请求体，从而跨站调�
 
 覆盖：
 - 跨站 Origin 的写请求被中间件 403 拦截，且业务处理函数不执行；
-- 本机 Origin / 无 Origin / GET 请求不受影响；
-- ``FISHTOOL_ALLOWED_HOSTS`` 覆盖与 local_guard 一致；
-- ``/ws`` 拒绝跨站 Origin 握手，本机与无 Origin（桌宠客户端）可连接。
+- 同源判定必须比较 scheme / host / port：任意本机端口的页面（5173 / 3000）算跨站（#57）；
+- 服务跑在自定义端口（如 ``start_web.bat 9000``）时，与请求同端口的页面算同源，HTTP 与 ``/ws`` 一致；
+- 无 Origin 的请求（CLI、桌宠客户端、测试客户端）不受影响；
+- ``FISHTOOL_ALLOWED_HOSTS`` / ``FISHTOOL_ALLOWED_PORTS`` 覆盖与 local_guard 一致。
 """
 from __future__ import annotations
 
@@ -41,6 +42,7 @@ def client(monkeypatch):
     # core/__init__.py 以同名属性导出了单例实例，必须按模块路径取 core.config 子模块本身
     monkeypatch.setattr(importlib.import_module("core.config"), "config", _CountingConfig())
     monkeypatch.delenv("FISHTOOL_ALLOWED_HOSTS", raising=False)
+    monkeypatch.delenv("FISHTOOL_ALLOWED_PORTS", raising=False)
     test_client = TestClient(web_main.app, base_url="http://127.0.0.1:8000")
     test_client.reload_calls = calls
     return test_client
@@ -70,14 +72,40 @@ def test_cross_site_post_without_content_type_is_blocked(client):
     ["http://127.0.0.1:8000", "http://localhost:8000", "http://localhost:8080", "http://[::1]:8000"],
 )
 def test_local_origin_is_allowed(client, origin):
-    """本机页面发起的写请求放行。"""
+    """本机同源页面发起的写请求放行。"""
     response = client.post("/api/config/reload", headers={"Origin": origin})
     assert response.status_code == 200
     assert client.reload_calls == ["reload"]
 
 
+@pytest.mark.parametrize("origin", ["http://127.0.0.1:5173", "http://localhost:3000", "http://127.0.0.1:9000"])
+def test_other_local_port_is_cross_site(client, origin):
+    """#57 回归：本机其它端口的页面不是同源。"""
+    response = client.post("/api/config/reload", headers={"Origin": origin})
+    assert response.status_code == 403
+    assert response.json() == {"detail": "cross_site_request_blocked"}
+    assert client.reload_calls == []
+
+
+def test_allowed_ports_override_is_respected(client, monkeypatch):
+    """显式配置 FISHTOOL_ALLOWED_PORTS 后，该端口的本机页面被视为同源。"""
+    monkeypatch.setenv("FISHTOOL_ALLOWED_PORTS", "5173")
+    response = client.post("/api/config/reload", headers={"Origin": "http://127.0.0.1:5173"})
+    assert response.status_code == 200
+    assert client.reload_calls == ["reload"]
+
+
+def test_custom_server_port_same_origin_write_is_allowed(monkeypatch):
+    """服务跑在 9000（README：start_web.bat 9000）时，9000 页面的写请求是同源。"""
+    monkeypatch.delenv("FISHTOOL_ALLOWED_HOSTS", raising=False)
+    monkeypatch.delenv("FISHTOOL_ALLOWED_PORTS", raising=False)
+    custom = TestClient(web_main.app, base_url="http://localhost:9000")
+    response = custom.post("/api/config/reload", headers={"Origin": "http://localhost:9000"})
+    assert response.status_code != 403
+
+
 def test_request_without_origin_is_allowed(client):
-    """无 Origin（CLI / 桌面内嵌页同源请求 / 测试客户端）不受影响。"""
+    """无 Origin 的写请求（CLI、桌面内嵌页、测试客户端）不受中间件影响。"""
     response = client.post("/api/config/reload")
     assert response.status_code == 200
     assert client.reload_calls == ["reload"]
@@ -106,12 +134,27 @@ def test_allowed_hosts_override_is_respected(client, monkeypatch):
         ("https://evil.example", True),
         ("http://127.0.0.1.evil.example", True),
         ("null", True),
+        # #57：端口是 Origin 的一部分，任意本机端口不再算同源
+        ("http://127.0.0.1:5173", True),
+        ("http://localhost:3000", True),
+        ("http://127.0.0.1:9000", True),
+        # 缺 scheme 的伪 Origin 无法构成同源
+        ("127.0.0.1:8000", True),
     ],
 )
 def test_is_cross_site_origin(monkeypatch, origin, expected):
-    """跨站判定：仅允许集合内主机视为本机；``null``（沙箱 iframe / file://）视为跨站。"""
+    """跨站判定：scheme + host + port 同时匹配才算同源；``null`` 视为跨站。"""
     monkeypatch.delenv("FISHTOOL_ALLOWED_HOSTS", raising=False)
+    monkeypatch.delenv("FISHTOOL_ALLOWED_PORTS", raising=False)
     assert is_cross_site_origin(origin) is expected
+
+
+def test_is_cross_site_origin_allows_custom_request_port(monkeypatch):
+    """服务跑在自定义端口时，与请求同端口的本机页面视为同源。"""
+    monkeypatch.delenv("FISHTOOL_ALLOWED_HOSTS", raising=False)
+    monkeypatch.delenv("FISHTOOL_ALLOWED_PORTS", raising=False)
+    assert is_cross_site_origin("http://127.0.0.1:8123", request_port=8123) is False
+    assert is_cross_site_origin("http://127.0.0.1:8124", request_port=8123) is True
 
 
 def test_websocket_rejects_cross_site_origin(client):
@@ -130,3 +173,30 @@ def test_websocket_accepts_local_or_missing_origin(client, headers):
         assert len(web_main.manager.active_connections) == 1
         ws.send_text("ping")
     assert web_main.manager.active_connections == []
+
+
+def test_websocket_accepts_same_origin_on_custom_port(monkeypatch):
+    """回归：服务跑在 9000 时，同源页面的 /ws 握手不能被当成跨站（实时预警依赖它）。"""
+    monkeypatch.delenv("FISHTOOL_ALLOWED_HOSTS", raising=False)
+    monkeypatch.delenv("FISHTOOL_ALLOWED_PORTS", raising=False)
+    custom = TestClient(web_main.app, base_url="http://localhost:9000")
+    # TestClient 的 websocket_connect 不使用 base_url，Host 固定为 testserver；
+    # 浏览器真实握手会带 Host: localhost:9000，这里显式还原。
+    headers = {"Host": "localhost:9000", "Origin": "http://localhost:9000"}
+    with custom.websocket_connect("/ws", headers=headers) as ws:
+        assert len(web_main.manager.active_connections) == 1
+        ws.send_text("ping")
+    assert web_main.manager.active_connections == []
+
+
+def test_websocket_rejects_other_local_port_on_custom_port(monkeypatch):
+    """服务跑在 9000 时，5173 等其它本机端口的页面仍被拒。"""
+    monkeypatch.delenv("FISHTOOL_ALLOWED_HOSTS", raising=False)
+    monkeypatch.delenv("FISHTOOL_ALLOWED_PORTS", raising=False)
+    custom = TestClient(web_main.app, base_url="http://localhost:9000")
+    with pytest.raises(WebSocketDisconnect) as excinfo:
+        with custom.websocket_connect(
+            "/ws", headers={"Host": "localhost:9000", "Origin": "http://localhost:5173"}
+        ) as ws:
+            ws.receive_text()
+    assert excinfo.value.code == 1008

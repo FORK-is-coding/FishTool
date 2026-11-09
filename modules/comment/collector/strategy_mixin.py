@@ -7,7 +7,7 @@
 """
 import json
 from typing import List, Dict, Any, Optional, Set
-from core.exceptions import BilibiliAPIError
+from core.exceptions import BilibiliAPIError, CircuitBreakerError, RateLimitError
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -63,7 +63,10 @@ class CommentStrategyMixin:
             logger.info(f"获取到 {len(comments)} 条热门评论")
             
             return comments
-            
+
+        except (RateLimitError, CircuitBreakerError):
+            # 与普通评论一致：限频耗尽向上抛，不降级成空列表。
+            raise
         except BilibiliAPIError as e:
             logger.error(f"采集热门评论失败: {e}")
             return []
@@ -140,7 +143,11 @@ class CommentStrategyMixin:
                 pagination_str = json.dumps({'offset': str(next_offset)}, separators=(',', ':'))
 
             return comments[:limit]
-            
+
+        except (RateLimitError, CircuitBreakerError):
+            # 429 / -509 重试耗尽：必须向上抛。吞成 [] 会让完整采集把只含热门评论的
+            # 结果当成全量（抽奖会据此标记完整快照），与限频前「直接报错」的行为不一致。
+            raise
         except BilibiliAPIError as e:
             logger.error(f"采集普通评论失败: {e}")
             return []
@@ -164,7 +171,7 @@ class CommentStrategyMixin:
         
         # 先采集热门评论
         hot_comments = await self._collect_hot_comments(bvid)
-        # 热门阶段完成，回写进度；limit=None 表示全量无上限
+        # 热门阶段完成，回写进度；limit=None 时普通评论按默认上限 10000 翻页
         self._update_progress(bvid, phase='full', collected=len(hot_comments), limit=max_count)
         
         # 再采集全部普通评论

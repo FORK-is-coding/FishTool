@@ -426,14 +426,18 @@ class LLMClient:
             # 对模型不存在做可操作的中文提示，避免用户只能看到原始英文错误
             response_text = e.response.text or ''
             status_code = e.response.status_code
+            # 只保留状态码进 message（#108）。message 会经 ai_report['error'] 与
+            # /api/analysis/self-diagnosis 响应原样交给调用方，而上游错误体常回显
+            # API Key 片段、内部 trace id、请求片段；原始体只放 detail 属性。
+            # detail 不截断：它只在进程内供上层归类（错误码提取、semantic provider
+            # 关键词匹配），截断会把 JSON 报文切坏、把关键词切掉。
             if 'model_not_found' in response_text or 'model does not exist' in response_text.lower():
                 message = f"LLM模型不存在：{self.model}。请在配置中改为 qwen-plus、qwen-max 或 qwen-turbo，并确认API Key已配置"
             else:
-                message = f"API请求失败: {response_text}"
+                message = f"API请求失败: HTTP {status_code}"
             # 日志只记状态码，不落原始响应体（可能含密钥/敏感信息）
             logger.error(f"LLM API请求失败: HTTP {status_code}")
-            # 在异常实例上附带状态码与原始细节，供上层（如 provider）归类后脱敏；
-            # 不改变异常消息，保持既有调用方兼容。
+            # 在异常实例上附带状态码与原始细节，供上层（如 provider）归类后脱敏。
             err = LLMAPIError(message)
             err.status_code = status_code
             err.detail = response_text
@@ -527,9 +531,13 @@ class LLMClient:
                             continue
                             
         except httpx.HTTPStatusError as e:
-            logger.error(f"LLM API流式请求失败: HTTP {e.response.status_code}")
-            # 抛出异常中断流程
-            raise LLMAPIError(f"流式请求失败: {e.response.text}")
+            status_code = e.response.status_code
+            logger.error(f"LLM API流式请求失败: HTTP {status_code}")
+            # 与 chat_completion 一致：message 只带状态码，原始体放 detail。
+            err = LLMAPIError(f"流式请求失败: HTTP {status_code}")
+            err.status_code = status_code
+            err.detail = e.response.text or ''
+            raise err
         # 异常处理
         except Exception as e:
             logger.error(f"LLM流式请求异常: {e}", exc_info=True)

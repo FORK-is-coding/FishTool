@@ -9,14 +9,33 @@ on:
     branches: ["feat/astrbot-adapter"]
     tags: ["astrbot-v*"]
     paths:
+      # 插件包内嵌 engine_manifest.txt 的白名单文件，改动其中任何一类都要重新验证打包。
       - "integrations/astrbot/**"
       - ".github/workflows/astrbot-*.yml"
-      - "web/frontend/**"
+      - "app.py"
+      - "core/**"
+      - "modules/**"
+      - "web/**"
+      - "bilibili/**"
+      - "llm/**"
+      - "config/*.yaml"
       - "requirements.txt"
+      # 本 workflow 的测试步骤会运行它，改动它也要重新跑
+      - "tools/check_exception_handling.py"
   pull_request:
     paths:
       - "integrations/astrbot/**"
       - ".github/workflows/astrbot-*.yml"
+      - "app.py"
+      - "core/**"
+      - "modules/**"
+      - "web/**"
+      - "bilibili/**"
+      - "llm/**"
+      - "config/*.yaml"
+      - "requirements.txt"
+      # 本 workflow 的测试步骤会运行它，改动它也要重新跑
+      - "tools/check_exception_handling.py"
   workflow_dispatch:
     inputs:
       version:

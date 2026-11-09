@@ -31,6 +31,7 @@ from sqlalchemy import inspect
 
 import core.database.api as db_api
 import core.request_budget as request_budget
+from bilibili.api import client as client_module
 from bilibili.api.client import BilibiliAPICore
 from core import quota_store
 from core.database import Base, DatabaseManager
@@ -218,6 +219,27 @@ def test_single_domain_412_cools_only_that_domain(risk_env, frozen_now):
     # 另一域照常放行，并且正常计入配额。
     request_budget.before_http_attempt('no_cookie', 'discovery')
     assert quota_store.used('no_cookie', 'discovery', NOW) == 1
+
+
+def test_skip_domain_cooldown_allows_login_recovery_but_not_ip_circuit(risk_env, frozen_now):
+    """登录恢复只跳过域冷却；IP 级熔断仍然一票否决。"""
+    request_budget.report_http_412('cookie', now=NOW)
+
+    # 冷却期内默认拒绝，登录恢复模式放行。
+    with pytest.raises(RequestQuotaExceeded) as excinfo:
+        request_budget.before_http_attempt('cookie')
+    assert excinfo.value.reason == 'domain:cooling'
+    request_budget.before_http_attempt('cookie', skip_domain_cooldown=True)
+
+    # 但 IP 熔断不能因为登录恢复被绕过。
+    quota_store.open_ip_circuit(
+        cooldown_until_epoch=NOW + 600,
+        reason='test',
+        now=NOW,
+    )
+    with pytest.raises(RequestQuotaExceeded) as excinfo:
+        request_budget.before_http_attempt('cookie', skip_domain_cooldown=True)
+    assert excinfo.value.reason == 'ip:circuit_open'
 
 
 def test_domain_cooldown_read_failure_refuses_send(risk_env, frozen_now, monkeypatch):
@@ -435,6 +457,22 @@ def test_client_domain_follows_credentials():
     assert BilibiliAPICore(cookie='SESSDATA=x', domain='no_cookie').domain == 'no_cookie'
     with pytest.raises(ValueError):
         BilibiliAPICore(domain='bogus')
+
+
+def test_client_login_recovery_flag_reaches_budget_and_signer(monkeypatch):
+    """登录恢复开关必须同时传给请求闸门与 WBI 签名器。"""
+    client = BilibiliAPICore(cookie='SESSDATA=x', skip_domain_cooldown=True)
+    calls = []
+
+    def fake_before_http_attempt(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(client_module, 'before_http_attempt', fake_before_http_attempt)
+    client._before_attempt()
+
+    assert calls == [(('cookie', None), {'skip_domain_cooldown': True})]
+    assert client.wbi_signer.skip_domain_cooldown is True
+    assert BilibiliAPICore(cookie='SESSDATA=x').wbi_signer.skip_domain_cooldown is False
 
 
 def test_client_request_accounts_declared_quota(risk_env, frozen_now):

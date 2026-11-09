@@ -50,6 +50,11 @@ async def _noop_run_task(task_id, request) -> None:
     return None
 
 
+def _noop_spawn(task_id, request) -> None:
+    """启动器替身：不创建真实协程（强引用由 deps 负责，见 test_web_hotspot_deps）。"""
+    return None
+
+
 @pytest.fixture()
 def client(monkeypatch):
     """挂载 hotspot router 的测试客户端，并注入假生成器与独立任务表。"""
@@ -61,7 +66,8 @@ def client(monkeypatch):
 
     monkeypatch.setattr(routes_tag_cloud, "TagCloudGenerator", _FakeGenerator)
     monkeypatch.setattr(routes_tag_cloud, "get_api", lambda: object())
-    monkeypatch.setattr(routes_tag_cloud, "_run_tag_cloud_task", _noop_run_task)
+    # 后台协程统一由 deps._spawn_tag_cloud_task 启动，这里替换启动器避免真实采集。
+    monkeypatch.setattr(routes_tag_cloud, "_spawn_tag_cloud_task", _noop_spawn)
     monkeypatch.setattr(routes_tag_cloud, "_tag_cloud_tasks", {})
 
     app = FastAPI()

@@ -296,6 +296,31 @@ def test_monitor_multiple_videos_aggregates_alerts_and_success_count(db):
     assert summary["monitored_at"]
 
 
+def test_monitor_multiple_videos_stops_on_rate_limit_and_keeps_done_results(db):
+    """某个视频遇到限频：停止剩余视频，已完成视频的结果保留，汇总标记为不完整。"""
+    from core.exceptions import RateLimitError
+
+    monitor, _, _ = build_monitor()
+    calls = []
+
+    async def fake_monitor_video(bvid, strategy=None):
+        calls.append(bvid)
+        if bvid == "BV-limited":
+            raise RateLimitError(60)
+        return {"bvid": bvid, "success": True, "alerts": [{"id": bvid}]}
+
+    monitor.monitor_video = fake_monitor_video
+
+    summary = run(monitor.monitor_multiple_videos(["BV-ok", "BV-limited", "BV-never"]))
+
+    assert calls == ["BV-ok", "BV-limited"]
+    assert summary["complete"] is False
+    assert summary["aborted_reason"] == "rate_limited"
+    assert summary["successful_count"] == 1
+    assert summary["total_alerts"] == 1
+    assert [r["bvid"] for r in summary["results"]] == ["BV-ok", "BV-limited"]
+
+
 def test_monitor_multiple_videos_handles_empty_input(db):
     """空 BV 列表返回全 0 汇总，不发起任何请求。"""
     monitor, api, _ = build_monitor()

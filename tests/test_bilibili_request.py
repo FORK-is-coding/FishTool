@@ -6,7 +6,14 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from bilibili.api.client import BilibiliAPICore
-from core.exceptions import BilibiliAPIError, CookieExpiredError, InvalidResponseError, RateLimitError
+from core.exceptions import (
+    BilibiliAPIError,
+    CookieExpiredError,
+    InvalidResponseError,
+    NetworkError,
+    RateLimitError,
+    Status429Error,
+)
 
 
 class FakeResponse:
@@ -208,3 +215,57 @@ def test_minus_799_exhaustion_raises_rate_limit(monkeypatch):
 
     with pytest.raises(RateLimitError):
         asyncio.run(core.request("GET", "https://example.test", retry_times=2))
+
+
+def test_http_429_exhaustion_raises_status_429_error(monkeypatch):
+    """429 重试耗尽后必须抛出 Status429Error，而不是笼统的 NetworkError（#84）。"""
+    limiter = FakeLimiter(retry_after=7)
+    core = build_core(FakeResponse(status=429), FakeResponse(status=429), limiter=limiter)
+    monkeypatch.setattr("bilibili.api.client.asyncio.sleep", AsyncMock())
+    # 隔离分域冷却：本用例只验证"限频异常被记住并原样抛出"。
+    monkeypatch.setattr("bilibili.api.client.report_status_429", Mock())
+
+    with pytest.raises(Status429Error) as excinfo:
+        asyncio.run(core.request("GET", "https://example.test", retry_times=2))
+
+    assert excinfo.value.retry_after == 7
+    assert not isinstance(excinfo.value, NetworkError)
+    assert limiter.reports == ["https://example.test", "https://example.test"]
+    assert len(core.session.calls) == 2
+
+
+def test_minus_509_exhaustion_raises_rate_limit_error(monkeypatch):
+    """业务码 -509 重试耗尽后必须抛出 RateLimitError，保留限频语义（#84）。"""
+    limiter = FakeLimiter(retry_after=3)
+    core = build_core(
+        FakeResponse(payload={"code": -509, "message": "busy"}),
+        FakeResponse(payload={"code": -509, "message": "busy"}),
+        limiter=limiter,
+    )
+    monkeypatch.setattr("bilibili.api.client.asyncio.sleep", AsyncMock())
+
+    with pytest.raises(RateLimitError) as excinfo:
+        asyncio.run(core.request("GET", "https://example.test", retry_times=2))
+
+    assert not isinstance(excinfo.value, NetworkError)
+    assert excinfo.value.retry_after == 3
+    assert limiter.reports == ["https://example.test", "https://example.test"]
+    assert len(core.session.calls) == 2
+
+
+def test_http_429_backoff_uses_retry_after(monkeypatch):
+    """429 退避时长取限频器给出的 retry_after，不改成固定指数退避。"""
+    limiter = FakeLimiter(retry_after=11)
+    core = build_core(
+        FakeResponse(status=429),
+        FakeResponse(payload={"code": 0, "data": {"ok": True}}),
+        limiter=limiter,
+    )
+    sleep_mock = AsyncMock()
+    monkeypatch.setattr("bilibili.api.client.asyncio.sleep", sleep_mock)
+    monkeypatch.setattr("bilibili.api.client.report_status_429", Mock())
+
+    result = asyncio.run(core.request("GET", "https://example.test", retry_times=2))
+
+    assert result == {"ok": True}
+    assert 11 in [call.args[0] for call in sleep_mock.await_args_list]

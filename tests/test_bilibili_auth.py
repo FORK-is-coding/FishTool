@@ -69,10 +69,11 @@ class _ClockDatetime:
 class _FakeAPIClient:
     """支持异步上下文协议的 B站接口替身。"""
 
-    def __init__(self, controller, cookie=None) -> None:
-        """绑定控制器与 Cookie。"""
+    def __init__(self, controller, cookie=None, **kwargs) -> None:
+        """绑定控制器与 Cookie，并记录构造参数。"""
         self._controller = controller
         self.cookie = cookie
+        self.init_kwargs = kwargs
         self.entered = 0
         self.exited = 0
 
@@ -119,9 +120,9 @@ class _APIController:
         self.poll_calls = []
         self.instances = []
 
-    def factory(self, cookie=None):
+    def factory(self, cookie=None, **kwargs):
         """作为 BilibiliAPI 的可调用替身。"""
-        client = _FakeAPIClient(self, cookie)
+        client = _FakeAPIClient(self, cookie, **kwargs)
         self.instances.append(client)
         return client
 
@@ -513,6 +514,17 @@ def test_validate_cookie_returns_false_when_not_logged_in(api_stub):
     assert asyncio.run(CookieLoginHelper.validate_cookie("SESSDATA=a")) is False
 
 
+def test_validate_cookie_uses_login_recovery_mode(api_stub):
+    """扫码登录恢复必须显式跳过域冷却；默认路径不得放宽。"""
+    api_stub.get_payload = {"isLogin": True}
+
+    asyncio.run(CookieLoginHelper.validate_cookie("SESSDATA=a", allow_during_cooldown=True))
+    asyncio.run(CookieLoginHelper.validate_cookie("SESSDATA=a"))
+
+    assert api_stub.instances[0].init_kwargs == {"skip_domain_cooldown": True}
+    assert api_stub.instances[1].init_kwargs == {"skip_domain_cooldown": False}
+
+
 def test_validate_cookie_swallows_cookie_expired(api_stub):
     """CookieExpiredError 必须收敛为 False，不向外抛。"""
     api_stub.get_error = CookieExpiredError()
@@ -548,6 +560,15 @@ def test_get_user_info_maps_nav_fields(api_stub):
         "vip_type": 2,
         "is_login": True,
     }
+
+
+def test_get_user_info_uses_login_recovery_mode(api_stub):
+    """登录成功后的首次用户信息拉取同样不能卡在旧的域冷却上。"""
+    api_stub.get_payload = {"isLogin": True, "mid": 1, "uname": "A"}
+
+    asyncio.run(CookieLoginHelper.get_user_info("SESSDATA=a", allow_during_cooldown=True))
+
+    assert api_stub.instances[0].init_kwargs == {"skip_domain_cooldown": True}
 
 
 def test_get_user_info_raises_when_not_logged_in(api_stub):

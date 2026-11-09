@@ -111,7 +111,7 @@ class EngineSupervisor:
         self.token = secrets.token_urlsafe(32)  # 每次启动轮换
         env = {
             **os.environ,
-            "FISHTOOL_LOCAL_SESSION_TOKEN": self.token,  # web/local_guard.py:69
+            "FISHTOOL_LOCAL_SESSION_TOKEN": self.token,  # web/local_guard.py LocalGuard.__init__
             "FISHTOOL_ALLOWED_HOSTS": "127.0.0.1,localhost",
             "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",

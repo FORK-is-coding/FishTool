@@ -12,6 +12,10 @@
 """
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
+import pytest
 import yaml
 
 from core.config import ConfigManager
@@ -146,6 +150,10 @@ def test_corrupted_secrets_file_falls_back_to_empty(tmp_path):
     reloaded = ConfigManager(config_dir=str(tmp_path / "cfg"))
     assert reloaded.get_secret("k") is None
     assert reloaded.get_secret("k", "fallback") == "fallback"
+    # 解不开的 .secrets 先改名备份，下一次 save_secret 不会把它覆盖掉
+    backups = list(manager.config_dir.glob(".secrets.bad-*"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == b"not-a-valid-fernet-token"
 
 
 def test_user_config_deep_merges_over_main(tmp_path):
@@ -214,3 +222,282 @@ def test_all_property_snapshot_excludes_secrets(tmp_path):
     snapshot["injected"] = True
     assert manager.get("injected") is None
     assert manager.get_secret("k") == "v"
+
+
+def test_all_property_returns_deep_copy(tmp_path):
+    """all 返回深拷贝：改写嵌套节点不得污染活配置，也不得随落盘写出（#88）。"""
+    manager = _make_manager(tmp_path)
+    snapshot = manager.all
+    # 模拟 web 层往响应副本里塞展示字段
+    snapshot["llm"]["api_key_masked"] = "sk-1234***cdef"
+    snapshot["server"]["port"] = 1
+
+    assert "api_key_masked" not in manager.get("llm")
+    assert manager.get("server.port") == 8080
+
+    manager.save_config()
+    assert "api_key_masked" not in manager.main_config_path.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# 明文密钥迁移（#88）
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_plaintext_api_key_is_migrated_into_secrets(tmp_path):
+    """历史明文 llm.api_key 应搬进加密 secrets 并从普通配置里消失。"""
+    _make_manager(tmp_path)  # 生成默认 config.yaml
+    cfg_dir = tmp_path / "cfg"
+    raw = yaml.safe_load((cfg_dir / "config.yaml").read_text(encoding="utf-8"))
+    raw["llm"]["api_key"] = "sk-legacy-plain"
+    (cfg_dir / "config.yaml").write_text(
+        yaml.dump(raw, allow_unicode=True), encoding="utf-8"
+    )
+
+    manager = ConfigManager(config_dir=str(cfg_dir))
+
+    assert manager.get_secret("llm_api_key") == "sk-legacy-plain"
+    assert manager.get("llm.api_key") is None
+    assert "sk-legacy-plain" not in (cfg_dir / "config.yaml").read_text(encoding="utf-8")
+    assert b"sk-legacy-plain" not in manager.secrets_path.read_bytes()
+
+
+# ---------------------------------------------------------------------------
+# 坏文件与原子写盘（#124）
+# ---------------------------------------------------------------------------
+
+
+def test_broken_yaml_falls_back_to_defaults_and_backs_up(tmp_path):
+    """config.yaml 解析失败时构造不抛异常，回退默认值并备份坏文件。"""
+    cfg_dir = tmp_path / "cfg"
+    cfg_dir.mkdir(parents=True)
+    broken = "server: [unclosed\n  bad: : :\n"
+    (cfg_dir / "config.yaml").write_text(broken, encoding="utf-8")
+
+    manager = ConfigManager(config_dir=str(cfg_dir))
+
+    assert manager.get("server.port") == 8080
+    backups = list(cfg_dir.glob("config.yaml.bad-*"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == broken
+
+
+def test_broken_user_config_is_ignored(tmp_path):
+    """user_config.yaml 解析失败时按“没有覆盖项”处理，主配置照常生效。"""
+    _make_manager(tmp_path)
+    cfg_dir = tmp_path / "cfg"
+    (cfg_dir / "user_config.yaml").write_text("app: {broken\n", encoding="utf-8")
+
+    manager = ConfigManager(config_dir=str(cfg_dir))
+
+    assert manager.get("server.port") == 8080
+    assert list(cfg_dir.glob("user_config.yaml.bad-*"))
+
+
+def test_non_mapping_yaml_falls_back_to_defaults(tmp_path):
+    """顶层不是字典的 YAML 同样视为坏文件，而不是让后续 .get 崩掉。"""
+    cfg_dir = tmp_path / "cfg"
+    cfg_dir.mkdir(parents=True)
+    (cfg_dir / "config.yaml").write_text("just-a-string\n", encoding="utf-8")
+
+    manager = ConfigManager(config_dir=str(cfg_dir))
+
+    assert manager.get("server.port") == 8080
+    assert list(cfg_dir.glob("config.yaml.bad-*"))
+
+
+def test_save_config_failure_keeps_original_file(tmp_path, monkeypatch):
+    """序列化失败时原 config.yaml 字节不变（旧实现会先截断成半截文件）。"""
+    manager = _make_manager(tmp_path)
+    original = manager.main_config_path.read_bytes()
+    manager.set("app.version", "9.9.9")
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("dump failed")
+
+    monkeypatch.setattr(
+        sys.modules["core.config"], "yaml", SimpleNamespace(dump=_boom)
+    )
+    with pytest.raises(RuntimeError):
+        manager.save_config()
+
+    assert manager.main_config_path.read_bytes() == original
+    assert "9.9.9" not in manager.main_config_path.read_text(encoding="utf-8")
+    # 不留临时文件
+    assert not list(manager.config_dir.glob(".config.yaml.*.tmp"))
+
+
+def test_truncated_key_file_is_backed_up_and_rebuilt(tmp_path):
+    """截断的 .key 不再抛 ValueError：备份旧文件并重建可用密钥。"""
+    manager = _make_manager(tmp_path)
+    manager.save_secret("llm_api_key", "sk-old")
+    manager.key_path.write_bytes(b"short")
+
+    rebuilt = ConfigManager(config_dir=str(tmp_path / "cfg"))
+
+    assert len(rebuilt.key_path.read_bytes()) > 8
+    assert rebuilt.get("server.port") == 8080  # 配置本身仍可加载
+    backups = list(manager.config_dir.glob(".key.bad-*"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == b"short"
+    # 新密钥可正常加解密
+    rebuilt.save_secret("k2", "v2")
+    assert rebuilt.get_secret("k2") == "v2"
+
+
+def test_truncated_key_also_backs_up_secrets_so_old_values_stay_recoverable(tmp_path):
+    """.key 损坏重建时必须先备份 .secrets：否则下一次保存会用新密钥覆盖，旧 Cookie 永久丢失。"""
+    from cryptography.fernet import Fernet
+    import json
+
+    manager = _make_manager(tmp_path)
+    manager.save_secret("bilibili_cookie", "SESSDATA=OLD")
+    old_key = manager.key_path.read_bytes()
+    manager.key_path.write_bytes(old_key[:10])
+
+    rebuilt = ConfigManager(config_dir=str(tmp_path / "cfg"))
+    rebuilt.save_secret("llm_api_key", "sk-new")
+
+    backups = list(manager.config_dir.glob(".secrets.bad-*"))
+    assert len(backups) == 1
+    restored = json.loads(Fernet(old_key).decrypt(backups[0].read_bytes()))
+    assert restored["bilibili_cookie"] == "SESSDATA=OLD"
+
+
+def test_key_read_error_is_not_treated_as_corruption(tmp_path, monkeypatch):
+    """读 .key 时的 OSError（占用、权限）不是密钥损坏：不得改名重建 .key / .secrets。"""
+    from pathlib import Path
+
+    manager = _make_manager(tmp_path)
+    manager.save_secret("bilibili_cookie", "SESSDATA=KEEP")
+    key_path = manager.key_path
+    real_read = Path.read_bytes
+
+    def _flaky(self):
+        if self == key_path:
+            raise PermissionError("locked")
+        return real_read(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _flaky)
+    # 与 main 一致：读不到密钥就让构造失败，而不是悄悄换一把新密钥
+    with pytest.raises(PermissionError):
+        ConfigManager(config_dir=str(tmp_path / "cfg"))
+    monkeypatch.setattr(Path, "read_bytes", real_read)
+
+    assert not list(manager.config_dir.glob(".key.bad-*"))
+    assert not list(manager.config_dir.glob(".secrets.bad-*"))
+    assert ConfigManager(config_dir=str(tmp_path / "cfg")).get_secret("bilibili_cookie") == "SESSDATA=KEEP"
+
+
+def test_legacy_plaintext_key_in_user_config_is_migrated_once(tmp_path):
+    """明文 key 写在 user_config.yaml：迁入 secrets、从该文件删除，且不再反复重写 config.yaml。"""
+    manager = _make_manager(tmp_path)
+    manager.user_config_path.write_text("llm:\n  api_key: sk-user-plain\n", encoding="utf-8")
+
+    first = ConfigManager(config_dir=str(tmp_path / "cfg"))
+    assert first.get_secret("llm_api_key") == "sk-user-plain"
+    assert "sk-user-plain" not in manager.user_config_path.read_text(encoding="utf-8")
+    assert "sk-user-plain" not in manager.main_config_path.read_text(encoding="utf-8")
+
+    before = manager.main_config_path.stat().st_mtime_ns
+    ConfigManager(config_dir=str(tmp_path / "cfg"))
+    assert manager.main_config_path.stat().st_mtime_ns == before
+
+
+def test_secrets_read_error_is_not_treated_as_corruption(tmp_path, monkeypatch):
+    """读 .secrets 时的 OSError（被占用、权限）不是密文损坏：构造报错，文件与内容保持原样。"""
+    from pathlib import Path
+
+    manager = _make_manager(tmp_path)
+    manager.save_secret("bilibili_cookie", "SESSDATA=KEEP")
+    secrets_path = manager.secrets_path
+    real_read = Path.read_bytes
+
+    def _flaky(self):
+        if self == secrets_path:
+            raise PermissionError("locked")
+        return real_read(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _flaky)
+    with pytest.raises(PermissionError):
+        ConfigManager(config_dir=str(tmp_path / "cfg"))
+    monkeypatch.setattr(Path, "read_bytes", real_read)
+
+    assert not list(manager.config_dir.glob(".secrets.bad-*"))
+    assert ConfigManager(config_dir=str(tmp_path / "cfg")).get_secret("bilibili_cookie") == "SESSDATA=KEEP"
+
+
+def test_write_secrets_refuses_to_overwrite_unread_file(tmp_path):
+    """内存里的 secrets 没能从磁盘读进来时，拒绝覆盖写 .secrets，旧内容不丢。"""
+    manager = _make_manager(tmp_path)
+    manager.save_secret("bilibili_cookie", "SESSDATA=KEEP")
+    before = manager.secrets_path.read_bytes()
+    manager._secrets_loaded = False
+
+    with pytest.raises(OSError):
+        manager.save_secret("llm_api_key", "sk-new")
+
+    assert manager.secrets_path.read_bytes() == before
+
+
+def test_atomic_replace_retries_when_target_is_briefly_locked(tmp_path, monkeypatch):
+    """Windows 上目标文件被别的句柄打开时 os.replace 抛 PermissionError：短暂重试后成功。"""
+    import os as os_module
+
+    # core/__init__.py 用同名属性导出了 ConfigManager 实例，必须从 sys.modules 取子模块本身
+    core_config_module = sys.modules["core.config"]
+    manager = _make_manager(tmp_path)
+    real_replace = os_module.replace
+    failures = {"left": 2}
+
+    def _locked_then_ok(src, dst):
+        if failures["left"]:
+            failures["left"] -= 1
+            raise PermissionError("[WinError 5] 拒绝访问")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os_module, "replace", _locked_then_ok)
+    # 只打开重试开关，不改全局 os.name：Linux 上把 os.name 改成 "nt" 会让
+    # pathlib.Path() 去构造 WindowsPath 并抛 NotImplementedError（CI 上就是这样挂的）。
+    monkeypatch.setattr(ConfigManager, "_RETRY_REPLACE_ON_PERMISSION_ERROR", True)
+    monkeypatch.setattr(core_config_module.time, "sleep", lambda _s: None)
+    manager.set("app.version", "9.9.9")
+    manager.save_config()
+
+    assert failures["left"] == 0
+    assert "9.9.9" in manager.main_config_path.read_text(encoding="utf-8")
+
+
+def test_atomic_replace_does_not_retry_when_switch_is_off(tmp_path, monkeypatch):
+    """非 Windows（开关关闭）时 PermissionError 立即抛出，原文件保持不变、临时文件被清理。"""
+    import os as os_module
+
+    manager = _make_manager(tmp_path)
+    before = manager.main_config_path.read_text(encoding="utf-8")
+    calls = {"n": 0}
+
+    def _always_locked(src, dst):
+        calls["n"] += 1
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(os_module, "replace", _always_locked)
+    monkeypatch.setattr(ConfigManager, "_RETRY_REPLACE_ON_PERMISSION_ERROR", False)
+    manager.set("app.version", "9.9.9")
+    with pytest.raises(PermissionError):
+        manager.save_config()
+
+    assert calls["n"] == 1
+    assert manager.main_config_path.read_text(encoding="utf-8") == before
+    assert not list(manager.config_dir.glob(".config.yaml.*.tmp"))
+
+
+def test_init_survives_unexpected_load_error(tmp_path, monkeypatch):
+    """_load_config 抛出意料之外的异常时，构造仍成功并落到默认值（导入期不崩）。"""
+    def _boom(self):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(ConfigManager, "_load_config", _boom)
+    manager = ConfigManager(config_dir=str(tmp_path / "cfg"))
+
+    assert manager.get("server.port") == 8080
+    assert manager.all["app"]["name"] == "B站运营工具箱"

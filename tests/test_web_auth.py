@@ -52,15 +52,19 @@ class _FakeCookieLoginHelper:
 
     valid: bool = True
     user: dict = {"uid": 42, "name": "测试UP"}
+    last_validate_kwargs: dict = {}
+    last_user_kwargs: dict = {}
 
     @staticmethod
-    async def validate_cookie(cookie: str) -> bool:
-        """返回预置的有效性。"""
+    async def validate_cookie(cookie: str, **kwargs) -> bool:
+        """返回预置的有效性，并记录恢复模式参数。"""
+        _FakeCookieLoginHelper.last_validate_kwargs = kwargs
         return _FakeCookieLoginHelper.valid
 
     @staticmethod
-    async def get_user_info(cookie: str) -> dict:
-        """返回预置用户信息。"""
+    async def get_user_info(cookie: str, **kwargs) -> dict:
+        """返回预置用户信息，并记录恢复模式参数。"""
+        _FakeCookieLoginHelper.last_user_kwargs = kwargs
         return _FakeCookieLoginHelper.user
 
 
@@ -195,6 +199,19 @@ def test_status_with_valid_cookie(client):
     assert body["logged_in"] is True
     assert body["user"] == {"uid": 42, "name": "测试UP"}
     assert body["cookie_masked"]
+
+
+def test_status_never_skips_domain_cooldown(client):
+    """/auth/status 每次加载页面都会调用：不能跳过分域冷却（否则冷却期刷新会持续外发 nav，
+    把 15 分钟冷却一路翻倍）。只有扫码轮询这类用户显式的一次性动作才允许跳过。"""
+    _FakeCookieLoginHelper.last_validate_kwargs = {"sentinel": True}
+    _FakeCookieLoginHelper.last_user_kwargs = {"sentinel": True}
+    _FakeConfig.store[auth_module.COOKIE_SECRET_KEY] = "SESSDATA=abcdefgh1234; bili_jct=zzz"
+
+    client.get("/api/auth/status")
+
+    assert not _FakeCookieLoginHelper.last_validate_kwargs.get("allow_during_cooldown")
+    assert not _FakeCookieLoginHelper.last_user_kwargs.get("allow_during_cooldown")
 
 
 def test_status_with_invalid_cookie_marks_invalid(client):
@@ -344,9 +361,9 @@ def test_poll_success_validates_before_persisting(client, monkeypatch):
     _FakeBilibiliAPI.poll_result = ({"code": 0, "data": {"code": 0}}, [])
     calls: list = []
 
-    async def spy_validate(cookie: str) -> bool:
+    async def spy_validate(cookie: str, **kwargs) -> bool:
         """记录校验调用与校验时 secrets 的状态。"""
-        calls.append(("validate", cookie, _FakeConfig.store.get(auth_module.COOKIE_SECRET_KEY)))
+        calls.append(("validate", cookie, _FakeConfig.store.get(auth_module.COOKIE_SECRET_KEY), kwargs))
         return True
 
     def spy_save_secret(self, key, value):
@@ -369,6 +386,8 @@ def test_poll_success_validates_before_persisting(client, monkeypatch):
     # 校验用的是本次提取的内存 Cookie，此时 secrets 中尚无该值
     assert calls[0][1] == _FakeQrCodeLogin.cookie
     assert calls[0][2] is None
+    assert calls[0][3] == {"allow_during_cooldown": True}
+    assert _FakeCookieLoginHelper.last_user_kwargs == {"allow_during_cooldown": True}
 
 
 def test_poll_cookie_pool_sync_failure_is_tolerated(client, monkeypatch):

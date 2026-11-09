@@ -293,3 +293,85 @@ def test_sign_params_skips_refresh_when_fresh(fixed_time):
 
     assert session.calls == []
     assert signed["w_rid"]
+
+
+# ---------------------------------------------------------------------------
+# #109 回归：并发签名只刷新一次 WBI 密钥（单飞）
+# ---------------------------------------------------------------------------
+
+
+class _SlowGetContext(_FakeGetContext):
+    """在进入上下文时让出事件循环，制造并发刷新竞争窗口。"""
+
+    async def __aenter__(self) -> _FakeResponse:
+        """先挂起一小段时间再返回响应，放大双检窗口。"""
+        await asyncio.sleep(0.01)
+        return await super().__aenter__()
+
+
+class _SlowFakeSession(_FakeSession):
+    """nav 请求带延迟的假会话，用于并发单飞测试。"""
+
+    def get(self, url: str) -> _SlowGetContext:
+        """记录 URL；注入了异常则直接抛出，否则返回带延迟的上下文。"""
+        self.calls.append(url)
+        if self._error is not None:
+            raise self._error
+        assert self._response is not None, "假会话缺少响应"
+        return _SlowGetContext(self._response)
+
+
+def test_sign_params_concurrent_refresh_is_single_flight(fixed_time):
+    """5 个并发 sign_params 只能触发一次 nav 刷新，避免重复扣配额（#109）。"""
+    signer = WBISigner()
+    session = _SlowFakeSession(_FakeResponse(200, _nav_payload()))
+
+    async def _scenario() -> list:
+        """并发签名并返回全部结果。"""
+        return await asyncio.gather(*(signer.sign_params({"mid": i}, session) for i in range(5)))
+
+    results = asyncio.run(_scenario())
+
+    assert session.calls == [NAV_URL]
+    assert len(results) == 5
+    assert all(result["w_rid"] for result in results)
+
+
+def test_sign_params_concurrent_refresh_failure_still_raises_wbisign_error(fixed_time):
+    """刷新失败的处理保持现状：并发场景下仍包装成 WBISignError 向外抛。"""
+    signer = WBISigner()
+    session = _SlowFakeSession(error=ConnectionError("boom"))
+
+    async def _scenario() -> list:
+        """并发签名，异常以返回值形式收集。"""
+        return await asyncio.gather(
+            *(signer.sign_params({"mid": i}, session) for i in range(5)),
+            return_exceptions=True,
+        )
+
+    results = asyncio.run(_scenario())
+
+    assert all(isinstance(result, WBISignError) for result in results)
+    # 刷新失败同样单飞：同一波并发只发一次 nav（每次都计入每日维护配额）
+    assert len(session.calls) == 1
+
+
+def test_refresh_failure_reuse_expires(fixed_time, monkeypatch):
+    """复用失败只合并同一波并发：超过复用窗口后下一次签名会重新尝试刷新。"""
+    import bilibili.api.signer as signer_module
+
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(signer_module.time, "monotonic", lambda: clock["now"])
+    signer = WBISigner()
+    session = _SlowFakeSession(error=ConnectionError("boom"))
+
+    with pytest.raises(WBISignError):
+        asyncio.run(signer.sign_params({"mid": 1}, session))
+    with pytest.raises(WBISignError):
+        asyncio.run(signer.sign_params({"mid": 2}, session))
+    assert len(session.calls) == 1
+
+    clock["now"] += WBISigner.REFRESH_FAILURE_REUSE_S + 1
+    with pytest.raises(WBISignError):
+        asyncio.run(signer.sign_params({"mid": 3}, session))
+    assert len(session.calls) == 2

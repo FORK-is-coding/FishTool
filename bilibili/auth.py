@@ -50,6 +50,7 @@ import logging
 
 from core.exceptions import AuthenticationError, CookieExpiredError
 from core.logger import get_logger
+from core.request_budget import RequestQuotaExceeded
 from bilibili.api import BilibiliAPI
 
 logger = get_logger(__name__)
@@ -418,18 +419,24 @@ class CookieLoginHelper:
     """
     
     @staticmethod
-    async def validate_cookie(cookie: str) -> bool:
+    async def validate_cookie(cookie: str, *, allow_during_cooldown: bool = False) -> bool:
         """验证Cookie是否有效
         
         Args:
             cookie: Cookie字符串
+            allow_during_cooldown: 为 ``True`` 时跳过本地域冷却判定。仅用于用户
+                显式扫码后的登录恢复：此时 ``domain:cooling`` 往往是采集任务留下的
+                状态，不应把登录校验误报成 Cookie 失效。IP 级熔断仍然生效。
             
         Returns:
             是否有效
         """
         try:
             # 上下文管理：确保资源自动释放
-            async with BilibiliAPI(cookie=cookie) as api:
+            async with BilibiliAPI(
+                cookie=cookie,
+                skip_domain_cooldown=allow_during_cooldown,
+            ) as api:
                 # api.get() 已经返回 data 字段
                 data = await api.get(
                     'https://api.bilibili.com/x/web-interface/nav',
@@ -443,21 +450,31 @@ class CookieLoginHelper:
         except CookieExpiredError as exc:
             logger.debug("Cookie 已过期，验证结果为无效: %s", exc)
             return False
+        except RequestQuotaExceeded as exc:
+            # 默认路径不绕过风控，但必须把「本地冷却」和「Cookie 失效」区分开，
+            # 否则日志和上层提示都会指向错误的排查方向。
+            logger.warning("Cookie校验被本地风控闸门拦截: %s", exc)
+            return False
         except Exception as e:
             logger.error(f"验证Cookie失败: {e}", exc_info=True)
             return False
     
     @staticmethod
-    async def get_user_info(cookie: str) -> dict:
+    async def get_user_info(cookie: str, *, allow_during_cooldown: bool = False) -> dict:
         """获取用户信息
         
         Args:
             cookie: Cookie字符串
+            allow_during_cooldown: 为 ``True`` 时跳过本地域冷却判定，仅供扫码
+                登录成功后的首次用户信息拉取使用。
             
         Returns:
             用户信息字典
         """
-        async with BilibiliAPI(cookie=cookie) as api:
+        async with BilibiliAPI(
+            cookie=cookie,
+            skip_domain_cooldown=allow_during_cooldown,
+        ) as api:
             result = await api.get('https://api.bilibili.com/x/web-interface/nav')
             
             # api.get() 已经剥离外层，直接返回 data 部分

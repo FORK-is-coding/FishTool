@@ -8,13 +8,17 @@ B站运营工具箱 - 核心配置管理
 3. 配置热重载（无需重启应用）
 4. 点号分隔的配置访问（如 'bilibili.rate_limit.normal'）
 """
+import copy
 import os
 import sys
 import json
+import tempfile
+import time
 import yaml
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any
-from cryptography.fernet import Fernet
+from typing import Dict, Any, Optional
+from cryptography.fernet import Fernet, InvalidToken
 import logging
 
 # 创建日志记录器，用于输出配置管理相关的日志
@@ -86,9 +90,22 @@ class ConfigManager:
         
         # 初始化配置字典（所有配置项都存储在这里）
         self._config: Dict[str, Any] = {}
-        
+        # 磁盘上的 .secrets 是否已被成功读入（或本来就不存在）。为 False 时拒绝覆盖写，
+        # 防止“读失败 → 内存里 secrets 为空 → 下一次 save_secret 把旧 Cookie 整个覆盖掉”。
+        self._secrets_loaded = False
+
         # 加载所有配置（从文件读取并合并）
-        self._load_config()
+        # _load_config 内部已对单个文件做“备份坏文件 + 回退默认值”，这里再兜一层：
+        # 模块级 config 实例在导入期创建，任何意外异常都不能让进程起不来（#124）。
+        try:
+            self._load_config()
+        except OSError:
+            # 文件读不出（被占用、权限）与“内容损坏”不同：原样抛出，与 .key 读失败和改造前一致，
+            # 不能悄悄换成默认值继续跑（那样 .secrets 会在下一次保存时被覆盖）。
+            raise
+        except Exception as e:  # noqa: BLE001 - 配置加载失败必须降级而不是崩溃
+            logger.error(f"加载配置文件失败，改用内置默认值: {e}", exc_info=True)
+            self._config = self._get_default_config()
     
     def _init_cipher(self) -> Fernet:
         """初始化加密器（用于敏感信息的加密存储）
@@ -103,22 +120,150 @@ class ConfigManager:
         """
         # 检查密钥文件是否已存在
         if self.key_path.exists():
-            # 从文件读取已有的密钥（二进制格式）
+            # 从文件读取已有的密钥（二进制格式）。读失败（OSError：文件被占用、权限、
+            # 杀毒扫描）不是“密钥损坏”，必须原样抛出：当成损坏处理会把仍然有效的
+            # .key 和 .secrets 一起改名重建，用户的登录态和 API Key 全部丢失。
             key = self.key_path.read_bytes()
-        else:
-            # 首次运行，生成新的随机密钥
-            key = Fernet.generate_key()
-            
-            # 将密钥保存到文件（二进制格式）
-            self.key_path.write_bytes(key)
-            
-            # 密钥文件权限保护：仅在非 Windows 系统上执行
-            if os.name != 'nt':  # 'nt' 表示 Windows，其他为 Linux/Mac
-                # 设置文件权限为 600（仅所有者可读写，其他人无权限）
-                os.chmod(self.key_path, 0o600)
-        
+            try:
+                # 创建并返回 Fernet 加密器实例
+                return Fernet(key)
+            except (ValueError, TypeError) as e:
+                # 密钥文件被截断/损坏（例如写盘时进程被杀）时，旧行为是在这里抛
+                # ValueError 让整个进程起不来。改为备份损坏文件后重建新密钥（#124）。
+                backup = self._backup_broken_file(self.key_path)
+                # .secrets 必须一并改名备份：新密钥解不开旧密文，下一次 save_secret
+                # 就会用新密钥覆盖 .secrets，旧 Cookie / API Key 即使找回旧 .key 也无法恢复。
+                # 备份后 .secrets 不存在，_load_config 按“首次运行”处理，不会再触发解密报错。
+                secrets_backup = (
+                    self._backup_broken_file(self.secrets_path)
+                    if self.secrets_path.exists() else None
+                )
+                logger.error(
+                    f"加密密钥文件损坏，已备份到 {backup}"
+                    f"{f'（加密配置已备份到 {secrets_backup}）' if secrets_backup else ''}"
+                    f"，并重新生成新密钥；恢复旧密钥后把两个备份改回原名即可找回原有登录态: {e}"
+                )
+
+        # 首次运行（或密钥损坏后重建），生成新的随机密钥
+        key = Fernet.generate_key()
+
+        # 原子写入密钥文件（临时文件 + os.replace），并在非 Windows 上收紧权限
+        self._atomic_write_bytes(self.key_path, key, mode=0o600)
+
         # 创建并返回 Fernet 加密器实例
         return Fernet(key)
+
+    def _backup_broken_file(self, path: Path) -> Optional[Path]:
+        """把损坏的配置文件改名备份为 ``<name>.bad-<timestamp>``（#124）。
+
+        备份而不是直接删除，用户仍可从中恢复手工改过的内容。
+        重名时追加 ``-1``/``-2`` 后缀；改名失败只记日志并返回 None，
+        调用方继续走“回退默认值/重建”的流程，不让异常冒泡。
+        """
+        stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+        target = path.with_name(f"{path.name}.bad-{stamp}")
+        index = 1
+        while target.exists():
+            target = path.with_name(f"{path.name}.bad-{stamp}-{index}")
+            index += 1
+        try:
+            os.replace(path, target)
+        except OSError as e:
+            logger.error(f"备份损坏的配置文件失败（{path}）: {e}")
+            return None
+        logger.warning(f"损坏的配置文件已备份: {path} -> {target}")
+        return target
+
+    def _atomic_write_bytes(self, path: Path, data: bytes, mode: Optional[int] = None) -> None:
+        """同目录临时文件 + os.replace 原子写盘（#124）。
+
+        先写 ``.<name>.xxxx.tmp`` 再原子替换，任何中途失败（磁盘满、进程被杀、
+        序列化前就已抛错）都不会把目标文件截成半截。
+
+        Args:
+            path: 目标文件路径
+            data: 要写入的字节
+            mode: 非 Windows 上写入完成后设置的文件权限
+        """
+        directory = path.parent
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=str(directory)
+        )
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(fd, 'wb') as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+            if mode is not None and os.name != 'nt':
+                os.chmod(tmp_path, mode)
+            self._replace_with_retry(tmp_path, path)
+        except BaseException:
+            # 失败时清掉临时文件，原文件保持不动
+            try:
+                tmp_path.unlink()
+            except OSError as cleanup_error:
+                # 临时文件清不掉不应覆盖原始写入异常；保留诊断信息。
+                logger.debug("清理临时配置文件失败: %s", cleanup_error)
+            raise
+
+    #: 是否按 Windows 处理 os.replace 的 PermissionError（目标被其它句柄占用）。
+    #: 单独成类属性：测试要在 Linux 上覆盖这条分支时改它即可，不能去改全局 os.name，
+    #: 否则 pathlib.Path() 会去构造 WindowsPath 并抛 NotImplementedError。
+    _RETRY_REPLACE_ON_PERMISSION_ERROR = os.name == 'nt'
+
+    @classmethod
+    def _replace_with_retry(cls, source: Path, target: Path, attempts: int = 10, delay_s: float = 0.05) -> None:
+        """``os.replace`` 的 Windows 容错版本。
+
+        Windows 上只要目标文件被别的句柄打开（编辑器、杀毒扫描、同进程另一个线程正在
+        读配置），``os.replace`` 就会抛 ``PermissionError``；旧实现直接 ``open(path, 'w')``
+        不受影响。这里短暂退避重试，仍失败才抛出，调用方会清理临时文件、原文件不动。
+        """
+        for attempt in range(attempts):
+            try:
+                os.replace(source, target)
+                return
+            except PermissionError:
+                if not cls._RETRY_REPLACE_ON_PERMISSION_ERROR or attempt == attempts - 1:
+                    raise
+                time.sleep(delay_s)
+
+    def _atomic_write_text(self, path: Path, text: str, mode: Optional[int] = None) -> None:
+        """文本版原子写入（UTF-8 编码）。"""
+        self._atomic_write_bytes(path, text.encode('utf-8'), mode=mode)
+
+    def _read_yaml_file(self, path: Path) -> Optional[Dict[str, Any]]:
+        """读取 YAML 配置文件，解析失败则备份坏文件并返回 None（#124）。
+
+        Returns:
+            解析出的字典；文件为空时返回 ``{}``；解析失败/顶层不是字典时返回 None，
+            由调用方决定回退到默认值（主配置）或空配置（user_config）。
+        """
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+        except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
+            backup = self._backup_broken_file(path)
+            logger.error(
+                f"解析配置文件失败，已改用默认值（{path}，备份: {backup}）: {e}",
+                exc_info=True,
+            )
+            return None
+
+        if data is None:
+            # 空文件等价于没有配置项
+            return {}
+
+        if not isinstance(data, dict):
+            # 顶层不是映射（例如只有一行字符串），后续 .get/_deep_merge 都会炸
+            backup = self._backup_broken_file(path)
+            logger.error(
+                f"配置文件顶层不是字典，已改用默认值（{path}，备份: {backup}）"
+            )
+            return None
+
+        return data
     
     def _load_config(self):
         """加载配置文件（三层配置合并）
@@ -134,10 +279,10 @@ class ConfigManager:
         # 第一步：加载默认配置（如果主配置文件存在则从文件读取，否则使用内置默认值）
         # 判断依据：main_config_path 是否存在
         if self.main_config_path.exists():
-            # 主配置文件存在，从文件加载
-            with open(self.main_config_path, 'r', encoding='utf-8') as f:
-                # 使用 yaml.safe_load 解析 YAML 文件（安全加载，不执行代码）
-                self._config = yaml.safe_load(f) or {}
+            # 主配置文件存在，从文件加载；解析失败时 _read_yaml_file 已备份坏文件
+            # 并返回 None，这里回退到内置默认值，保证进程仍能起来（#124）。
+            loaded = self._read_yaml_file(self.main_config_path)
+            self._config = loaded if loaded is not None else self._get_default_config()
         else:
             # 主配置文件不存在，使用内置默认配置
             # 首次启动场景：先拿默认值保证服务可用
@@ -148,8 +293,9 @@ class ConfigManager:
         # 第二步：加载用户自定义配置并合并（覆盖默认配置）
         user_config: Dict[str, Any] = {}
         if self.user_config_path.exists():
-            with open(self.user_config_path, 'r', encoding='utf-8') as f:
-                user_config = yaml.safe_load(f) or {}
+            loaded_user = self._read_yaml_file(self.user_config_path)
+            # 用户配置解析失败时按“没有覆盖项”处理，主配置仍然生效
+            user_config = loaded_user if loaded_user is not None else {}
 
         # 合并前处理主配置里的旧默认值，判断依据是 config.yaml 的原值。
         self._migrate_llm_daily_limit(user_config)
@@ -159,8 +305,10 @@ class ConfigManager:
             self._deep_merge(self._config, user_config)
         
         # 第三步：加载敏感配置（加密存储的敏感信息）
+        self._secrets_loaded = not self.secrets_path.exists()
         if self.secrets_path.exists():
-            # 读取加密的二进制数据
+            # 读取加密的二进制数据。读失败（OSError：被占用、权限、杀毒扫描）不是“密文损坏”，
+            # 原样抛出、不备份：与 .key 读失败的处理一致，也与改造前行为一致，数据保持原样。
             encrypted_data = self.secrets_path.read_bytes()
             try:
                 # 使用 Fernet 解密数据
@@ -169,11 +317,86 @@ class ConfigManager:
                 secrets = json.loads(decrypted_data.decode('utf-8'))
                 # 将敏感配置添加到 _config 字典的 'secrets' 键下
                 self._config['secrets'] = secrets
-            except Exception as e:
-                # 解密失败（可能是密钥错误或文件损坏），记录错误日志
+                self._secrets_loaded = True
+            except (InvalidToken, ValueError, TypeError) as e:
+                # 解密失败（密钥与密文不配套，或文件损坏）。UnicodeDecodeError、
+                # JSONDecodeError 都是 ValueError 的子类。
                 logger.error(f"解密敏感配置失败: {e}", exc_info=True)
+                # 先把解不开的 .secrets 改名备份：否则下一次 save_secret 会直接覆盖它，
+                # 换回配套的 .key 也找不回原来的 Cookie / API Key。
+                backup = self._backup_broken_file(self.secrets_path)
+                if backup is not None:
+                    logger.error(
+                        "无法解密的加密配置已备份到 %s；换回配套的 config/.key 后把它改回 .secrets 即可恢复",
+                        backup,
+                    )
+                # 备份成功（原文件已移走）才允许之后写新的 .secrets；备份失败则保持禁止覆盖。
+                self._secrets_loaded = backup is not None
                 # 初始化为空字典，避免后续访问出错
                 self._config['secrets'] = {}
+
+        # 第四步：把历史遗留的明文 llm.api_key 迁移进加密 secrets（#88）
+        self._migrate_legacy_plaintext_api_key()
+
+    def _migrate_legacy_plaintext_api_key(self) -> None:
+        """把 config.yaml 里历史遗留的明文 ``llm.api_key`` 搬进加密 secrets（#88）。
+
+        旧版本曾把明文密钥直接写进普通配置，导致 GET 配置接口回显明文、
+        且密钥随 config.yaml 一起裸奔。这里做幂等迁移：
+        - 明文非空时写入 secrets（已存在加密密钥则以 secrets 为准，不覆盖），
+          写入成功后从普通配置里删除并落盘；
+        - 迁移任何一步失败都只记日志，不影响启动，下次启动会再试。
+        """
+        llm = self._config.get('llm')
+        if not isinstance(llm, dict) or 'api_key' not in llm:
+            return
+
+        legacy = llm.get('api_key')
+        if not isinstance(legacy, str) or not legacy.strip():
+            # 空值没有泄露风险，保持向前兼容（默认配置里就有 api_key: ''）
+            return
+
+        legacy = legacy.strip()
+        secrets = self._config.get('secrets')
+        if not isinstance(secrets, dict):
+            secrets = {}
+            self._config['secrets'] = secrets
+
+        try:
+            if not secrets.get('llm_api_key'):
+                secrets['llm_api_key'] = legacy
+                self._write_secrets()
+                logger.warning("已把明文 llm.api_key 迁移进加密 secrets")
+            # secrets 里本来就有密钥时，以 secrets 为准，只清掉明文残留。
+            # 明文可能在 config.yaml，也可能在 user_config.yaml（合并后才出现在 _config 里）：
+            # 必须从它实际所在的文件里删，并且只重写那个文件的原始内容。
+            # 旧做法 save_config() 会把合并后的配置写进 config.yaml，而 user_config.yaml
+            # 里的明文原样保留，于是每次实例化都重写一次 config.yaml，迁移永远完成不了。
+            for path in (self.main_config_path, self.user_config_path):
+                self._strip_plaintext_api_key_from_file(path)
+            llm.pop('api_key', None)
+        except Exception as e:  # noqa: BLE001 - 迁移失败不应阻断启动
+            logger.error(f"迁移明文 llm.api_key 失败，保留原值待下次重试: {e}", exc_info=True)
+
+    def _strip_plaintext_api_key_from_file(self, path: Path) -> None:
+        """从单个 YAML 文件里删除非空的明文 ``llm.api_key``，只重写该文件本身。
+
+        文件不存在、读不出、或其中没有非空明文时不做任何写入，保证迁移幂等。
+
+        Args:
+            path: config.yaml 或 user_config.yaml 的路径。
+        """
+        if not path.exists():
+            return
+        raw = yaml.safe_load(path.read_text(encoding='utf-8'))
+        llm_node = raw.get('llm') if isinstance(raw, dict) else None
+        value = llm_node.get('api_key') if isinstance(llm_node, dict) else None
+        if not isinstance(value, str) or not value.strip():
+            return
+        llm_node.pop('api_key', None)
+        payload = yaml.dump(raw, allow_unicode=True, default_flow_style=False)
+        self._atomic_write_text(path, payload, mode=0o644)
+        logger.warning("已从 %s 删除明文 llm.api_key", path.name)
     
     def _migrate_llm_daily_limit(self, user_config: Dict[str, Any]) -> None:
         """把 config.yaml 中仍为旧默认值的全局每日 token 上限迁移到新默认值（只做一次）。
@@ -484,12 +707,13 @@ class ConfigManager:
         # 敏感信息必须留在加密文件里，不能明文写入 yaml
         save_config = {k: v for k, v in self._config.items() if k != 'secrets'}
         
-        # 以 UTF-8 编码写入 YAML 文件
-        # 保证中文配置项（如 app.name）正常读写
-        with open(self.main_config_path, 'w', encoding='utf-8') as f:
-            # allow_unicode=True: 允许保存中文等 Unicode 字符
-            # default_flow_style=False: 使用块状样式（更易读），而非行内样式
-            yaml.dump(save_config, f, allow_unicode=True, default_flow_style=False)
+        # 先在内存里序列化，再做原子替换（#124）：
+        # - 旧实现先 open(path, 'w') 截断文件，yaml.dump 中途抛错就会留下半截文件；
+        # - 先 dump 到字符串，yaml.dump 抛错时磁盘上的原文件零改动。
+        # allow_unicode=True: 允许保存中文等 Unicode 字符
+        # default_flow_style=False: 使用块状样式（更易读），而非行内样式
+        payload = yaml.dump(save_config, allow_unicode=True, default_flow_style=False)
+        self._atomic_write_text(self.main_config_path, payload, mode=0o644)
         
         # 写入成功后打日志，方便排查配置变更历史
         logger.info("主配置已保存")
@@ -525,21 +749,28 @@ class ConfigManager:
         # 多个敏感键共存于同一字典，统一加密落盘
         self._config['secrets'][key] = value
         
-        # 加密并保存到文件
+        # 加密并原子写入 .secrets 文件
+        self._write_secrets()
+
+    def _write_secrets(self) -> None:
+        """把内存里的 secrets 加密后原子写入 .secrets（#124）。
+
+        步骤：JSON 字符串 -> UTF-8 字节 -> Fernet 加密 -> 临时文件 + os.replace。
+        非 Windows 上把文件权限收紧到 0o600（仅所有者可读写）。
+        """
+        if not self._secrets_loaded and self.secrets_path.exists():
+            # 磁盘上有一份没读进来的 .secrets：覆盖它会让旧 Cookie / API Key 永久丢失。
+            raise OSError(f"加密配置 {self.secrets_path} 未能读取，拒绝覆盖；请重启程序后重试")
+        secrets = self._config.get('secrets') or {}
         # 步骤1：将 secrets 字典转换为 JSON 字符串
-        secrets_json = json.dumps(self._config['secrets'])
-        
-        # 步骤2：将字符串编码为 UTF-8 字节流
-        # Fernet 加密接口接收 bytes，所以先 encode
+        secrets_json = json.dumps(secrets)
+        # 步骤2：将字符串编码为 UTF-8 字节流（Fernet 加密接口接收 bytes）
         secrets_bytes = secrets_json.encode('utf-8')
-        
         # 步骤3：使用 Fernet 加密器加密字节流
         # 加密后的数据包含版本/时间戳/IV/密文，无法被篡改
         encrypted_data = self._cipher.encrypt(secrets_bytes)
-        
-        # 步骤4：将加密后的二进制数据写入 .secrets 文件
-        # 每次保存都是全量覆盖，保证文件与内存一致
-        self.secrets_path.write_bytes(encrypted_data)
+        # 步骤4：原子写入，失败时原文件保持不变
+        self._atomic_write_bytes(self.secrets_path, encrypted_data, mode=0o600)
     
     def get_secret(self, key: str, default: Any = None) -> Any:
         """获取敏感信息（从加密存储中读取）
@@ -620,8 +851,10 @@ class ConfigManager:
             完整配置字典（不含 secrets）
         """
         # 返回排除敏感信息的配置字典
-        # 避免外部直接修改内部 _config 状态
-        return {k: v for k, v in self._config.items() if k != 'secrets'}
+        # 必须深拷贝：调用方（例如 web 层）会往返回值里写展示用字段
+        # （如 api_key_masked），浅拷贝会把这些字段写进活配置并随 save_config 落盘（#88）。
+        snapshot = {k: v for k, v in self._config.items() if k != 'secrets'}
+        return copy.deepcopy(snapshot)
 
 
 # 全局配置实例（单例模式）

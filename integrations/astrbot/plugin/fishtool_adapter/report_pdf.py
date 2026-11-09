@@ -747,7 +747,14 @@ def build(html_text: str, fonts: Fonts, *, charts: list | None = None, title: st
     doc.addPageTemplates([PageTemplate(id="cover", frames=[full]), PageTemplate(id="body", frames=[body])])
     story = [NextPageTemplate("body"), PageBreak()]
     story += build_story(blocks, fonts, doc.width, charts=charts)
-    doc.build(story, canvasmaker=NumberedCanvas)
+    from reportlab.platypus.doctemplate import LayoutError
+
+    try:
+        doc.build(story, canvasmaker=NumberedCanvas)
+    except LayoutError as exc:
+        # 只把 reportlab 的排版失败（内容块超过页面）转成可读的导出错误；
+        # 其他异常是代码缺陷，照常抛给 main.py 的兜底分支，由它记录带堆栈的日志。
+        raise ReportPdfError(f"报告排版失败：{type(exc).__name__}（内容块过大或表格过宽）") from exc
     return buffer.getvalue()
 
 

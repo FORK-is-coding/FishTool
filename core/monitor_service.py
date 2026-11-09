@@ -525,7 +525,8 @@ class ResidentCommentMonitor:
                 except asyncio.TimeoutError:
                     # 超时只代表进入下一轮巡检，不递归调用自身。
                     continue
-            raise
+            # stop_event 已置位：循环正常退出，不需要（也不该）reraise 任何异常。
+            logger.info("Cookie常驻巡检任务已停止")
         except Exception:
             logger.exception("Cookie常驻任务退出")
 

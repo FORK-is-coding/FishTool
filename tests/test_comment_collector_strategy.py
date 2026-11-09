@@ -15,7 +15,7 @@ import asyncio
 
 import pytest
 
-from core.exceptions import BilibiliAPIError
+from core.exceptions import BilibiliAPIError, CircuitBreakerError, RateLimitError, Status429Error
 from modules.comment.collector import CommentCollector
 
 
@@ -226,6 +226,28 @@ def test_collect_normal_comments_swallows_api_error() -> None:
     assert asyncio.run(collector._collect_normal_comments("BV1", limit=100)) == []
 
 
+@pytest.mark.parametrize("error", [Status429Error("url", 60), RateLimitError(60)])
+def test_collect_normal_comments_propagates_rate_limit(error) -> None:
+    """429 / -509 重试耗尽必须向上抛：吞成 [] 会让完整采集把热门评论当全量（抽奖会标记完整快照）。"""
+    page1 = {
+        "replies": [_reply(i) for i in range(1, 21)],
+        "cursor": {"is_end": False, "pagination_reply": {"next_offset": "x"}},
+    }
+    collector, _, _ = _collector([page1, error])
+
+    with pytest.raises(RateLimitError):
+        asyncio.run(collector._collect_normal_comments("BV1", limit=100))
+
+
+def test_collect_all_comments_propagates_rate_limit_instead_of_hot_only() -> None:
+    """完整采集遇到限频时整体失败，不返回只含热门评论的“完整”结果。"""
+    hot = {"replies": [_reply(i) for i in range(1, 4)]}
+    collector, _, _ = _collector([hot, Status429Error("url", 60)])
+
+    with pytest.raises(RateLimitError):
+        asyncio.run(collector._collect_all_comments("BV1", None))
+
+
 # --------------------------------------------------------------------- 完整采集
 
 def test_collect_all_comments_merges_and_dedups() -> None:
@@ -295,3 +317,45 @@ def test_collect_all_comments_only_hot() -> None:
     comments = asyncio.run(collector._collect_all_comments("BV1", max_count=10))
 
     assert [item["rpid"] for item in comments] == [1, 2]
+
+@pytest.mark.parametrize("error", [Status429Error("url", 60), RateLimitError(60)])
+def test_get_video_oid_propagates_rate_limit(error) -> None:
+    """取 oid 时限频耗尽要向上抛：降级成 None 会让评论采集静默返回 []。"""
+
+    class _ViewAPI:
+        async def get(self, url, params=None, need_sign=False):
+            raise error
+
+    collector = CommentCollector(api=_ViewAPI(), rate_limiter=FakeLimiter())
+
+    with pytest.raises(RateLimitError):
+        asyncio.run(collector._get_video_oid("BV1"))
+
+
+def test_collect_hot_comments_propagates_rate_limit() -> None:
+    """热门评论同样不能把限频吞成空列表。"""
+    collector, _, _ = _collector([Status429Error("url", 60)])
+
+    with pytest.raises(RateLimitError):
+        asyncio.run(collector._collect_hot_comments("BV1"))
+
+
+
+def test_collect_normal_comments_propagates_circuit_breaker() -> None:
+    """翻页途中熔断打开：必须向上抛，不能把已采到的部分当成完整结果。"""
+    page1 = {
+        "replies": [_reply(i) for i in range(1, 21)],
+        "cursor": {"is_end": False, "pagination_reply": {"next_offset": "x"}},
+    }
+    collector, _, _ = _collector([page1, CircuitBreakerError("熔断保护中")])
+
+    with pytest.raises(CircuitBreakerError):
+        asyncio.run(collector._collect_normal_comments("BV1", limit=100))
+
+
+def test_collect_hot_comments_propagates_circuit_breaker() -> None:
+    """热门评论遇到熔断同样向上抛。"""
+    collector, _, _ = _collector([CircuitBreakerError("熔断保护中")])
+
+    with pytest.raises(CircuitBreakerError):
+        asyncio.run(collector._collect_hot_comments("BV1"))

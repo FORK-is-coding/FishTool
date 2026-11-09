@@ -541,17 +541,19 @@ async def no_cache_static_assets(request: Request, call_next):
 # CORS 白名单只阻止跨站页面「读取响应」，并不阻止请求被执行：任意网页都能用
 # fetch(..., {mode: 'no-cors'}) 发出不带 Content-Type 的 POST，而 FastAPI 仍会按 JSON
 # 解析请求体，于是可以跨站改写 LLM 配置、退出登录、增删监控目标等。
-# 浏览器跨站请求一定带 Origin 头；这里对 /api/ 下的非安全方法，只要 Origin 不属于
-# 本机允许集合就直接 403。无 Origin 的请求（同源 GET、CLI、桌面内嵌页、测试客户端）不受影响。
+# 浏览器跨站请求一定带 Origin 头；这里对 /api/ 下的非安全方法，只要 Origin 不是同源
+# （scheme/host/port，见 web/local_guard.py）就直接 403。无 Origin 的请求（同源 GET、CLI、
+# 桌面内嵌页、测试客户端）不受影响；需要 token 的写端点仍各自挂 require_local_write。
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
 @app.middleware("http")
 async def block_cross_site_writes(request: Request, call_next):
+    """拦截跨站写请求（Origin 必须与请求同源）。"""
     if (
         request.method in _UNSAFE_METHODS
         and request.url.path.startswith("/api/")
-        and is_cross_site_origin(request.headers.get("origin"))
+        and is_cross_site_origin(request.headers.get("origin"), request_port=request.url.port)
     ):
         logger.warning("已拦截跨站写请求: %s %s origin=%s", request.method, request.url.path, request.headers.get("origin"))
         return JSONResponse(status_code=403, content={"detail": "cross_site_request_blocked"})
@@ -773,7 +775,9 @@ async def websocket_endpoint(websocket: WebSocket):
     """
     # WebSocket 不受 CORS 约束：跨站页面可直接连接并订阅预警（含评论原文），握手前校验 Origin。
     # 桌宠客户端（websocket-client）不带 Origin，不受影响。
-    if is_cross_site_origin(websocket.headers.get("origin")):
+    # 必须传入本次连接的端口：服务跑在自定义端口（如 start_web.bat 9000）时，
+    # 同源页面的 Origin 端口不在默认放行集合里，只能靠与请求端口一致来判定同源。
+    if is_cross_site_origin(websocket.headers.get("origin"), request_port=websocket.url.port):
         logger.warning("已拒绝跨站 WebSocket 连接: origin=%s", websocket.headers.get("origin"))
         await websocket.close(code=1008)
         return

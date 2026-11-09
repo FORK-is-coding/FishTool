@@ -39,7 +39,7 @@ import logging
 import re
 from typing import Any, Callable, Dict, List
 
-from core.exceptions import BilibiliAPIError
+from core.exceptions import BilibiliAPIError, RateLimitError, Status429Error
 from core.request_budget import before_http_attempt, load_quota_limits
 
 from .contracts import (
@@ -130,6 +130,12 @@ def extract_api_code(exc: Exception) -> int:
     Returns:
         int: 提取到的业务码；无法提取时返回 ``-1``。
     """
+    # 429 / -509 重试耗尽时 client 抛限频异常，消息里没有业务码；
+    # 直接给出明确的码，避免落成 -1 后与“未知错误”混在一起。
+    if isinstance(exc, Status429Error):
+        return 429
+    if isinstance(exc, RateLimitError):
+        return -509
     text = str(exc)
     match = _API_CODE_RE.search(text) or _API_TRAILING_CODE_RE.search(text)
     if match:

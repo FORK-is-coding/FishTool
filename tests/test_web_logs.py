@@ -380,3 +380,88 @@ def test_export_full_mode_removes_intermediate_file(client, log_env, tmp_path):
     assert response.status_code == 200
     assert "全量导出内容" in response.text
     assert not export_file.exists()
+
+
+# ---------------------------------------------------------------------------
+# #128：levels 参数解析（别名 + 严格校验 + 回显）
+# ---------------------------------------------------------------------------
+
+
+def test_levels_param_accepts_warn_alias(client, log_env):
+    """#128 回归：ERROR,WARN 必须生效为 ERROR+WARNING，不得静默变成 INFO。"""
+    (log_env / "app.log").write_text(
+        "2026-01-01 00:00:00 [INFO] web.app - 正常\n"
+        "2026-01-01 00:00:01 [WARNING] web.app - 警告\n"
+        "2026-01-01 00:00:02 [ERROR] web.app - 失败\n",
+        encoding="utf-8",
+    )
+    body = client.get("/api/logs/", params={"log_type": "app", "levels": "ERROR,WARN"}).json()
+
+    assert body["levels"] == ["ERROR", "WARNING"]
+    assert [record["level"] for record in body["records"]] == ["WARNING", "ERROR"]
+    assert "INFO" not in {record["level"] for record in body["records"]}
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("warn", ["WARNING"]),
+        ("err", ["ERROR"]),
+        ("crit", ["CRITICAL"]),
+        ("fatal", ["CRITICAL"]),
+        (" error , warn ", ["ERROR", "WARNING"]),
+    ],
+)
+def test_levels_param_alias_table(client, log_env, raw, expected):
+    """别名不区分大小写、容忍空格，响应体回显实际生效的级别。"""
+    (log_env / "app.log").write_text("", encoding="utf-8")
+    body = client.get("/api/logs/", params={"log_type": "app", "levels": raw}).json()
+    assert body["levels"] == expected
+
+
+def test_levels_param_unknown_value_returns_422(client, log_env):
+    """#128：未知级别必须 422 报错，而不是退化成 INFO 返回错误数据。"""
+    response = client.get("/api/logs/", params={"log_type": "app", "levels": "ERROR,NOPE"})
+    assert response.status_code == 422
+    assert "未知日志级别" in response.json()["detail"]
+    assert "NOPE" in response.json()["detail"]
+
+
+def test_levels_param_empty_means_all_levels(client, log_env):
+    """空字符串沿用原行为：返回全部级别，并回显生效集合。"""
+    (log_env / "app.log").write_text("", encoding="utf-8")
+    body = client.get("/api/logs/", params={"log_type": "app", "levels": ""}).json()
+    assert body["levels"] == sorted(logs_module.LEVELS)
+
+
+# ---------------------------------------------------------------------------
+# #97：先按级别过滤再截断
+# ---------------------------------------------------------------------------
+
+
+def test_get_logs_filters_before_truncation(client, log_env):
+    """#97 回归：limit 截断前必须先把级别过滤掉，早期问题日志不能被 INFO 挤掉。"""
+    lines = ["2026-01-01 00:00:00 [ERROR] web.app - 早期故障"]
+    lines += [f"2026-01-01 00:01:{i % 60:02d} [INFO] web.app - 正常{i}" for i in range(300)]
+    (log_env / "app.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    body = client.get(
+        "/api/logs/", params={"log_type": "app", "levels": "ERROR", "limit": 2}
+    ).json()
+
+    assert [record["level"] for record in body["records"]] == ["ERROR"]
+    assert "早期故障" in body["records"][0]["message"]
+
+
+def test_export_problem_logs_keeps_problems_older_than_recent_limit(client, log_env):
+    """#97 回归：最近 1000 条全是 INFO 时，更早的 WARNING/ERROR 仍要导出。"""
+    lines = ["2026-01-01 00:00:00 [ERROR] web.app - 早期故障"]
+    lines += [f"2026-01-01 00:01:{i % 60:02d} [INFO] web.app - 正常{i}" for i in range(1100)]
+    (log_env / "app.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    response = client.get("/api/logs/export", params={"log_type": "app"})
+
+    assert response.status_code == 200
+    assert "[ERROR]" in response.text
+    assert "早期故障" in response.text
+    assert "[INFO]" not in response.text

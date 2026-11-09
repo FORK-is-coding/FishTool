@@ -204,12 +204,14 @@ def test_generate_request_uses_configured_max_tokens(monkeypatch):
     assert http_clients[0].payloads[0]["max_tokens"] == 3456
 
 
-def _api_error(status_code: int) -> Exception:
+def _api_error(status_code: int, detail: str | None = None) -> Exception:
     """构造带状态码的 LLMAPIError，与 LLMClient.chat_completion 抛出的形状一致。"""
     from core.exceptions import LLMAPIError
 
     err = LLMAPIError(f"API请求失败: HTTP {status_code}")
     err.status_code = status_code
+    if detail is not None:
+        err.detail = detail
     return err
 
 
@@ -227,8 +229,10 @@ def test_generate_requests_json_object_mode(monkeypatch):
 
 @pytest.mark.parametrize("status", [400, 422])
 def test_generate_retries_without_json_mode_when_endpoint_rejects_it(monkeypatch, status):
-    """端点不认识 response_format（400/422）时，去掉参数再请求一次，结果照常可用。"""
-    fake = _FakeLLMClient(json_mode_error=_api_error(status))
+    """端点明确抱怨 response_format（400/422）时，去掉参数再请求一次，结果照常可用。"""
+    fake = _FakeLLMClient(json_mode_error=_api_error(
+        status, detail="Unsupported parameter: 'response_format' is not supported with this model."
+    ))
     _patch_client(monkeypatch, fake)
 
     result = asyncio.run(AIDiagnosisReporter().generate(SAMPLE_SELF_DATA))
@@ -237,6 +241,58 @@ def test_generate_retries_without_json_mode_when_endpoint_rejects_it(monkeypatch
     assert [c["response_format"] for c in fake.chat_calls] == [{"type": "json_object"}, None]
     assert fake.chat_calls[1]["system"] == AIDiagnosisReporter.SYSTEM_PROMPT
     assert fake.chat_calls[1]["temperature"] == pytest.approx(0.35)
+
+
+@pytest.mark.parametrize("detail", [
+    # 不少兼容端点拒绝 response_format 时不说原因：中文报文、笼统参数错误、空报文
+    '{"error":{"code":"1210","message":"API 调用参数有误，请检查文档"}}',
+    '{"error":"Invalid argument"}',
+    '{"error":{"code":"invalid_request_error","message":"messages is required"}}',
+    "",
+])
+def test_generate_retries_400_even_without_json_mode_keyword(monkeypatch, detail):
+    """400/422 默认去掉参数重试一次：不能要求报文点名 response_format 才降级。"""
+    fake = _FakeLLMClient(json_mode_error=_api_error(400, detail=detail))
+    _patch_client(monkeypatch, fake)
+
+    result = asyncio.run(AIDiagnosisReporter().generate(SAMPLE_SELF_DATA))
+
+    assert result["success"] is True
+    assert [c["response_format"] for c in fake.chat_calls] == [{"type": "json_object"}, None]
+
+
+@pytest.mark.parametrize("status", [400, 422])
+def test_generate_does_not_retry_context_length_exceeded(monkeypatch, status):
+    """#105：输入超长与 JSON 模式无关，去掉参数重试也必然失败，不白烧一次全量提示词。"""
+    detail = (
+        '{"error":{"message":"This model\'s maximum context length is 8192 tokens. '
+        + "However, your messages resulted in 9100 tokens. " * 6
+        + '","type":"invalid_request_error","param":"messages","code":"context_length_exceeded"}}'
+    )
+    assert len(detail) > 300  # 长报文：曾因 detail 截断而提不出错误码
+    fake = _FakeLLMClient(json_mode_error=_api_error(status, detail=detail))
+    _patch_client(monkeypatch, fake)
+
+    result = asyncio.run(AIDiagnosisReporter().generate(SAMPLE_SELF_DATA))
+
+    assert result["success"] is False
+    assert len(fake.chat_calls) == 1
+    assert "context_length_exceeded" in result["error"]
+
+
+def test_generate_keeps_upstream_error_code_on_context_length_exceeded(monkeypatch):
+    """#105/#108：不重试，且 error 里保留可检索的错误码 context_length_exceeded。"""
+    fake = _FakeLLMClient(json_mode_error=_api_error(
+        400, detail='{"error":{"code":"context_length_exceeded","message":"too long"}}'
+    ))
+    _patch_client(monkeypatch, fake)
+
+    result = asyncio.run(AIDiagnosisReporter().generate(SAMPLE_SELF_DATA))
+
+    assert len(fake.chat_calls) == 1
+    assert "HTTP 400" in result["error"]
+    assert "context_length_exceeded" in result["error"]
+    assert "too long" not in result["error"]
 
 
 @pytest.mark.parametrize("status", [401, 429, 500])
@@ -532,3 +588,102 @@ def test_parse_response_handles_none_content():
     """None 输入被字符串化后视为无 JSON，抛 LLMError。"""
     with pytest.raises(LLMError):
         AIDiagnosisReporter()._parse_response(None)
+
+
+# ---------------------------------------------------------------------------
+# #106 贪心正则与 highlights 类型守卫
+# ---------------------------------------------------------------------------
+
+
+def test_parse_response_ignores_trailing_text_with_braces():
+    """JSON 之后追加含 "}" 的说明不得让整份报告判失败（旧贪婪正则会吞到最后一个 }）。"""
+    content = (
+        '{"report":"账号稳健","commentary":"提高更新频率","highlights":["粉丝增长"]}\n'
+        "补充说明见 {附录}，其中 {a} 与 {b} 都是引用。"
+    )
+    parsed = AIDiagnosisReporter()._parse_response(content)
+
+    assert parsed["report"] == "账号稳健"
+    assert parsed["commentary"] == "提高更新频率"
+    assert parsed["highlights"] == ["粉丝增长"]
+
+
+def test_parse_response_accepts_wrapped_json_with_trailing_brace():
+    """前后带自然语言、且尾部含花括号时仍能取出唯一的 JSON 对象。"""
+    content = f"以下是结果：\n{GOOD_JSON}\n（详见 {{{{附录}}}}）"
+    parsed = AIDiagnosisReporter()._parse_response(content)
+
+    assert parsed["report"] == "账号整体表现稳健，近期投稿节奏稳定。"
+    assert parsed["highlights"] == ["粉丝稳步增长", "互动率良好", "选题贴近热点"]
+
+
+@pytest.mark.parametrize("highlights, expected", [
+    ("优秀", ["优秀"]),          # 字符串整体当一条，不切成单字
+    (3, []),                     # 数字不迭代、不抛 TypeError
+    (None, []),                  # 缺省/None 安全降级
+    ({"k1": "v1", "k2": "v2"}, []),  # 字典不把键名当亮点
+    ([{"a": 1}, ["x"], 7, " 有效 ", ""], ["7", "有效"]),
+    (["a" * 200], ["a" * 80]),   # 元素截断，避免撑坏前端
+])
+def test_parse_response_normalizes_highlights_types(highlights, expected):
+    """highlights 非列表/元素类型异常时安全降级，且不切字、不抛异常。"""
+    content = json.dumps({"report": "r", "commentary": "c", "highlights": highlights},
+                         ensure_ascii=False)
+    parsed = AIDiagnosisReporter()._parse_response(content)
+
+    assert parsed["highlights"] == expected
+
+
+# ---------------------------------------------------------------------------
+# #108 error 字段不得回显上游响应体
+# ---------------------------------------------------------------------------
+
+
+def test_generate_error_field_excludes_upstream_body(monkeypatch):
+    """error 只保留状态码与错误码：不出现响应体里的密钥、trace id，长度受控。"""
+    body = (
+        '{"error":{"code":"invalid_api_key","type":"invalid_request_error","message":"bad key",'
+        '"echo":"sk-live-abcdef0123456789","trace_id":"trace-internal-42"},'
+        '"request":"' + "x" * 2000 + '"}'
+    )
+    fake = _FakeLLMClient(chat_error=_api_error(400, detail=body))
+    _patch_client(monkeypatch, fake)
+
+    result = asyncio.run(AIDiagnosisReporter().generate(SAMPLE_SELF_DATA))
+
+    assert result["success"] is False
+    assert "sk-live" not in result["error"]
+    assert "trace-internal-42" not in result["error"]
+    assert "x" * 50 not in result["error"]
+    assert len(result["error"]) <= 120
+    assert "HTTP 400" in result["error"]
+    assert "invalid_api_key" in result["error"]
+
+
+def test_generate_error_field_ignores_string_error_body(monkeypatch):
+    """error 是字符串时不能把前 64 字当错误码，必须退回纯状态码。"""
+    body = (
+        '{"error":"sk-live-abcdef0123456789 trace-internal-42 '
+        + "x" * 200
+        + '"}'
+    )
+    fake = _FakeLLMClient(chat_error=_api_error(400, detail=body))
+    _patch_client(monkeypatch, fake)
+
+    result = asyncio.run(AIDiagnosisReporter().generate(SAMPLE_SELF_DATA))
+
+    assert result["error"] == "HTTP 400"
+    assert "sk-live" not in result["error"]
+    assert "trace-internal-42" not in result["error"]
+
+
+def test_generate_error_field_falls_back_to_status_without_json_body(monkeypatch):
+    """非 JSON 报文（HTML 网关页）不提炼错误码，也不把正文透进 error。"""
+    fake = _FakeLLMClient(chat_error=_api_error(502, detail="<html>Bad Gateway sk-raw</html>"))
+    _patch_client(monkeypatch, fake)
+
+    result = asyncio.run(AIDiagnosisReporter().generate(SAMPLE_SELF_DATA))
+
+    assert result["error"] == "HTTP 502"
+    assert "sk-raw" not in result["error"]
+    assert "Bad Gateway" not in result["error"]

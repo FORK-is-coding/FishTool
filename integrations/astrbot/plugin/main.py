@@ -487,7 +487,7 @@ class FishToolPlugin(Star):
             return
         try:
             result = self.subs.add(event.unified_msg_origin, str(event.get_self_id() or ""))
-        except (OSError, ValueError) as exc:
+        except Exception as exc:  # noqa: BLE001 - store 对任何落盘异常都回滚后重抛，这里必须回复用户
             logger.warning(f"[fishtool] 保存推送订阅失败: {exc}")
             yield event.plain_result(f"订阅失败：{exc}")
             return
@@ -510,7 +510,7 @@ class FishToolPlugin(Star):
             return
         try:
             removed = self.subs.remove(event.unified_msg_origin)
-        except OSError as exc:
+        except Exception as exc:  # noqa: BLE001 - store 对任何落盘异常都回滚后重抛，这里必须回复用户
             logger.warning(f"[fishtool] 保存推送订阅失败: {exc}")
             yield event.plain_result(f"退订失败：{exc}")
             return
