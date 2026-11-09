@@ -150,6 +150,9 @@ _LINK_LOCAL_NETWORKS = (
     ipaddress.ip_network("fe80::/10"),
 )
 
+# 纯 IPv6 link-local 网段，用于域名解析结果的放行判断（见 _reject_blocked_resolution）。
+_IPV6_LINK_LOCAL_NETWORK = ipaddress.ip_network("fe80::/10")
+
 
 def _validate_models_url(base_url: str) -> str:
     """校验外部模型服务的 Base URL，并拼出标准的 /models 端点（#81）。
@@ -276,11 +279,14 @@ async def _reject_blocked_resolution(base_url: str) -> None:
             resolved = ipaddress.ip_address(str(info[4][0]).split('%', 1)[0])
         except ValueError:
             continue
-        if resolved.version == 6 and resolved.is_link_local:
+        if resolved.version == 6 and resolved in _IPV6_LINK_LOCAL_NETWORK:
             # 解析结果里的 IPv6 link-local（fe80::/10）是正常现象：Windows 解析本机或局域网
             # 机器名时，会在局域网 IP 之外附带网卡的 fe80:: 地址。它不是元数据地址，
             # 也不内嵌 IPv4，按它拦截会误伤用机器名访问的局域网模型服务。
             # 手写成 [fe80::1] 的字面量仍由 _validate_models_url 拦截。
+            # 必须按网段判断，不能用 is_link_local：较新的 CPython 补丁版本对 IPv4 映射地址
+            # （::ffff:a.b.c.d）按内嵌的 IPv4 计算该属性，::ffff:169.254.169.254 会被当成
+            # link-local 跳过，元数据地址就漏过去了。
             continue
         reason = _blocked_address_reason(resolved)
         if reason:
