@@ -131,8 +131,13 @@ _METADATA_ADDRESSES = frozenset(
     ipaddress.ip_address(item) for item in ("169.254.169.254", "100.100.100.200", "fd00:ec2::254")
 )
 
-# NAT64 前缀 64:ff9b::/96：低 32 位就是目标 IPv4。
-_NAT64_NETWORK = ipaddress.ip_network("64:ff9b::/96")
+# 低 32 位就是目标 IPv4 的 IPv6 网段：NAT64 知名前缀与本地前缀（RFC 6052 / RFC 8215），
+# 以及 SIIT 的 IPv4 转换地址 ::ffff:0:a.b.c.d（RFC 2765）。
+_EMBEDDED_LOW32_NETWORKS = (
+    ipaddress.ip_network("64:ff9b::/96"),
+    ipaddress.ip_network("64:ff9b:1::/48"),
+    ipaddress.ip_network("::ffff:0:0:0/96"),
+)
 
 # inet_aton 接受的单段数字写法：十进制、0 开头八进制、0x 开头十六进制。
 _NUMERIC_LABEL_RE = re.compile(r"(?:0x[0-9a-f]*|[0-9]+)")
@@ -223,7 +228,7 @@ def _embedded_ipv4(address: "ipaddress.IPv6Address") -> List["ipaddress.IPv4Addr
         found.append(address.teredo[1])
     packed = int(address)
     low32 = ipaddress.IPv4Address(packed & 0xFFFFFFFF)
-    if address in _NAT64_NETWORK:
+    if any(address in network for network in _EMBEDDED_LOW32_NETWORKS):
         found.append(low32)
     # IPv4 兼容地址 ::a.b.c.d（已废弃但仍可能被解析），排除 :: 与 ::1。
     if packed >> 32 == 0 and packed > 1:
@@ -255,6 +260,9 @@ async def _reject_blocked_resolution(base_url: str) -> None:
     """域名解析后再查一次：``169.254.169.254.nip.io`` 这类域名会解析到元数据地址。
 
     解析失败不在这里报错，交给随后的真实请求按“无法连接”处理。
+
+    已知残余风险：这里解析一次、httpx 发请求时再解析一次，DNS 重绑定可以让两次结果不同。
+    本接口只接受本机同源请求，且要求调用方提供 API Key，这层检查只防“填错地址”和低成本绕过。
     """
     hostname = (urlsplit(base_url.strip()).hostname or '').strip().rstrip('.')
     if not hostname or _is_ip_literal(hostname):

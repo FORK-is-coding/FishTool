@@ -49,7 +49,11 @@ class WBISigner:
         61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11,
         36, 20, 34, 44, 52
     ]
-    
+
+    #: 刷新失败后在这段时间内直接复用失败结果（秒）。只用来合并同一波并发，
+    #: 不影响下一轮请求重新尝试。
+    REFRESH_FAILURE_REUSE_S = 5.0
+
     def __init__(
         self,
         domain: str = CREDENTIAL_DOMAIN_COOKIE,
@@ -86,6 +90,8 @@ class WBISigner:
         # 锁按运行时事件循环惰性创建，避免跨 asyncio.run 复用时绑定到已关闭的循环。
         self._update_lock: Optional[asyncio.Lock] = None
         self._update_lock_loop: Optional[asyncio.AbstractEventLoop] = None
+        # 最近一次刷新失败（单调时钟时刻，异常）：短时间内复用，避免排队协程挨个重打 nav。
+        self._last_refresh_failure: Optional[tuple] = None
 
     def _refresh_lock(self) -> asyncio.Lock:
         """获取绑定当前事件循环的刷新锁（同一循环内复用同一把锁）。"""
@@ -262,7 +268,17 @@ class WBISigner:
             # 双检单飞：拿锁后再判一次，先到的协程刷新后其余协程直接复用。
             async with self._refresh_lock():
                 if self.need_update():
-                    await self.update_wbi_keys(session)
+                    # 刷新刚失败过：同一波并发里的其余协程直接复用这次失败，不再各打一次 nav
+                    # （每次 nav 都计入每日 24 次的维护配额）。
+                    failure = self._last_refresh_failure
+                    if failure is not None and time.monotonic() - failure[0] < self.REFRESH_FAILURE_REUSE_S:
+                        raise WBISignError(f"更新WBI密钥失败（{self.REFRESH_FAILURE_REUSE_S:.0f} 秒内复用上次结果）: {failure[1]}")
+                    try:
+                        await self.update_wbi_keys(session)
+                    except WBISignError as exc:
+                        self._last_refresh_failure = (time.monotonic(), exc)
+                        raise
+                    self._last_refresh_failure = None
         
         # 用当前密钥完成 WBI 签名
         return self.enc_wbi(params, self.img_key, self.sub_key)

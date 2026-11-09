@@ -404,6 +404,42 @@ def test_legacy_plaintext_key_in_user_config_is_migrated_once(tmp_path):
     assert manager.main_config_path.stat().st_mtime_ns == before
 
 
+def test_secrets_read_error_is_not_treated_as_corruption(tmp_path, monkeypatch):
+    """读 .secrets 时的 OSError（被占用、权限）不是密文损坏：构造报错，文件与内容保持原样。"""
+    from pathlib import Path
+
+    manager = _make_manager(tmp_path)
+    manager.save_secret("bilibili_cookie", "SESSDATA=KEEP")
+    secrets_path = manager.secrets_path
+    real_read = Path.read_bytes
+
+    def _flaky(self):
+        if self == secrets_path:
+            raise PermissionError("locked")
+        return real_read(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _flaky)
+    with pytest.raises(PermissionError):
+        ConfigManager(config_dir=str(tmp_path / "cfg"))
+    monkeypatch.setattr(Path, "read_bytes", real_read)
+
+    assert not list(manager.config_dir.glob(".secrets.bad-*"))
+    assert ConfigManager(config_dir=str(tmp_path / "cfg")).get_secret("bilibili_cookie") == "SESSDATA=KEEP"
+
+
+def test_write_secrets_refuses_to_overwrite_unread_file(tmp_path):
+    """内存里的 secrets 没能从磁盘读进来时，拒绝覆盖写 .secrets，旧内容不丢。"""
+    manager = _make_manager(tmp_path)
+    manager.save_secret("bilibili_cookie", "SESSDATA=KEEP")
+    before = manager.secrets_path.read_bytes()
+    manager._secrets_loaded = False
+
+    with pytest.raises(OSError):
+        manager.save_secret("llm_api_key", "sk-new")
+
+    assert manager.secrets_path.read_bytes() == before
+
+
 def test_atomic_replace_retries_when_target_is_briefly_locked(tmp_path, monkeypatch):
     """Windows 上目标文件被别的句柄打开时 os.replace 抛 PermissionError：短暂重试后成功。"""
     import os as os_module

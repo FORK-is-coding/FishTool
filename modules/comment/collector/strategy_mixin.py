@@ -7,7 +7,7 @@
 """
 import json
 from typing import List, Dict, Any, Optional, Set
-from core.exceptions import BilibiliAPIError, RateLimitError
+from core.exceptions import BilibiliAPIError, CircuitBreakerError, RateLimitError
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -64,7 +64,7 @@ class CommentStrategyMixin:
             
             return comments
 
-        except RateLimitError:
+        except (RateLimitError, CircuitBreakerError):
             # 与普通评论一致：限频耗尽向上抛，不降级成空列表。
             raise
         except BilibiliAPIError as e:
@@ -144,7 +144,7 @@ class CommentStrategyMixin:
 
             return comments[:limit]
 
-        except RateLimitError:
+        except (RateLimitError, CircuitBreakerError):
             # 429 / -509 重试耗尽：必须向上抛。吞成 [] 会让完整采集把只含热门评论的
             # 结果当成全量（抽奖会据此标记完整快照），与限频前「直接报错」的行为不一致。
             raise

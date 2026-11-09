@@ -5,7 +5,7 @@
 - _get_user_videos: 用户空间投稿列表（账号批量监控用）
 """
 from typing import List, Dict, Any, Optional
-from core.exceptions import BilibiliAPIError, RateLimitError
+from core.exceptions import BilibiliAPIError, CircuitBreakerError, RateLimitError
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -38,7 +38,7 @@ class CommentSourceMixin:
             
             return None
 
-        except RateLimitError:
+        except (RateLimitError, CircuitBreakerError):
             # 429 / -509 重试耗尽必须向上抛：降级成 None 会让评论采集返回 []，
             # 完整采集随后把只有热门评论（甚至 0 条）的结果当成全量。
             raise
@@ -97,7 +97,7 @@ class CommentSourceMixin:
             
             return videos
 
-        except RateLimitError:
+        except (RateLimitError, CircuitBreakerError):
             # 限频耗尽向上抛，不能伪装成“该用户没有视频”。
             raise
         except BilibiliAPIError as e:

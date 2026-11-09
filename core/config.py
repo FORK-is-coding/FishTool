@@ -18,7 +18,7 @@ import yaml
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 import logging
 
 # 创建日志记录器，用于输出配置管理相关的日志
@@ -90,12 +90,19 @@ class ConfigManager:
         
         # 初始化配置字典（所有配置项都存储在这里）
         self._config: Dict[str, Any] = {}
-        
+        # 磁盘上的 .secrets 是否已被成功读入（或本来就不存在）。为 False 时拒绝覆盖写，
+        # 防止“读失败 → 内存里 secrets 为空 → 下一次 save_secret 把旧 Cookie 整个覆盖掉”。
+        self._secrets_loaded = False
+
         # 加载所有配置（从文件读取并合并）
         # _load_config 内部已对单个文件做“备份坏文件 + 回退默认值”，这里再兜一层：
         # 模块级 config 实例在导入期创建，任何意外异常都不能让进程起不来（#124）。
         try:
             self._load_config()
+        except OSError:
+            # 文件读不出（被占用、权限）与“内容损坏”不同：原样抛出，与 .key 读失败和改造前一致，
+            # 不能悄悄换成默认值继续跑（那样 .secrets 会在下一次保存时被覆盖）。
+            raise
         except Exception as e:  # noqa: BLE001 - 配置加载失败必须降级而不是崩溃
             logger.error(f"加载配置文件失败，改用内置默认值: {e}", exc_info=True)
             self._config = self._get_default_config()
@@ -293,18 +300,22 @@ class ConfigManager:
             self._deep_merge(self._config, user_config)
         
         # 第三步：加载敏感配置（加密存储的敏感信息）
+        self._secrets_loaded = not self.secrets_path.exists()
         if self.secrets_path.exists():
-            # 读取加密的二进制数据
+            # 读取加密的二进制数据。读失败（OSError：被占用、权限、杀毒扫描）不是“密文损坏”，
+            # 原样抛出、不备份：与 .key 读失败的处理一致，也与改造前行为一致，数据保持原样。
+            encrypted_data = self.secrets_path.read_bytes()
             try:
-                encrypted_data = self.secrets_path.read_bytes()
                 # 使用 Fernet 解密数据
                 decrypted_data = self._cipher.decrypt(encrypted_data)
                 # 将解密后的 JSON 字符串转为字典
                 secrets = json.loads(decrypted_data.decode('utf-8'))
                 # 将敏感配置添加到 _config 字典的 'secrets' 键下
                 self._config['secrets'] = secrets
-            except Exception as e:
-                # 解密失败（密钥与密文不配套，或文件损坏），记录错误日志
+                self._secrets_loaded = True
+            except (InvalidToken, ValueError, TypeError) as e:
+                # 解密失败（密钥与密文不配套，或文件损坏）。UnicodeDecodeError、
+                # JSONDecodeError 都是 ValueError 的子类。
                 logger.error(f"解密敏感配置失败: {e}", exc_info=True)
                 # 先把解不开的 .secrets 改名备份：否则下一次 save_secret 会直接覆盖它，
                 # 换回配套的 .key 也找不回原来的 Cookie / API Key。
@@ -314,6 +325,8 @@ class ConfigManager:
                         "无法解密的加密配置已备份到 %s；换回配套的 config/.key 后把它改回 .secrets 即可恢复",
                         backup,
                     )
+                # 备份成功（原文件已移走）才允许之后写新的 .secrets；备份失败则保持禁止覆盖。
+                self._secrets_loaded = backup is not None
                 # 初始化为空字典，避免后续访问出错
                 self._config['secrets'] = {}
 
@@ -740,6 +753,9 @@ class ConfigManager:
         步骤：JSON 字符串 -> UTF-8 字节 -> Fernet 加密 -> 临时文件 + os.replace。
         非 Windows 上把文件权限收紧到 0o600（仅所有者可读写）。
         """
+        if not self._secrets_loaded and self.secrets_path.exists():
+            # 磁盘上有一份没读进来的 .secrets：覆盖它会让旧 Cookie / API Key 永久丢失。
+            raise OSError(f"加密配置 {self.secrets_path} 未能读取，拒绝覆盖；请重启程序后重试")
         secrets = self._config.get('secrets') or {}
         # 步骤1：将 secrets 字典转换为 JSON 字符串
         secrets_json = json.dumps(secrets)

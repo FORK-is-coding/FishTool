@@ -15,7 +15,7 @@ import asyncio
 
 import pytest
 
-from core.exceptions import BilibiliAPIError, RateLimitError, Status429Error
+from core.exceptions import BilibiliAPIError, CircuitBreakerError, RateLimitError, Status429Error
 from modules.comment.collector import CommentCollector
 
 
@@ -337,4 +337,25 @@ def test_collect_hot_comments_propagates_rate_limit() -> None:
     collector, _, _ = _collector([Status429Error("url", 60)])
 
     with pytest.raises(RateLimitError):
+        asyncio.run(collector._collect_hot_comments("BV1"))
+
+
+
+def test_collect_normal_comments_propagates_circuit_breaker() -> None:
+    """翻页途中熔断打开：必须向上抛，不能把已采到的部分当成完整结果。"""
+    page1 = {
+        "replies": [_reply(i) for i in range(1, 21)],
+        "cursor": {"is_end": False, "pagination_reply": {"next_offset": "x"}},
+    }
+    collector, _, _ = _collector([page1, CircuitBreakerError("熔断保护中")])
+
+    with pytest.raises(CircuitBreakerError):
+        asyncio.run(collector._collect_normal_comments("BV1", limit=100))
+
+
+def test_collect_hot_comments_propagates_circuit_breaker() -> None:
+    """热门评论遇到熔断同样向上抛。"""
+    collector, _, _ = _collector([CircuitBreakerError("熔断保护中")])
+
+    with pytest.raises(CircuitBreakerError):
         asyncio.run(collector._collect_hot_comments("BV1"))

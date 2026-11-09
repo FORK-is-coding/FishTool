@@ -567,6 +567,8 @@ def test_llm_models_rejects_embedded_credentials(client, monkeypatch, base_url):
         "http://[::169.254.169.254]/",
         "http://[64:ff9b::a9fe:a9fe]/",
         "http://[2002:a9fe:a9fe::1]/",
+        "http://[::ffff:0:a9fe:a9fe]/",
+        "http://[64:ff9b:1::a9fe:a9fe]/",
         "http://[fd00:ec2::254]/",
         "http://2852039166/",
         "http://0xa9fea9fe/",

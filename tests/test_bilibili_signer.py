@@ -352,4 +352,26 @@ def test_sign_params_concurrent_refresh_failure_still_raises_wbisign_error(fixed
     results = asyncio.run(_scenario())
 
     assert all(isinstance(result, WBISignError) for result in results)
-    assert len(session.calls) >= 1
+    # 刷新失败同样单飞：同一波并发只发一次 nav（每次都计入每日维护配额）
+    assert len(session.calls) == 1
+
+
+def test_refresh_failure_reuse_expires(fixed_time, monkeypatch):
+    """复用失败只合并同一波并发：超过复用窗口后下一次签名会重新尝试刷新。"""
+    import bilibili.api.signer as signer_module
+
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(signer_module.time, "monotonic", lambda: clock["now"])
+    signer = WBISigner()
+    session = _SlowFakeSession(error=ConnectionError("boom"))
+
+    with pytest.raises(WBISignError):
+        asyncio.run(signer.sign_params({"mid": 1}, session))
+    with pytest.raises(WBISignError):
+        asyncio.run(signer.sign_params({"mid": 2}, session))
+    assert len(session.calls) == 1
+
+    clock["now"] += WBISigner.REFRESH_FAILURE_REUSE_S + 1
+    with pytest.raises(WBISignError):
+        asyncio.run(signer.sign_params({"mid": 3}, session))
+    assert len(session.calls) == 2
