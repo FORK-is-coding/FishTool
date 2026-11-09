@@ -45,7 +45,7 @@
     margin-top: 14px;
     border-collapse: collapse;
     font-size: 13px;
-    background: #fff;
+    background: #fff;  /* 白色表格底：与 style.up.css .ranking-table 一致（白色，不使用背景变量） */
     border-radius: var(--r-card);
     box-shadow: var(--shadow-card);
 }
