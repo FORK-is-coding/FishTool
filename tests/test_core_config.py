@@ -457,13 +457,38 @@ def test_atomic_replace_retries_when_target_is_briefly_locked(tmp_path, monkeypa
         return real_replace(src, dst)
 
     monkeypatch.setattr(os_module, "replace", _locked_then_ok)
-    monkeypatch.setattr(os_module, "name", "nt")
+    # 只打开重试开关，不改全局 os.name：Linux 上把 os.name 改成 "nt" 会让
+    # pathlib.Path() 去构造 WindowsPath 并抛 NotImplementedError（CI 上就是这样挂的）。
+    monkeypatch.setattr(ConfigManager, "_RETRY_REPLACE_ON_PERMISSION_ERROR", True)
     monkeypatch.setattr(core_config_module.time, "sleep", lambda _s: None)
     manager.set("app.version", "9.9.9")
     manager.save_config()
 
     assert failures["left"] == 0
     assert "9.9.9" in manager.main_config_path.read_text(encoding="utf-8")
+
+
+def test_atomic_replace_does_not_retry_when_switch_is_off(tmp_path, monkeypatch):
+    """非 Windows（开关关闭）时 PermissionError 立即抛出，原文件保持不变、临时文件被清理。"""
+    import os as os_module
+
+    manager = _make_manager(tmp_path)
+    before = manager.main_config_path.read_text(encoding="utf-8")
+    calls = {"n": 0}
+
+    def _always_locked(src, dst):
+        calls["n"] += 1
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(os_module, "replace", _always_locked)
+    monkeypatch.setattr(ConfigManager, "_RETRY_REPLACE_ON_PERMISSION_ERROR", False)
+    manager.set("app.version", "9.9.9")
+    with pytest.raises(PermissionError):
+        manager.save_config()
+
+    assert calls["n"] == 1
+    assert manager.main_config_path.read_text(encoding="utf-8") == before
+    assert not list(manager.config_dir.glob(".config.yaml.*.tmp"))
 
 
 def test_init_survives_unexpected_load_error(tmp_path, monkeypatch):

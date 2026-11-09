@@ -207,8 +207,13 @@ class ConfigManager:
                 logger.debug("清理临时配置文件失败: %s", cleanup_error)
             raise
 
-    @staticmethod
-    def _replace_with_retry(source: Path, target: Path, attempts: int = 10, delay_s: float = 0.05) -> None:
+    #: 是否按 Windows 处理 os.replace 的 PermissionError（目标被其它句柄占用）。
+    #: 单独成类属性：测试要在 Linux 上覆盖这条分支时改它即可，不能去改全局 os.name，
+    #: 否则 pathlib.Path() 会去构造 WindowsPath 并抛 NotImplementedError。
+    _RETRY_REPLACE_ON_PERMISSION_ERROR = os.name == 'nt'
+
+    @classmethod
+    def _replace_with_retry(cls, source: Path, target: Path, attempts: int = 10, delay_s: float = 0.05) -> None:
         """``os.replace`` 的 Windows 容错版本。
 
         Windows 上只要目标文件被别的句柄打开（编辑器、杀毒扫描、同进程另一个线程正在
@@ -220,7 +225,7 @@ class ConfigManager:
                 os.replace(source, target)
                 return
             except PermissionError:
-                if os.name != 'nt' or attempt == attempts - 1:
+                if not cls._RETRY_REPLACE_ON_PERMISSION_ERROR or attempt == attempts - 1:
                     raise
                 time.sleep(delay_s)
 
