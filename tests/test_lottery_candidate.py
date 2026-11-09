@@ -1,19 +1,16 @@
 """抽奖候选字段标准化工具的契约级测试。
 
 覆盖 modules/lottery/candidate.py 的全部公开函数与边界分支。
-评论 ORM 对象使用真实 ``core.database.Comment`` 瞬时实例（不入库、不落盘）。
 """
 
 from datetime import datetime, timedelta
 
 import pytest
 
-from core.database import Comment
 
 from modules.lottery.candidate import (
     _vip_label,
     build_candidate_pool,
-    comment_row_to_dict,
     merge_profile_metadata,
     missing_metadata_uids,
     parse_comment_time,
@@ -24,17 +21,6 @@ from modules.lottery.candidate import (
 
 
 # ------------------------------------------------------------------ 构造辅助
-
-def _make_comment(**overrides) -> Comment:
-    """构造一个未持久化的真实 Comment ORM 实例，便于字段契约断言。"""
-    row = Comment()
-    row.rpid = overrides.pop("rpid", "1001")
-    row.uid = overrides.pop("uid", 42)
-    row.uname = overrides.pop("uname", "测试用户")
-    row.content = overrides.pop("content", "抽奖留言")
-    for field, value in overrides.items():
-        setattr(row, field, value)
-    return row
 
 
 def _make_reply(**overrides) -> dict:
@@ -55,67 +41,6 @@ def _make_reply(**overrides) -> dict:
     }
     reply.update(overrides)
     return reply
-
-
-# ------------------------------------------------- comment_row_to_dict
-
-def test_comment_row_to_dict_keeps_unknowns_when_vip_and_level_missing() -> None:
-    """vip 与 level_info 均缺失时应显式返回 None，供上层判断是否需要补全。"""
-    row = _make_comment(ctime=datetime(2024, 5, 1, 12, 0, 0))
-
-    payload = comment_row_to_dict(row)
-
-    assert payload["rpid"] == "1001"
-    assert payload["uid"] == 42
-    assert payload["uname"] == "测试用户"
-    assert payload["level_info"] is None
-    assert payload["level"] is None
-    assert payload["vip"] is None
-    assert payload["is_vip"] is None
-    assert payload["vip_type"] is None
-    assert payload["vip_label"] is None
-    assert payload["ctime"] == "2024-05-01T12:00:00"
-    assert payload["like"] == 0
-    assert payload["reply_count"] == 0
-
-
-def test_comment_row_to_dict_resolves_vip_type_and_label() -> None:
-    """有会员原始字段时应解析出年度大会员与等级。"""
-    row = _make_comment(level_info={"current_level": 5}, vip={"vipType": 2, "vipStatus": 1})
-
-    payload = comment_row_to_dict(row)
-
-    assert payload["level"] == 5
-    assert payload["is_vip"] is True
-    assert payload["vip_type"] == 2
-    assert payload["vip_label"] == "年度大会员"
-
-
-def test_comment_row_to_dict_accepts_short_vip_keys() -> None:
-    """兼容 type/status 简写键的旧数据。"""
-    row = _make_comment(vip={"type": 1, "status": 1})
-
-    payload = comment_row_to_dict(row)
-
-    assert payload["vip_type"] == 1
-    assert payload["is_vip"] is True
-    assert payload["vip_label"] == "大会员"
-
-
-def test_comment_row_to_dict_treats_empty_vip_as_unknown() -> None:
-    """反例修复（规格 §6.6）：空会员对象是“未知”而非“已知非会员”。
-
-    旧预期 is_vip=False / vip_type=0 / vip_label="非会员" 把空 dict 当成已确认
-    无会员，等价于给缺证据的记录伪造事实；新预期保持 None，由下游按未知处理。
-    """
-    row = _make_comment(vip={})
-
-    payload = comment_row_to_dict(row)
-
-    assert payload["is_vip"] is None
-    assert payload["vip_type"] is None
-    assert payload["vip_label"] is None
-    assert payload["ctime"] is None
 
 
 # ------------------------------------------------- parse_reply

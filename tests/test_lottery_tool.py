@@ -6,37 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from core.database import Comment, DatabaseManager, Video
-
 from modules.lottery.analyzer import heuristic_classify
 from modules.lottery.service import LotteryService
 from modules.lottery.target import LotteryTarget, parse_target_input
-
-
-def test_comment_database_migration_and_local_metadata(tmp_path: Path) -> None:
-    """旧库迁移后应能持久化并读取评论等级与年度大会员字段。"""
-    manager = DatabaseManager(str(tmp_path / "lottery.db"))
-    columns = {column["name"] for column in __import__("sqlalchemy").inspect(manager.engine).get_columns("comments")}
-    assert {"level_info", "vip"}.issubset(columns)
-
-    session = manager.get_session()
-    video = Video(bvid="BV1xx411c7mD", title="测试")
-    session.add(video)
-    session.flush()
-    session.add(Comment(
-        rpid="7", video_id=video.id, uid=42, uname="年度会员", content="参与抽奖",
-        ctime=datetime(2026, 8, 10, 12), level_info={"current_level": 6},
-        vip={"vipStatus": 1, "vipType": 2},
-    ))
-    session.commit()
-    row = session.query(Comment).one()
-    candidate = LotteryService._comment_row_to_dict(row)
-    session.close()
-
-    assert candidate["level"] == 6
-    assert candidate["vip_type"] == 2
-    assert candidate["vip_label"] == "年度大会员"
-    assert candidate["ctime"] == "2026-08-10T12:00:00"
 
 
 def test_parse_video_and_dynamic_target() -> None:

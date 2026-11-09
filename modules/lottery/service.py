@@ -14,16 +14,15 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from bilibili.api import BilibiliAPI
-from core.database import Comment, Video, get_session
+from bilibili.rate_limiter import RateLimiter
+from core.database import Comment, get_session
 from core.logger import get_logger
-from modules.comment.collector import CommentCollector
 
 from .analyzer import classify_profiles
 # JSON 缓存仓储与候选字段转换器。
 from .cache import LotteryCache, snapshot_is_reusable
 from .candidate import (
     build_candidate_pool,
-    comment_row_to_dict,
     merge_profile_metadata,
     missing_metadata_uids,
     parse_comment_time,
@@ -39,7 +38,7 @@ from .target import LotteryTarget, fetch_target_metadata
 logger = get_logger(__name__)
 # 进度回调类型：阶段名 + 百分比 + 提示文案。
 ProgressCallback = Optional[Callable[[str, int, str], None]]
-#: 评论快照默认复用窗口（秒），可由 lottery.comment_snapshot_ttl_seconds 覆盖。
+#: 动态评论快照默认复用窗口（秒），可由 lottery.comment_snapshot_ttl_seconds 覆盖。
 _DEFAULT_SNAPSHOT_TTL_S = 600
 
 #: full 命中所需的来源组：等级/动态/投稿数分别来自 info / dynamics / videos（规格 §6.4）。
@@ -84,19 +83,18 @@ class LotteryService:
         cache_dir: Optional[Path] = None,
         snapshot_ttl_s: Optional[int] = None,
     ):
-        """初始化服务并复用现有评论采集器。
+        """初始化服务，复用 API 限频与画像缓存。
 
         Args:
             api: B 站异步 API 客户端。
             cache_dir: 动态评论本地缓存目录。
-            snapshot_ttl_s: 评论快照复用窗口秒数；``None`` 时读取配置。
+            snapshot_ttl_s: 动态评论快照复用窗口秒数；``None`` 时读取配置。
         """
         # 显式传入时覆盖配置，便于测试与调用方定制。
         self._snapshot_ttl_override = snapshot_ttl_s
         # 复用传入的 API 客户端，共享全站限频配额。
         self.api = api
-        # 复用评论采集器，抽奖候选与监控走同一采集链路。
-        self.collector = CommentCollector(api)
+        self._comment_rate_limiter = RateLimiter(rate=4.0)
         # 缓存目录默认放 data/lottery_cache，调用方可按需覆盖。
         self.cache_dir = cache_dir or Path("data") / "lottery_cache"
         self._cache = LotteryCache(self.cache_dir)
@@ -114,40 +112,8 @@ class LotteryService:
             logger.exception("抽奖目标预览失败: %s", raw_target)
             raise
 
-    def _load_video_comments(self, bvid: str) -> List[Dict[str, Any]]:
-        """从 SQLite 读取指定视频已经采集的评论。"""
-        # 先置空会话，便于 finally 统一关闭。
-        session = None
-        try:
-            # 打开独立会话查询，失败不污染其他请求。
-            session = get_session()
-            # 按 bvid 关联评论表，按时间升序返回稳定顺序。
-            rows = (
-                session.query(Comment)
-                .join(Video, Comment.video_id == Video.id)
-                .filter(Video.bvid == bvid)
-                .order_by(Comment.ctime.asc())
-                .all()
-            )
-            # 命中本地记录转成候选字段格式。
-            return [self._comment_row_to_dict(row) for row in rows]
-        except Exception as exc:
-            # 本地读取异常降级为空，调用方回退在线采集。
-            logger.warning("读取视频本地评论失败，将回退在线采集: %s", exc)
-            return []
-        finally:
-            # 查询结束后关闭会话，避免连接泄漏。
-            if session is not None:
-                session.close()
-
-    @staticmethod
-    def _comment_row_to_dict(row: Comment) -> Dict[str, Any]:
-        """将本地评论记录转换为候选字段，保留兼容入口。"""
-        return comment_row_to_dict(row)
-
-
     def _snapshot_ttl_s(self) -> int:
-        """返回评论快照复用窗口秒数。
+        """返回动态评论快照复用窗口秒数。
 
         优先使用构造参数，其次读取 ``lottery.comment_snapshot_ttl_seconds``，
         配置缺失或非法（非正整数）时回退默认 600 秒。
@@ -187,6 +153,70 @@ class LotteryService:
     def _parse_reply(reply: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """清洗单条 B 站评论，保留兼容入口。"""
         return parse_reply(reply)
+
+    async def _collect_video_comments(
+        self, target: LotteryTarget, progress: ProgressCallback = None,
+    ) -> List[Dict[str, Any]]:
+        """按视频读取当前账号的评论管理列表，只有完整翻页才返回候选。
+
+        固定本轮 Cookie，避免 Cookie 池轮换账号造成空页或名单混用。
+        每页 50 条，保留楼中楼；按 rpid 去重，UID 去重仍由候选池统一处理。
+        """
+        cookie = self.api.cookie
+        if self.api.cookie_pool is not None:
+            account = await self.api.cookie_pool.get_cookie()
+            cookie = account.cookie_data if account else ""
+        if not cookie:
+            raise ValueError("请先在 FishTool 中登录 B站，再采集本人视频的抽奖评论")
+
+        async with BilibiliAPI(cookie=cookie, rate_limiter=self.api.rate_limiter) as api:
+            login = await api.get(f"{api.BASE_URL}/x/web-interface/nav")
+            if not login.get("isLogin") or not login.get("mid"):
+                raise ValueError("B站登录态已失效，请重新扫码登录")
+            video = await api.get(
+                f"{api.BASE_URL}/x/web-interface/view", params={"aid": target.oid},
+            )
+            if str((video.get("owner") or {}).get("mid")) != str(login["mid"]):
+                raise ValueError("视频抽奖仅支持当前登录账号发布的视频，请切换到发布者账号")
+
+            comments: Dict[str, Dict[str, Any]] = {}
+            total = None
+            page_number = 1
+            while True:
+                await self._comment_rate_limiter.acquire(endpoint="comment")
+                data = await api.get(
+                    f"{api.BASE_URL}/x/v2/reply/up/fulllist",
+                    params={"oid": target.oid, "type": 1, "order": 1,
+                            "filter": -1, "pn": page_number, "ps": 50},
+                )
+                page = data.get("page") or {}
+                rows = data.get("list")
+                count = page.get("total")
+                if rows is None and count == 0:
+                    rows = []
+                if (type(count) is not int or count < 0 or not isinstance(rows, list)
+                        or page.get("num") != page_number):
+                    raise ValueError("评论管理接口返回的分页信息不完整，未生成抽奖名单")
+                if total is not None and count != total:
+                    raise ValueError("采集期间评论总数发生变化，请等待评论稳定后重新采集")
+                total = count
+                before = len(comments)
+                for raw in rows:
+                    if (not isinstance(raw, dict) or str(raw.get("oid")) != str(target.oid)
+                            or raw.get("type") != 1):
+                        raise ValueError("评论管理接口返回了其他内容的评论，未生成抽奖名单")
+                    item = self._parse_reply(raw)
+                    if not item or not item["rpid"] or item["uid"] <= 0:
+                        raise ValueError("评论缺少参与者或评论 ID，未生成抽奖名单")
+                    comments[item["rpid"]] = item
+                if progress:
+                    progress("collecting_comments", 12 + int(40 * min(len(comments), total) / max(total, 1)),
+                             f"已读取本人视频评论 {len(comments)}/{total} 条（含楼中楼）")
+                if len(comments) == total:
+                    return list(comments.values())
+                if len(comments) > total or len(comments) == before:
+                    raise ValueError("评论分页未覆盖完整名单，请重新采集后再抽奖")
+                page_number += 1
 
     async def _collect_dynamic_comments(
         self,
@@ -264,23 +294,19 @@ class LotteryService:
         target: LotteryTarget,
         progress: ProgressCallback = None,
     ) -> tuple[List[Dict[str, Any]], str]:
-        """优先复用本地评论，未命中时调用现有采集能力。"""
+        """视频读取本人评论管理列表；动态复用近期完整快照。"""
+        if target.target_type == "video":
+            return await self._collect_video_comments(target, progress), "crawler"
         if progress:
             # 通知前端本地检索阶段开始。
-            progress("local_lookup", 8, "正在检索工具箱数据库与抽奖缓存，避免重复爬取")
-            # 视频查 SQLite，动态查 JSON 缓存。
-        # 本地非空不代表完整：只有 TTL 内、标记为完整采集的快照才可直接作为候选集。
+            progress("local_lookup", 8, "正在检索动态评论缓存，避免重复爬取")
+        # 动态只有 TTL 内、标记为完整采集的快照才可直接作为候选集。
         ttl_s = self._snapshot_ttl_s()
         now_s = int(time.time())
         local: List[Dict[str, Any]] = []
-        if target.target_type == "video":
-            snapshot = self._cache.load_video_snapshot(target.target_id)
-            if snapshot_is_reusable(snapshot, now_s, ttl_s):
-                local = self._load_video_comments(target.target_id)
-        else:
-            snapshot = self._cache.load_dynamic_snapshot(target.target_id)
-            if snapshot_is_reusable(snapshot, now_s, ttl_s):
-                local = list(snapshot["comments"])
+        snapshot = self._cache.load_dynamic_snapshot(target.target_id)
+        if snapshot_is_reusable(snapshot, now_s, ttl_s):
+            local = list(snapshot["comments"])
         if local:
             if progress:
                 # 通知前端命中本地缓存，跳过重复爬取。
@@ -290,21 +316,7 @@ class LotteryService:
         if progress:
             # 本地无近期完整快照（含旧格式、部分采集、已过期），通知前端开始在线完整采集。
             progress("collecting_comments", 12, "本地没有近期完整采集的评论快照，正在通过现有低频爬虫完整读取评论区")
-            # 视频和动态分别走各自的分页采集逻辑。
-        if target.target_type == "video":
-            # 视频评论复用统一串行采集器，遵守全站限频。
-            comments = await self.collector.collect_video_comments(
-                target.target_id,
-                strategy=CommentCollector.STRATEGY_FULL,
-            )
-            # FULL 采集有结果且已成功落库时才标记快照，落库失败时下次仍重新采集。
-            save_result = getattr(self.collector, "last_save_result", None) or {}
-            if comments and save_result.get("success", True):
-                self._cache.mark_video_snapshot(target.target_id, len(comments), complete=True)
-        else:
-            # 动态目标走动态专用采集链路。
-            comments = await self._collect_dynamic_comments(target, progress)
-            # 在线采集结果标记来源为 crawler。
+        comments = await self._collect_dynamic_comments(target, progress)
         return comments, "crawler"
 
     async def fetch_user_profile(self, uid: int) -> Dict[str, Any]:
