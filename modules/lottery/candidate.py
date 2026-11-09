@@ -1,7 +1,9 @@
-"""抽奖候选字段标准化工具。"""
+﻿"""抽奖候选字段标准化工具。"""
 
 from datetime import datetime
 from typing import Any, Dict, Optional
+
+from core.database import Comment
 
 
 def _vip_present(vip: Any) -> bool:
@@ -19,6 +21,43 @@ def _optional_int(value: Any) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def comment_row_to_dict(row: Comment) -> Dict[str, Any]:
+    """将评论 ORM 记录转换为抽奖候选字段。
+
+    Args:
+        row: 评论数据库记录。
+
+    Returns:
+        包含等级、会员状态和评论时间的候选字典。
+    """
+    level_info = row.level_info if isinstance(row.level_info, dict) and row.level_info else None
+    vip = row.vip if _vip_present(row.vip) else None
+    if vip is not None:
+        vip_type = int(vip.get("vipType") or vip.get("type") or 0)
+        vip_status = int(vip.get("vipStatus") or vip.get("status") or 0)
+        is_vip = bool(vip_status or vip_type)
+        vip_label = _vip_label(vip_status, vip_type)
+    else:
+        vip_type = None
+        is_vip = None
+        vip_label = None
+    return {
+        "rpid": row.rpid,
+        "uid": row.uid,
+        "uname": row.uname,
+        "level_info": level_info,
+        "vip": vip,
+        "level": level_info.get("current_level") if level_info else None,
+        "is_vip": is_vip,
+        "vip_type": vip_type,
+        "vip_label": vip_label,
+        "content": row.content,
+        "ctime": row.ctime.isoformat() if row.ctime else None,
+        "like": row.like or 0,
+        "reply_count": row.reply_count or 0,
+    }
 
 
 def parse_reply(reply: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -279,3 +318,4 @@ def build_candidate_pool(
         seen_users.add(uid)
         pool.append(comment)
     return pool, excluded
+

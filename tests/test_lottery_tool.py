@@ -63,7 +63,7 @@ def test_draw_deduplicates_users_and_reports_source() -> None:
     service = LotteryService(api=object())
     target = LotteryTarget("video", "BV1xx411c7mD", 1, 1, "标题", "发布者")
 
-    async def fake_get_comments(_target, _progress=None):
+    async def fake_get_comments(_target, _progress=None, **kwargs):
         return ([
             {"uid": 1, "uname": "甲", "content": "A", "ctime": "2026-08-10T12:00:00", "level": 3, "is_vip": False, "vip_type": 0, "vip_label": "非会员"},
             {"uid": 1, "uname": "甲", "content": "B", "ctime": "2026-08-10T12:01:00", "level": 3, "is_vip": False, "vip_type": 0, "vip_label": "非会员"},
@@ -82,7 +82,7 @@ def test_draw_filters_vip_level_and_comment_date() -> None:
     service = LotteryService(api=object())
     target = LotteryTarget("video", "BV1xx411c7mD", 1, 1, "标题", "发布者")
 
-    async def fake_get_comments(_target, _progress=None):
+    async def fake_get_comments(_target, _progress=None, **kwargs):
         return [
             {"uid": 1, "uname": "符合", "content": "A", "ctime": "2026-08-10T12:00:00", "level": 5, "is_vip": True},
             {"uid": 2, "uname": "等级低", "content": "B", "ctime": "2026-08-10T12:00:00", "level": 2, "is_vip": True},

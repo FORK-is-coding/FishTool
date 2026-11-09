@@ -1,4 +1,4 @@
-"""抽奖评论与用户画像的本地 JSON 缓存。
+﻿"""抽奖评论与用户画像的本地 JSON 缓存。
 
 画像缓存（``user_profiles.json``）采用 **schema_version=3** 的分组空间结构：
 
@@ -121,7 +121,7 @@ def snapshot_is_reusable(snapshot: Any, now_s: int, ttl_s: int) -> bool:
     旧格式（无完整性标记）、部分采集、过期、未来时间戳或字段类型异常一律不可复用。
 
     Args:
-        snapshot: ``load_dynamic_snapshot`` 的返回值。
+        snapshot: ``load_dynamic_snapshot`` / ``load_video_snapshot`` 的返回值。
         now_s: 当前 UTC 秒级时间戳。
         ttl_s: 复用窗口秒数，必须为正整数。
 
@@ -230,6 +230,44 @@ class LotteryCache:
         }
         self._write_json(self.dynamic_path(dynamic_id), payload, "动态评论")
 
+    # ------------------------------------------------------------------ 视频快照标记
+
+    def load_video_snapshot(self, bvid: str) -> Optional[Dict[str, Any]]:
+        """读取视频评论快照标记（评论本体在 SQLite，此处只记完整性与时间）。
+
+        Args:
+            bvid: 视频 BV 号。
+
+        Returns:
+            ``{"complete", "saved_epoch_s", "comment_count"}``；缺失或损坏时返回 ``None``。
+        """
+        payload = self._read_json(self.video_snapshot_path(bvid), "视频评论快照")
+        if payload is None:
+            return None
+        return {
+            "complete": payload.get("complete") is True,
+            "saved_epoch_s": payload.get("saved_epoch_s"),
+            "comment_count": payload.get("comment_count"),
+        }
+
+    def mark_video_snapshot(self, bvid: str, comment_count: int, complete: bool = True) -> None:
+        """记录一次抽奖用视频评论采集的完整性与时间。
+
+        Args:
+            bvid: 视频 BV 号。
+            comment_count: 本次采集并成功落库的评论条数。
+            complete: 本次采集是否为完整采集。
+
+        Returns:
+            无。
+        """
+        payload = {
+            "saved_at": datetime.now().isoformat(),
+            "saved_epoch_s": int(time.time()),
+            "complete": bool(complete),
+            "comment_count": int(comment_count),
+        }
+        self._write_json(self.video_snapshot_path(bvid), payload, "视频评论快照")
 
     # ------------------------------------------------------------------ 画像兼容层
 
@@ -579,6 +617,16 @@ class LotteryCache:
         """
         return self.cache_dir / f"dynamic_{dynamic_id}.json"
 
+    def video_snapshot_path(self, bvid: str) -> Path:
+        """返回指定视频的评论快照标记路径。
+
+        Args:
+            bvid: 视频 BV 号。
+
+        Returns:
+            视频快照标记 JSON 路径。
+        """
+        return self.cache_dir / f"video_{bvid}.json"
 
     def profile_path(self) -> Path:
         """返回用户画像缓存路径。
@@ -698,3 +746,4 @@ class LotteryCache:
             os.replace(temporary, target)
         except (OSError, TypeError) as exc:
             logger.warning("写入%s缓存失败，不影响本次结果: %s", label, exc)
+

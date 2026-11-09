@@ -111,7 +111,8 @@ class DrawTaskRequest(TargetRequest):
     date_start: Optional[date] = Field(None, description="评论开始日期（含）")
     # 评论结束日期（含）。
     date_end: Optional[date] = Field(None, description="评论结束日期（含）")
-
+    # 评论采集方式：standard=公共接口（任何视频），up_fulllist=UP主评论管理接口（仅限本人视频，含楼中楼）。
+    comment_mode: Literal["standard", "up_fulllist"] = Field("up_fulllist", description="评论采集方式")
 
 # 获取或创建抽奖服务单例。
 def get_service() -> LotteryService:
@@ -343,7 +344,6 @@ async def _run_draw_task(task_id: str, request: DrawTaskRequest) -> None:
         if request.date_start and request.date_end and request.date_start > request.date_end:
             # 日期区间倒置直接报错。
             raise ValueError("评论开始日期不能晚于结束日期")
-        # 执行随机抽奖，日期转成当天起止时刻参与过滤。
         result = await service.draw(
             target,
             request.winner_count,
@@ -356,6 +356,7 @@ async def _run_draw_task(task_id: str, request: DrawTaskRequest) -> None:
             real_only=request.real_only,
             include_indeterminate=request.include_indeterminate,
             focus_template=request.focus_template,
+            comment_mode=request.comment_mode,
         )
         # 保存本次中奖名单快照，供后续校验接口复用。
         _latest_winners = [dict(item) for item in result.get("winners") or []]

@@ -461,9 +461,11 @@ async function previewLotteryDraw() {
     const target = document.getElementById('lottery-draw-target')?.value.trim();
     const winnerCount = Number(document.getElementById('lottery-winner-count')?.value);
     const uniqueUsers = Boolean(document.getElementById('lottery-unique-users')?.checked);
+    const commentMode = document.getElementById('lottery-comment-mode')?.value || 'standard';
     let filters;
     try {
         filters = getLotteryDrawFilters();
+        filters.comment_mode = commentMode;
     } catch (error) {
         return showAppAlert(error.message);
     }

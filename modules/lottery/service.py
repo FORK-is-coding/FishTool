@@ -15,7 +15,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 from bilibili.api import BilibiliAPI
 from bilibili.rate_limiter import RateLimiter
-from core.database import Comment, get_session
+from core.database import Comment, Video, get_session
+from modules.comment.collector import CommentCollector
 from core.logger import get_logger
 
 from .analyzer import classify_profiles
@@ -23,6 +24,7 @@ from .analyzer import classify_profiles
 from .cache import LotteryCache, snapshot_is_reusable
 from .candidate import (
     build_candidate_pool,
+    comment_row_to_dict,
     merge_profile_metadata,
     missing_metadata_uids,
     parse_comment_time,
@@ -94,6 +96,7 @@ class LotteryService:
         self._snapshot_ttl_override = snapshot_ttl_s
         # 复用传入的 API 客户端，共享全站限频配额。
         self.api = api
+        self.collector = CommentCollector(api)
         self._comment_rate_limiter = RateLimiter(rate=4.0)
         # 缓存目录默认放 data/lottery_cache，调用方可按需覆盖。
         self.cache_dir = cache_dir or Path("data") / "lottery_cache"
@@ -293,14 +296,43 @@ class LotteryService:
         self,
         target: LotteryTarget,
         progress: ProgressCallback = None,
+        comment_mode: str = "up_fulllist",
     ) -> tuple[List[Dict[str, Any]], str]:
-        """视频读取本人评论管理列表；动态复用近期完整快照。"""
+        """??? comment_mode ??????????????????
+
+        comment_mode:
+        - "standard"??????????????????????
+        - "up_fulllist"?UP ?????????????????????
+        """
         if target.target_type == "video":
-            return await self._collect_video_comments(target, progress), "crawler"
+            if comment_mode == "up_fulllist":
+                return await self._collect_video_comments(target, progress), "crawler"
+            # standard????????????
+            if progress:
+                progress("local_lookup", 8, "??????????????????????")
+            ttl_s = self._snapshot_ttl_s()
+            now_s = int(time.time())
+            local: List[Dict[str, Any]] = []
+            snapshot = self._cache.load_video_snapshot(target.target_id)
+            if snapshot_is_reusable(snapshot, now_s, ttl_s):
+                local = self._load_video_comments(target.target_id)
+            if local:
+                if progress:
+                    progress("local_reuse", 45, f"????? {len(local)} ??????????")
+                return local, "local"
+            if progress:
+                progress("collecting_comments", 12, "?????????????????????????????????")
+            comments = await self.collector.collect_video_comments(
+                target.target_id,
+                strategy=CommentCollector.STRATEGY_FULL,
+            )
+            save_result = getattr(self.collector, "last_save_result", None) or {}
+            if comments and save_result.get("success", True):
+                self._cache.mark_video_snapshot(target.target_id, len(comments), complete=True)
+            return comments, "crawler"
         if progress:
-            # 通知前端本地检索阶段开始。
-            progress("local_lookup", 8, "正在检索动态评论缓存，避免重复爬取")
-        # 动态只有 TTL 内、标记为完整采集的快照才可直接作为候选集。
+            progress("local_lookup", 8, "?????????????????")
+        # ???? TTL ??????????????????????
         ttl_s = self._snapshot_ttl_s()
         now_s = int(time.time())
         local: List[Dict[str, Any]] = []
@@ -309,13 +341,10 @@ class LotteryService:
             local = list(snapshot["comments"])
         if local:
             if progress:
-                # 通知前端命中本地缓存，跳过重复爬取。
-                progress("local_reuse", 45, f"已复用本地 {len(local)} 条评论，跳过重复采集")
+                progress("local_reuse", 45, f"????? {len(local)} ??????????")
             return local, "local"
-
         if progress:
-            # 本地无近期完整快照（含旧格式、部分采集、已过期），通知前端开始在线完整采集。
-            progress("collecting_comments", 12, "本地没有近期完整采集的评论快照，正在通过现有低频爬虫完整读取评论区")
+            progress("collecting_comments", 12, "?????????????????????????????????")
         comments = await self._collect_dynamic_comments(target, progress)
         return comments, "crawler"
 
@@ -550,9 +579,10 @@ class LotteryService:
         target: LotteryTarget,
         focus_template: Optional[str],
         progress: ProgressCallback = None,
+        comment_mode: str = "up_fulllist",
     ) -> Dict[str, Any]:
         """分析评论区全部去重用户并分类真人与疑似抽奖号。"""
-        comments, source = await self.get_comments(target, progress)
+        comments, source = await self.get_comments(target, progress, comment_mode=comment_mode)
         users: Dict[int, str] = {}
         for comment in comments:
             uid = int(comment.get("uid") or 0)
@@ -858,10 +888,11 @@ class LotteryService:
         real_only: bool = False,
         include_indeterminate: bool = False,
         focus_template: Optional[str] = None,
+        comment_mode: str = "up_fulllist",
     ) -> Dict[str, Any]:
         """按显式条件过滤评论，并可选复用真人判定链后安全抽奖。"""
         # 先取评论（本地或在线），再补全等级/会员元数据。
-        comments, source = await self.get_comments(target, progress)
+        comments, source = await self.get_comments(target, progress, comment_mode=comment_mode)
         # 补全筛选所需元数据，再由纯函数统一应用候选规则。
         comments = await self._complete_draw_metadata(comments, progress)
         pool, excluded = build_candidate_pool(

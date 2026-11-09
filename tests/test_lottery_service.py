@@ -922,7 +922,7 @@ def test_filter_real_users_dedupes_and_batches_profiles(
         {"uid": index, "uname": f"用户{index}", "rpid": f"r{index}"} for index in range(1, 14)
     ] + [{"uid": 1, "uname": "重复用户", "rpid": "dup"}]
 
-    async def fake_get_comments(target, progress=None):
+    async def fake_get_comments(target, progress=None, **kwargs):
         """返回预置评论，避免真实采集。"""
         return comments, "local"
 
@@ -954,7 +954,7 @@ def test_filter_real_users_handles_empty_comment_pool(
 ) -> None:
     """无评论时不得除零崩溃，返回空结构。"""
 
-    async def fake_get_comments(target, progress=None):
+    async def fake_get_comments(target, progress=None, **kwargs):
         """返回空评论列表。"""
         return [], "crawler"
 
@@ -1212,7 +1212,7 @@ def test_resolve_missing_profiles_returns_false_without_uncached(
 def _install_complete_local_comments(service: LotteryService, comments: list) -> None:
     """把 get_comments 替换为返回元数据完整评论的契约实现。"""
 
-    async def fake_get_comments(target, progress=None):
+    async def fake_get_comments(target, progress=None, **kwargs):
         """返回预置评论。"""
         return [dict(item) for item in comments], "local"
 
@@ -1378,7 +1378,7 @@ def test_filter_real_users_resume_skips_cached_profiles_and_assessments(
     uids = list(range(1, 26))  # 25 人：画像 20 + 5 两批，判定 12 + 12 + 1 三批
     comments = _comments_for(uids)
 
-    async def fake_get_comments(target, progress=None):
+    async def fake_get_comments(target, progress=None, **kwargs):
         return comments, "local"
 
     service.get_comments = fake_get_comments
@@ -1415,7 +1415,7 @@ def test_filter_real_users_does_not_cache_rule_fallback(service: LotteryService,
     """LLM 不可用时的规则兜底结果不缓存，下次执行会重新调用 LLM。"""
     uids = [1, 2]
 
-    async def fake_get_comments(target, progress=None):
+    async def fake_get_comments(target, progress=None, **kwargs):
         return _comments_for(uids), "local"
 
     service.get_comments = fake_get_comments
@@ -1439,7 +1439,7 @@ def test_filter_real_users_does_not_cache_rule_fallback(service: LotteryService,
 
 def test_assessment_cache_invalidated_when_profile_or_focus_changes(service: LotteryService, monkeypatch) -> None:
     """判定缓存绑定画像判定字段与侧重点：画像变化或换模板都要重新判定。"""
-    async def fake_get_comments(target, progress=None):
+    async def fake_get_comments(target, progress=None, **kwargs):
         return _comments_for([1]), "local"
 
     service.get_comments = fake_get_comments
