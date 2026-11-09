@@ -155,6 +155,7 @@ class PatrolService:
             },
             "prefs": {"include_replies": bool(prefs.get("include_replies", True)),
                       "risk_notice_ok": prefs.get("risk_notice_version") == RISK_NOTICE_VERSION,
+                      "default_report_content": prefs.get("default_report_content") or "",
                       "revision": prefs.get("revision", 0)},
             "settings": {"max_comments_default": s.max_comments_default, "max_comments_hard": s.max_comments_hard,
                          "judge_max_items": s.judge_max_items, "judge_batch_size": s.judge_batch_size,
