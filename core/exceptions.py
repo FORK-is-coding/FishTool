@@ -143,10 +143,16 @@ class BilibiliAPIError(BiliOpsException):
     - API返回错误码
     - 网络请求失败
     - 响应格式异常
+
+    Attributes:
+        bili_code: B站返回的数字业务码（如 12008）；HTTP 层拦截时为负的状态码
+            （如 412 拦截记为 -412），未知时为 None。供需要按码分流的调用方使用，
+            异常消息文本保持不变以兼容按消息解析的旧代码。
     """
-    def __init__(self, message: str, code: str = "BILIBILI_API_ERROR"):
+    def __init__(self, message: str, code: str = "BILIBILI_API_ERROR", bili_code: "int | None" = None):
         """异常初始化"""
         super().__init__(message, code)
+        self.bili_code = bili_code
 
 
 class AuthenticationError(BilibiliAPIError):
@@ -189,6 +195,7 @@ class CookieExpiredError(AuthenticationError):
         msg = f"Cookie已失效: {cookie_name}" if cookie_name else "Cookie已失效"
         super().__init__(msg)
         self.cookie_name = cookie_name  # 保存具体的Cookie名称，便于后续处理
+        self.bili_code = -101  # B站未登录 / 登录态失效的业务码
 
 
 class RateLimitError(BilibiliAPIError):
