@@ -6,6 +6,10 @@
 """
 from datetime import datetime
 from pathlib import Path
+import os
+import sqlite3
+import tempfile
+from contextlib import closing
 import logging
 from typing import Dict
 
@@ -537,8 +541,21 @@ class DatabaseManager:
             # 对输入做运算得到结果
             backup_path = self.db_path.parent / f"backup_{timestamp}.db"
         
-        # 用 shutil 复制数据库文件，简单可靠
-        import shutil
-        shutil.copy2(self.db_path, backup_path)
+        destination = Path(backup_path)
+        if destination.resolve() == self.db_path.resolve():
+            raise ValueError("备份路径不能与数据库源文件相同")
+
+        # 独立只读连接包含已提交的 WAL 数据，也不会提交/回滚业务会话的事务。
+        # 先写同目录临时文件，成功后再替换，失败时保留已有备份。
+        descriptor, temporary = tempfile.mkstemp(prefix=f".{destination.name}.", dir=destination.parent)
+        os.close(descriptor)
+        try:
+            source_uri = self.db_path.resolve().as_uri() + "?mode=ro"
+            with closing(sqlite3.connect(source_uri, uri=True)) as source:
+                with closing(sqlite3.connect(temporary)) as target:
+                    source.backup(target)
+            os.replace(temporary, destination)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
         logger.info(f"数据库已备份到: {backup_path}")
         return backup_path

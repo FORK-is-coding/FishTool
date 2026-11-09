@@ -82,15 +82,57 @@ def test_drop_all_tables_removes_schema(tmp_path):
 
 
 def test_backup_auto_and_explicit_path(tmp_path):
-    """backup 支持自动时间戳命名与显式路径两种模式。"""
+    """备份包含已提交 WAL 数据，并且不触碰业务会话的未提交事务。"""
     manager = DatabaseManager(str(tmp_path / "ops.db"))
-    auto_path = manager.backup()
-    assert auto_path.exists()
+    session = manager.get_session()
+    try:
+        session.add(LLMUsage(date="2030-01-01", model="committed", total_tokens=7))
+        session.commit()
+        session.add(LLMUsage(date="2030-01-01", model="uncommitted", total_tokens=9))
+        session.flush()
+        assert Path(str(manager.db_path) + "-wal").stat().st_size > 0
 
-    explicit = tmp_path / "manual_backup.db"
-    returned = manager.backup(str(explicit))
-    assert Path(returned) == explicit
-    assert explicit.exists()
+        auto_path = manager.backup()
+        explicit = tmp_path / "manual_backup.db"
+        explicit.write_bytes(b"old backup")
+        assert manager.backup(str(explicit)) == str(explicit)
+        for backup_path in (auto_path, explicit):
+            with sqlite3.connect(backup_path) as connection:
+                assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+                assert connection.execute("SELECT model, total_tokens FROM llm_usage").fetchall() == [
+                    ("committed", 7),
+                ]
+        assert session.in_transaction()
+        session.rollback()
+        assert session.query(LLMUsage).count() == 1
+    finally:
+        session.close()
+        manager.engine.dispose()
+
+
+def test_backup_rejects_source_and_preserves_existing_backup_on_failure(tmp_path, monkeypatch):
+    import importlib
+
+    manager_module = importlib.import_module("core.database.manager")
+    manager = DatabaseManager(str(tmp_path / "ops.db"))
+    destination = tmp_path / "backup.db"
+    destination.write_bytes(b"existing backup")
+    try:
+        with pytest.raises(ValueError, match="源文件"):
+            manager.backup(manager.db_path)
+
+        def fail_replace(source, target):
+            raise OSError("replace failed")
+
+        monkeypatch.setattr(manager_module.os, "replace", fail_replace)
+        with pytest.raises(OSError, match="replace failed"):
+            manager.backup(destination)
+        assert destination.read_bytes() == b"existing backup"
+        assert not list(tmp_path.glob(".backup.db.*"))
+        with manager.engine.connect() as connection:
+            assert connection.execute(text("PRAGMA integrity_check")).scalar_one() == "ok"
+    finally:
+        manager.engine.dispose()
 
 
 # ---------------------------------------------------------------------------

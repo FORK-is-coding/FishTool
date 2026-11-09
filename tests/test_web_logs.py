@@ -465,3 +465,44 @@ def test_export_problem_logs_keeps_problems_older_than_recent_limit(client, log_
     assert "[ERROR]" in response.text
     assert "早期故障" in response.text
     assert "[INFO]" not in response.text
+
+
+def test_incremental_pages_keep_all_sources_filters_stacktraces_and_partial_utf8(log_env):
+    paths = [log_env / "app.log", log_env / "risk_control.log"]
+    for path in paths:
+        path.write_bytes(b"")
+    _, cursor = logs_module._read_records("all", None, 2)
+    paths[0].write_text(
+        "2026-01-01 00:00:00 [INFO] app - 跳过\n"
+        "2026-01-01 00:00:01 [ERROR] app - a1\n"
+        "Traceback: 中文堆栈\n\n"
+        "2026-01-01 00:00:03 [ERROR] app - a3\n"
+        "2026-01-01 00:00:05 [ERROR] app - a5\n"
+        "2026-01-01 00:00:07 [INFO] app - 尾部过滤\n", encoding="utf-8",
+    )
+    paths[1].write_text(
+        "2026-01-01 00:00:02 [ERROR] risk - r2\n"
+        "2026-01-01 00:00:03 [WARNING] risk - 跳过\n"
+        "2026-01-01 00:00:04 [ERROR] risk - r4\n"
+        "2026-01-01 00:00:06 [ERROR] risk - r6\n", encoding="utf-8",
+    )
+    pages = []
+    for _ in range(3):
+        records, cursor = logs_module._read_records("all", cursor, 2, {"ERROR"})
+        assert len(records) == 2
+        pages.append([record["message"] for record in records])
+    assert pages == [["a1\nTraceback: 中文堆栈", "r2"], ["a3", "r4"], ["a5", "r6"]]
+    assert logs_module._read_records("all", cursor, 2, {"ERROR"})[0] == []
+    assert logs_module._decode_cursor(cursor) == {str(path): path.stat().st_size for path in paths}
+
+    partial = "2026-01-01 00:00:08 [ERROR] app - 最后中文\n".encode("utf-8")
+    with paths[0].open("ab") as handle:
+        handle.write(partial[:-2])
+    records, unchanged = logs_module._read_records("all", cursor, 2, {"ERROR"})
+    assert records == []
+    assert unchanged == cursor
+    with paths[0].open("ab") as handle:
+        handle.write(partial[-2:])
+    records, cursor = logs_module._read_records("all", cursor, 2, {"ERROR"})
+    assert [record["message"] for record in records] == ["最后中文"]
+    assert logs_module._read_records("all", cursor, 2, {"ERROR"})[0] == []
