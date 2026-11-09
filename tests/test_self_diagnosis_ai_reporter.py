@@ -263,7 +263,7 @@ def test_generate_retries_400_even_without_json_mode_keyword(monkeypatch, detail
 
 @pytest.mark.parametrize("status", [400, 422])
 def test_generate_does_not_retry_context_length_exceeded(monkeypatch, status):
-    """#106：输入超长与 JSON 模式无关，去掉参数重试也必然失败，不白烧一次全量提示词。"""
+    """#105：输入超长与 JSON 模式无关，去掉参数重试也必然失败，不白烧一次全量提示词。"""
     detail = (
         '{"error":{"message":"This model\'s maximum context length is 8192 tokens. '
         + "However, your messages resulted in 9100 tokens. " * 6
