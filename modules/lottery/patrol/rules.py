@@ -64,6 +64,13 @@ def persona_phrase_hit(text_norm: str, raw_text: str) -> Optional["Hit"]:
     found = [(label, m, tier) for label, m, tier in found if m]
     if not found:
         return None
+    # 同一段文字只计一次：重叠的命中保留更长的那条（如「行，我认」与「我认」只计前者）。
+    found.sort(key=lambda item: -(item[1].end() - item[1].start()))
+    kept: List[Tuple[str, Any, str]] = []
+    for label, m, tier in found:
+        if all(m.end() <= k.start() or m.start() >= k.end() for _l, k, _t in kept):
+            kept.append((label, m, tier))
+    found = sorted(kept, key=lambda item: item[1].start())
     # AI 腔调短促、不带语气词。去掉命中的腔调片段后，剩余文字仍带「哈 / 啊 / 吧 / 呢 / 嘛」等口语词时，
     # 整句腔调只按弱信号计（“睡吧，我守着”本身含「吧」，不能因此降级）。
     rest = text_norm

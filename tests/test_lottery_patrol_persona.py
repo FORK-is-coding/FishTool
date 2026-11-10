@@ -25,10 +25,27 @@ def _persona(text, name="普通用户", level=4):
     "什么心思都写在脸上", "这句话接的漂亮", "行，我认", "这句话我不接", "没接你那句话", "比之前的都强",
     "他记得这事", "这话我留着", "你这句话我记着", "这话是ta告诉你的，还是你自己想明白的",
     "声音没抖，但比刚才稳", "比刚才平", "这话我收下了", "说的比谁都响", "这次就是认了", "你自己掂量",
+    "这个我认", "这个我认。", "我认", "我认。", "你说得对，我认", "这次失误，我认！",
 ])
 def test_strong_phrases_hit(text):
     _r, w = _persona(text)
     assert w >= STRONG, text
+
+
+@pytest.mark.parametrize("text", [
+    "我认识他", "我认为这期不错", "我认真看完了", "我认错", "我认了吧哈哈", "我认不出来",
+    "这个我认识", "我认得这个人", "这个我认为不行", "我认同", "我认输",
+])
+def test_wo_ren_everyday_words_not_counted(text):
+    """「我认识 / 我认为 / 我认真」等日常说法不算「我认」腔调。"""
+    _r, w = _persona(text)
+    assert w == 0, text
+
+
+def test_overlapping_phrases_counted_once():
+    """「行，我认」同时含「我认」，同一段文字只计一次。"""
+    _r, w = _persona("行，我认")
+    assert w == STRONG
 
 
 @pytest.mark.parametrize("text", [
