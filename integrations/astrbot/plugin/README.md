@@ -48,6 +48,7 @@ https://github.com/FORK-is-coding/astrbot_plugin_FishTool
 | `engine.request_timeout_s` | `120` | 普通请求超时 |
 | `engine.long_request_timeout_s` | `1800` | 评论分析、账号自诊等长请求超时 |
 | `engine.block_api_key_write` | `false` | 禁止 AstrBot Open API Key 调用写接口与凭据接口 |
+| `engine.allow_proxy_report` | `false` | 允许 AI 伪人巡检代发举报（默认只能在 B站页面手动举报；修改后重启引擎） |
 | `chat.enable` | `true` | 启用聊天指令与告警推送 |
 | `chat.restricted_scope` | `admin` | `告警`、`监控 状态` 谁能用：`admin` 仅管理员 / `subscribed` 管理员 + 已订阅推送的会话 / `everyone` 所有人 |
 | `chat.cooldown_seconds` | `10` | 公开指令在同一会话的最短间隔，0 = 不限制 |

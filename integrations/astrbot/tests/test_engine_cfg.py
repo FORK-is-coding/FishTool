@@ -50,6 +50,11 @@ def test_timeouts(raw, expected):
     ({"block_api_key_write": True}, True),
     ({"block_api_key_write": "off"}, False),
     ({"block_api_key_write": [1]}, False),      # 认不出的类型回落默认（默认关）
+    ({"allow_proxy_report": "true"}, True),
+    ({"allow_proxy_report": 1}, True),
+    ({"allow_proxy_report": "off"}, False),
+    ({"allow_proxy_report": [1]}, False),       # 认不出的类型回落默认（默认关）
+    ({"allow_proxy_report": None}, False),
 ])
 def test_booleans(raw, expected):
     key = next(iter(raw))

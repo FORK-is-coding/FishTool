@@ -1,0 +1,137 @@
+/* 抽奖工具 · AI 伪人巡检
+ * 只复用 style.base.css :root 已有变量，样式对齐 style.lottery.css / style.up.css；
+ * 新 flex 容器一律用 margin 做间距，不写 gap（无需 style.flexgap.css 回退）；
+ * 不用 inset 简写、:is()、:where()（QtWebEngine / Chromium 83 兼容）。
+ */
+
+/* ---------- 视图切换与布局 ---------- */
+/* .lottery-layout 自带 display:grid，会盖过 hidden 属性，这里显式隐藏。 */
+#lottery-draw-view[hidden], #lottery-patrol-panel[hidden], .patrol-filters[hidden] { display: none; }
+.lottery-view-switch { margin: 0 0 24px; }
+.lottery-patrol-view .section { margin-bottom: 24px; }
+.patrol-intro { margin: -8px 0 18px; color: var(--ink-3); font-size: 13px; line-height: 1.7; }
+.patrol-option-grid { grid-template-columns: repeat(4, minmax(150px, 1fr)); }
+.patrol-hint { display: block; margin: -8px 0 14px; color: var(--ink-3); font: 11px/1.5 var(--f-mono); }
+.patrol-focus { margin: 0 0 18px; }
+.patrol-focus > summary { color: var(--ink-2); font: 600 12px/1.6 var(--f-body); letter-spacing: .04em; cursor: pointer; }
+.patrol-focus .form-group { margin: 10px 0 0; }
+.patrol-actions { display: flex; flex-wrap: wrap; align-items: center; }
+.patrol-actions .btn { margin-top: 10px; }
+.patrol-progress { margin-top: 16px; }
+.patrol-progress:empty { display: none; }
+.patrol-progress .analysis-notice ul { margin: 8px 0 0; padding-left: 18px; }
+.patrol-progress .analysis-notice li + li { margin-top: 4px; }
+.patrol-progress .analysis-notice a { color: var(--ink); text-decoration: underline; }
+
+/* ---------- 筛选条 ---------- */
+.patrol-filters {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(120px, 1fr)) minmax(180px, 1.4fr);
+    align-items: end;
+    gap: 12px 14px;
+    margin: 0 0 14px;
+    padding: 14px 16px;
+    border-radius: var(--r-card);
+    background: var(--paper);
+    box-shadow: inset 0 0 0 1px var(--paper-3);
+}
+.patrol-filters .form-group { margin: 0; }
+.patrol-filters .lottery-toggle { min-height: 36px; margin: 0; }
+
+/* ---------- 表格（照 style.up.css 的 .ranking-table） ---------- */
+.patrol-table-host { overflow-x: auto; }
+.patrol-table {
+    width: 100%;
+    margin-top: 14px;
+    border-collapse: collapse;
+    font-size: 13px;
+    background: #fff;  /* 白色表格底：与 style.up.css .ranking-table 一致（白色，不使用背景变量） */
+    border-radius: var(--r-card);
+    box-shadow: var(--shadow-card);
+}
+.patrol-table th,
+.patrol-table td { padding: 10px 14px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--paper-3); }
+.patrol-table thead th { color: var(--ink-3); font: 600 11px/1.3 var(--f-mono); letter-spacing: .08em; }
+.patrol-table tbody tr:last-child td { border-bottom: 0; }
+.patrol-table tbody tr:hover { background: var(--paper); }
+.patrol-table th:first-child,
+.patrol-table td:first-child { width: 36px; padding-right: 0; }
+.patrol-table .patrol-col-score { width: 96px; }
+.patrol-table .patrol-col-user { width: 168px; }
+.patrol-table .patrol-col-status { width: 112px; }
+.patrol-row-reply td { background: var(--paper); }
+.patrol-row-reply td:first-child { box-shadow: inset 4px 0 0 var(--rule); }
+.patrol-row-disagree td:first-child { box-shadow: inset 4px 0 0 var(--warn); }
+.patrol-table small { display: block; margin-top: 4px; color: var(--ink-3); font-size: 11px; overflow-wrap: anywhere; }
+
+/* ---------- 伪人率徽章（描边式，同 .lottery-meta-icon） ---------- */
+.patrol-score {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 52px;
+    min-height: 22px;
+    padding: 2px 8px;
+    border-radius: 2px;
+    box-shadow: inset 0 0 0 1px currentColor;
+    font: 700 12px/1.2 var(--f-mono);
+}
+.patrol-score.is-bot, .patrol-score-bar.is-bot { color: var(--danger); }
+.patrol-score.is-suspect, .patrol-score-bar.is-suspect { color: var(--warn); }
+.patrol-score.is-human, .patrol-score-bar.is-human { color: var(--ok); }
+.patrol-score.is-unknown, .patrol-score-bar.is-unknown,
+.patrol-score.is-whitelist, .patrol-score-bar.is-whitelist { color: var(--ink-3); }
+.patrol-score-bar { display: block; width: 52px; height: 3px; margin-top: 5px; background: var(--paper-3); }
+.patrol-score-bar > span { display: block; height: 100%; background: currentColor; }
+.patrol-score-meta { display: block; margin-top: 4px; color: var(--ink-3); font: 10px/1.3 var(--f-mono); letter-spacing: .04em; }
+
+/* ---------- 内容与证据 ---------- */
+.patrol-content { color: var(--ink-2); line-height: 1.65; overflow-wrap: anywhere; white-space: pre-wrap; }
+.patrol-content mark { padding: 0 2px; color: inherit; background: rgba(255, 250, 0, .45); border-radius: 2px; }
+.patrol-hits { margin: 6px 0 0; padding: 0; list-style: none; color: var(--ink-3); font-size: 12px; line-height: 1.6; }
+.patrol-hits li + li { margin-top: 2px; }
+.patrol-ai-reason { margin: 6px 0 0; color: var(--ink-2); font-size: 12px; }
+.patrol-replies-toggle { margin-top: 8px; }
+.patrol-table .lottery-meta-icon { margin-top: 4px; }
+
+/* ---------- 分页 ---------- */
+.patrol-pager { display: flex; align-items: center; justify-content: flex-end; margin-top: 14px; }
+.patrol-pager > * + * { margin-left: 10px; }
+.patrol-pager span { color: var(--ink-3); font: 12px/1 var(--f-mono); }
+.patrol-pager:empty { display: none; }
+
+/* ---------- 弹窗（复用 .app-modal 外观，只补内部排版） ---------- */
+.patrol-modal { width: min(560px, 100%); text-align: left; }
+.patrol-modal ul { margin: 10px 0; padding-left: 18px; color: var(--ink-2); font-size: 13px; line-height: 1.75; }
+.patrol-modal .form-group { margin: 14px 0 0; }
+.patrol-modal .form-control { max-width: none; }
+.patrol-modal .lottery-toggle { margin: 12px 0 0; }
+.patrol-modal .lottery-toggle + .lottery-toggle { margin-left: 0; }
+.patrol-modal .patrol-mode-option { display: flex; margin: 10px 0 0; }
+.patrol-modal input[type="radio"] { width: 16px; height: 16px; accent-color: var(--btn); }
+.patrol-modal .patrol-confirm-list {
+    max-height: 180px;
+    overflow: auto;
+    margin: 10px 0 0;
+    padding: 10px 12px;
+    border-radius: 2px;
+    background: var(--paper);
+    box-shadow: inset 0 0 0 1px var(--paper-3);
+}
+.patrol-modal .patrol-confirm-list .lottery-toggle { display: flex; margin: 0; }
+.patrol-modal .patrol-confirm-list .lottery-toggle + .lottery-toggle { margin-top: 8px; }
+.patrol-modal .patrol-warn { color: var(--warn); }
+.patrol-modal .patrol-danger { color: var(--danger); }
+.patrol-modal .patrol-counter { display: block; margin-top: 4px; color: var(--ink-3); font: 11px/1.4 var(--f-mono); text-align: right; }
+.patrol-keyword-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 80px auto; gap: 8px; margin-top: 8px; align-items: center; }
+.patrol-keyword-row .form-control { height: 32px; }
+
+/* ---------- 响应式（断点同 style.modal.css 的抽奖规则） ---------- */
+@media (max-width: 1100px) {
+    .patrol-option-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .patrol-filters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 768px) {
+    .patrol-option-grid, .patrol-filters { grid-template-columns: 1fr; }
+    .patrol-table .patrol-col-user { width: auto; }
+}

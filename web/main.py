@@ -53,7 +53,7 @@ from core.database import init_database
 # 从 core.logger 导入符号
 from core.logger import get_logger
 from core.exceptions import format_exception
-from core.error_policy import ErrorPriority, report_exception
+from core.error_policy import ErrorPriority, log_low_priority, report_exception
 from core.toast import emit_toast, register_toast_sink
 from core.monitor_service import ResidentCommentMonitor
 # 排名服务由本层组装（modules 不反向 import web）；client 限定自己拥有、只关自己。
@@ -68,7 +68,7 @@ from web.local_guard import is_cross_site_origin
 # 从 routers 导入符号
 from .routers import (
     hotspot, comment, config as config_router, logs, analysis,
-    auth as auth_router, lottery, benchmark, comment_semantic,
+    auth as auth_router, lottery, benchmark, comment_semantic, lottery_patrol,
 )
 # 本机同源校验（Host / Origin），用于配置接口防 DNS rebinding 读取
 from .local_guard import require_local_read
@@ -290,6 +290,11 @@ async def lifespan(app: FastAPI):
     init_database()
     # 抽奖任务：上次进程遗留的运行中任务标为已中断（等用户点「继续执行」，不自动续跑），并清理过期记录。
     lottery.recover_tasks_on_startup()
+    # AI 伪人巡检：同样标记中断、恢复举报台账状态（发送中→结果未知）并清理过期数据；失败不影响启动。
+    try:
+        lottery_patrol.recover_tasks_on_startup()
+    except Exception as exc:  # noqa: BLE001 - 巡检收尾失败不阻断主应用
+        log_low_priority(exc, logger=logger, action="AI伪人巡检启动恢复")
     # 仅接线评论区常驻监控；动态采集没有常驻任务入口。
     global monitor_service
     monitor_service = ResidentCommentMonitor(comment.get_monitor, config_manager)
@@ -626,6 +631,8 @@ app.include_router(
 app.include_router(logs.router, prefix="/api/logs", tags=["日志查看"])
 # 抽奖工具（目标预览、真人筛选与随机抽奖）
 app.include_router(lottery.router, prefix="/api", tags=["抽奖工具"])
+# AI 伪人巡检（抽奖工具子功能）：路由自带 require_local_* 依赖与 patrol.enabled 总开关。
+app.include_router(lottery_patrol.router, prefix="/api", tags=["AI伪人巡检"])
 app.include_router(analysis.router, prefix="/api", tags=["UP分析与自诊"])
 # 01 正确排名：候选发现 / 任务编排 / 冻结结果读取
 app.include_router(benchmark.router, prefix="/api", tags=["同行排名"])

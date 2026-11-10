@@ -41,6 +41,12 @@ CREDENTIAL_DOMAIN_COOKIE = "cookie"
 CREDENTIAL_DOMAIN_NO_COOKIE = "no_cookie"
 
 
+def _with_bili_code(exc, bili_code):
+    """给限频类异常补上 B站数字业务码后原样返回（这些异常的构造函数不接收该参数）。"""
+    exc.bili_code = bili_code
+    return exc
+
+
 class BilibiliAPICore:
     """B站API基础类，统一管理会话、登录态、限频与请求配置。"""
 
@@ -360,7 +366,7 @@ class BilibiliAPICore:
                         # 分域冷却上报点（规格 §2.4）：只冷却本域，另一域照常放行。
                         report_http_412(self.domain, category=self.quota_category)
                         # 抛出异常中断流程
-                        raise BilibiliAPIError("请求被反爬拦截（IP/UA限制）")
+                        raise BilibiliAPIError("请求被反爬拦截（IP/UA限制）", bili_code=-412)
 
                     if resp.status == 403:
                         # 403 与 412 同属 IP/UA 级风控：只上报，不改变既有异常路径。
@@ -380,7 +386,7 @@ class BilibiliAPICore:
                         # 429 取该域共享的较晚恢复时刻（规格 §2.4）。
                         report_status_429(self.domain, retry_after)
                         # 记住真实限频异常：重试耗尽后必须原样抛出，而不是退化成 NetworkError。
-                        last_exception = Status429Error(url, retry_after)
+                        last_exception = _with_bili_code(Status429Error(url, retry_after), 429)
                         await asyncio.sleep(retry_after)
                         # 跳过本轮继续循环
                         continue  # 继续重试
@@ -417,7 +423,7 @@ class BilibiliAPICore:
                         # 分域冷却上报点（规格 §2.4）：业务码风控与 HTTP 412 同一处置。
                         report_business_risk_code(self.domain, code, category=self.quota_category)
                         # 抛出异常中断流程
-                        raise BilibiliAPIError(f"请求被风控: {message}")
+                        raise BilibiliAPIError(f"请求被风控: {message}", bili_code=code)
                     
                     # 请求过快
                     # -509 访问过于频繁，等待后重试
@@ -427,12 +433,12 @@ class BilibiliAPICore:
                         if self.rate_limiter is not None:
                             retry_after = self.rate_limiter.report_429(url)
                             # 业务码 -509 同样是限频：重试耗尽后抛 RateLimitError 而非 NetworkError。
-                            last_exception = RateLimitError(retry_after)
+                            last_exception = _with_bili_code(RateLimitError(retry_after), -509)
                             await asyncio.sleep(retry_after)
                             # 跳过本轮继续循环
                             continue
                         # 抛出异常中断流程
-                        raise RateLimitError(60)
+                        raise _with_bili_code(RateLimitError(60), -509)
 
                     # -799 是空间资料接口常见的频率风控码。相比通用 1/2/4 秒
                     # 重试，使用更长退避并将最终失败明确标为限流，避免误判为字段缺失。
@@ -445,13 +451,16 @@ class BilibiliAPICore:
                             )
                             await asyncio.sleep(retry_after)
                             continue
-                        raise RateLimitError(retry_after)
+                        raise _with_bili_code(RateLimitError(retry_after), -799)
                     
                     # 其他错误
                     # 非 0 业务码视为调用失败
                     if code != 0:
                         # 抛出异常中断流程
-                        raise BilibiliAPIError(f"API错误 [{code}]: {message}")
+                        raise BilibiliAPIError(
+                            f"API错误 [{code}]: {message}",
+                            bili_code=code if isinstance(code, int) and not isinstance(code, bool) else None,
+                        )
                     
                     # 成功时记录并返回 data 字段
                     # 成功后重置限频器的429计数

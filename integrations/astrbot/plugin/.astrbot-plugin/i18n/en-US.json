@@ -16,7 +16,8 @@
       "port": { "description": "Engine port, 0 = auto (listens on 127.0.0.1 only)" },
       "request_timeout_s": { "description": "Request timeout (seconds)" },
       "long_request_timeout_s": { "description": "Long request timeout (seconds)" },
-      "block_api_key_write": { "description": "Block Open API Key callers from write and credential endpoints" }
+      "block_api_key_write": { "description": "Block Open API Key callers from write and credential endpoints" },
+      "allow_proxy_report": { "description": "Allow AI bot patrol to submit reports on your behalf" }
     },
     "chat": {
       "description": "Chat commands and alert push",

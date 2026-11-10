@@ -43,7 +43,8 @@ LONG_PREFIXES = (
 TOKEN_PATHS = {"analysis/benchmark/local-token", "comment/semantic/local-token"}
 
 #: block_api_key_write 打开时，API Key 调用这些前缀的任意方法都会被拒。
-CREDENTIAL_PREFIXES = ("auth/", "config/", "config", "analysis/benchmark/", "comment/semantic/")
+CREDENTIAL_PREFIXES = ("auth/", "config/", "config", "analysis/benchmark/", "comment/semantic/",
+                       "lottery/patrol/")
 
 
 def envelope(http_status: int, body) -> dict:

@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (
 # 从 PySide6.QtCore 导入符号
 from PySide6.QtCore import QUrl, Qt, QTimer, Signal
 # 从 PySide6.QtGui 导入符号（Qt6 中 QAction 在 QtGui）
-from PySide6.QtGui import QAction, QIcon
+from PySide6.QtGui import QAction, QIcon, QDesktopServices
 # WebEngine：页面 / profile / 脚本 / 设置在 QtWebEngineCore，只有 QWebEngineView 在 QtWebEngineWidgets
 from PySide6.QtWebEngineCore import (
     QWebEnginePage, QWebEngineProfile, QWebEngineScript, QWebEngineSettings
@@ -178,6 +178,26 @@ class DesktopWebPage(QWebEnginePage):
             message,
         )
         super().javaScriptConsoleMessage(level, message, line_number, source_id)
+
+    def createWindow(self, window_type):  # noqa: N802 - Qt 命名
+        """target=_blank / window.open 的请求交给系统浏览器，不在应用内打开外站。
+
+        不覆盖时 QtWebEngine 会忽略这类点击：热点页「打开B站主页」与巡检的原生举报链接
+        在桌面版里都点不开。
+        """
+        return _ExternalLinkPage(self.profile(), self)
+
+
+class _ExternalLinkPage(QWebEnginePage):
+    """一次性页面：拿到首个导航 URL 后用系统浏览器打开并自毁。"""
+
+    def acceptNavigationRequest(self, url, nav_type, is_main_frame):  # noqa: N802 - Qt 命名
+        if url.scheme() in ("http", "https"):
+            QDesktopServices.openUrl(url)
+        else:
+            logger.warning("[桌面Web] 忽略非 http(s) 外链 scheme: %s", url.scheme())
+        self.deleteLater()
+        return False
 
 
 class MainWindow(QMainWindow):

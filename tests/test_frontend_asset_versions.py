@@ -75,6 +75,9 @@ BUMPED_COMMENTMODE = {
     "css": ("style.lottery.css",),
 }
 
+# AI 伪人巡检：只新增独立资源，不修改任何已有 JS/CSS 的 ?v=（避免触发历史后缀链）。
+NEW_PATROL = {"js": ("app.lottery.patrol.js",), "css": ("style.lottery.patrol.css",)}
+
 
 def _versions(kind: str) -> dict:
     """返回 index.html 中 /static/<kind>/* 的 ?v= 版本号映射。"""
@@ -212,15 +215,24 @@ def test_lottery_comment_mode_assets_end_with_their_suffix() -> None:
     assert "-ui20261101" in _versions("css")["style.lottery.css"]
 
 
+def test_patrol_assets_have_version() -> None:
+    """AI 伪人巡检新增资源必须被引用一次且带 patrol 前缀的 ?v=。"""
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    for kind, names in (("js", NEW_PATROL["js"]), ("css", NEW_PATROL["css"])):
+        for name in names:
+            match = re.search(rf"/static/{kind}/{re.escape(name)}\?v=([\w-]+)", html)
+            assert match and match.group(1).startswith("patrol"), name
+
+
 def test_each_asset_is_referenced_once() -> None:
     """每个业务脚本与样式表只引用一次，避免新旧两个版本同时加载。"""
     html = INDEX_HTML.read_text(encoding="utf-8")
     groups = (
         ("js", BUMPED_SCRIPTS + BUMPED_1030["js"] + BUMPED_UI_1101["js"] + BUMPED_V029["js"]
             + BUMPED_SEMANTIC["js"] + BUMPED_V030["js"] + BUMPED_V031["js"] + BUMPED_FIX_1107["js"]
-            + ("app.comment.semantic.js",)),
+            + ("app.comment.semantic.js",) + NEW_PATROL["js"]),
         ("css", BUMPED_1030["css"] + BUMPED_UI_1101["css"] + BUMPED_V029["css"]
-            + ("style.comment.semantic.css",)),
+            + ("style.comment.semantic.css",) + NEW_PATROL["css"]),
     )
     for kind, names in groups:
         for name in set(names):

@@ -25,6 +25,7 @@ DEFAULT_ENGINE_CFG = {
     "request_timeout_s": 120,
     "long_request_timeout_s": 1800,
     "block_api_key_write": False,
+    "allow_proxy_report": False,
 }
 
 
@@ -53,6 +54,7 @@ def engine_cfg(raw: dict | None) -> dict:
         "long_request_timeout_s": _as_int(
             raw.get("long_request_timeout_s"), d["long_request_timeout_s"], minimum=1, maximum=86400),
         "block_api_key_write": _as_bool_lenient(raw.get("block_api_key_write"), d["block_api_key_write"]),
+        "allow_proxy_report": _as_bool_lenient(raw.get("allow_proxy_report"), d["allow_proxy_report"]),
     }
 
 

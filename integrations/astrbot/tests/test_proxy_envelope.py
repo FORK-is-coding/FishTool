@@ -137,6 +137,17 @@ def test_api_key_write_block_is_opt_in():
     assert out["data"]["http_status"] == 200
 
 
+def test_api_key_write_block_covers_patrol():
+    """block_api_key_write 打开时，API Key 调用 AI 伪人巡检接口（含代发举报）一律被拒。"""
+    proxy, _ = make()
+    proxy.cfg["block_api_key_write"] = True
+    for method, sub in (("POST", "lottery/patrol/scans/1/report"), ("GET", "lottery/patrol/preflight")):
+        out = run(proxy.handle(sub, method=method, query={}, body_json={}, username="api_key:1"))
+        assert out["data"]["http_status"] == 403
+    out = run(proxy.handle("lottery/patrol/preflight", method="GET", query={}, body_json=None, username="astrbot"))
+    assert out["data"]["http_status"] == 200
+
+
 def test_api_key_blocked_rules():
     assert api_key_blocked("api_key:1", "POST", "comment/monitor")
     assert api_key_blocked("api_key:1", "GET", "auth/status")
