@@ -403,3 +403,43 @@ def test_indexed_candidates_preserve_fuzzy_results_and_skip_distant_pairs(monkey
     # 0 分也能过门槛时，必须保留粗筛不通过的配对。
     optimized.fuzzy_match_threshold = reference.fuzzy_match_threshold = 0
     assert optimized._deduplicate_by_fuzzy(comments) == reference._deduplicate_by_fuzzy(comments)
+
+
+def test_character_cache_preserves_reference_fingerprints_and_pipeline():
+    import hashlib
+    from modules.comment.deduplicator import _character_bits
+
+    class ReferenceDeduplicator(CommentDeduplicator):
+        def _simhash(self, text):
+            weights = [0] * 64
+            for character in text:
+                hashed = int(hashlib.md5(character.encode("utf-8")).hexdigest(), 16)
+                for bit in range(64):
+                    weights[bit] += 1 if (hashed >> bit) & 1 else -1
+            return sum(1 << bit for bit, value in enumerate(weights) if value > 0)
+
+    rng = random.Random(91)
+    alphabet = "中文评论真不错不赞同支持啊！ABCxyz 123😀"
+    texts = ["", "真好", "好" * 500, "aA é\n中文😀", "不支持这个观点", "支持这个观点"]
+    texts += ["".join(rng.choices(alphabet, k=rng.randrange(5, 80))) for _ in range(70)]
+    comments = [make_comment(i, i % 5, text, datetime(2026, 11, 11, 12))
+                for i, text in enumerate(texts)]
+    original = deepcopy(comments)
+    reference = ReferenceDeduplicator()
+    optimized = CommentDeduplicator()
+    _character_bits.cache_clear()
+    try:
+        assert [optimized._simhash(text) for text in texts] == [reference._simhash(text) for text in texts]
+        expected = _without_timestamp(reference.deduplicate(deepcopy(comments)))
+        assert _without_timestamp(optimized.deduplicate(comments)) == expected
+        assert _without_timestamp(optimized.deduplicate(comments)) == expected
+        assert comments == original
+        for i in range(4200):
+            optimized._simhash(chr(0x4e00 + i))
+        assert _character_bits.cache_info().currsize == 4096
+        assert optimized._simhash(texts[3]) == reference._simhash(texts[3])
+        for deduplicator in (reference, optimized):
+            with pytest.raises(UnicodeEncodeError):
+                deduplicator._simhash("合法前缀\ud800")
+    finally:
+        _character_bits.cache_clear()

@@ -4,7 +4,7 @@
 - _save_comments_to_db: 按 rpid 去重插入，创建视频记录与增量断点
 """
 # 从 typing 导入符号
-from typing import List, Dict, Any, Set
+from typing import List, Dict, Any, Set, Iterator, Tuple
 # 从 datetime 导入符号
 from datetime import datetime
 # 从 core.database 导入符号
@@ -13,6 +13,26 @@ from core.database import get_session, Comment, Video
 from core.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+# 兼容旧 SQLite 的绑定参数上限，同时把查询结果的生命周期限制在单批次。
+_COMMENT_LOOKUP_BATCH_SIZE = 500
+
+
+def _comments_with_existing(
+    session, comments: List[Dict[str, Any]],
+) -> Iterator[Tuple[Dict[str, Any], Dict[str, Comment]]]:
+    for start in range(0, len(comments), _COMMENT_LOOKUP_BATCH_SIZE):
+        batch = comments[start:start + _COMMENT_LOOKUP_BATCH_SIZE]
+        rpids = [item.get('rpid') for item in batch if type(item.get('rpid')) in (int, str)]
+        existing = {}
+        if rpids:
+            existing = {
+                row.rpid: row
+                for row in session.query(Comment).filter(Comment.rpid.in_(rpids)).all()
+            }
+        for item in batch:
+            yield item, existing
 
 
 class CommentStorageMixin:
@@ -51,14 +71,18 @@ class CommentStorageMixin:
             latest_rpid = None
             # 遍历所有待保存的评论数据
             # 每条评论按 rpid 去重，已存在则跳过
-            for comment_data in comments:
+            for comment_data, existing_by_rpid in _comments_with_existing(session, comments):
                 rpid = comment_data.get('rpid')
                 # 先过滤本批次重复，避免 ORM 在 commit 时触发唯一键冲突。
                 if rpid is None or rpid in batch_rpids:
                     continue
                 batch_rpids.add(rpid)
-                existing = session.query(Comment).filter_by(rpid=rpid).first()
-                
+                # 常规 int/str ID 与字符串列匹配；其它值沿用 SQLite 原绑定语义。
+                if type(rpid) in (int, str):
+                    existing = existing_by_rpid.get(str(rpid))
+                else:
+                    existing = session.query(Comment).filter_by(rpid=rpid).first()
+
                 # 已存在评论只原位补齐缺失的等级/会员/上下文字段，不重复插入。
                 if existing:
                     changed = False

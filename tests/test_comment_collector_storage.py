@@ -226,3 +226,56 @@ def test_save_comments_rollback_keeps_previous_batch(collector) -> None:
 
     assert _count(manager, Comment) == 1
     assert _count(manager, Video) == 1
+
+
+def test_chunked_lookup_preserves_backfill_duplicates_checkpoints_and_rollback(collector):
+    from copy import deepcopy
+    from sqlalchemy import event
+
+    eng, manager = collector
+    asyncio.run(eng._save_comments_to_db("BV1", [_comment(1, content="历史原文",
+        level_info={"current_level": 6}, context_status="unknown")]))
+    asyncio.run(eng._save_comments_to_db("BV1", [_comment("0002", context_status="reply",
+        root_rpid="8", parent_rpid="8")]))
+    comments = [_comment(1, level_info={"current_level": 1}, vip={"vipStatus": 1},
+                         context_status="top_level", root_rpid=None, parent_rpid=None)]
+    comments += [_comment(i) for i in range(10, 1011)]
+    comments += [_comment(10), _comment("1"), _comment("0002", context_status="unknown")]
+    original = deepcopy(comments)
+    selects = []
+
+    def track(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects.append(statement)
+
+    event.listen(manager.engine, "before_cursor_execute", track)
+    try:
+        result = asyncio.run(eng._save_comments_to_db("BV1", comments))
+        assert result == {"success": True, "saved_count": 1002, "warning": None}
+        assert len(selects) == 4  # 视频查询 + 三个不超过 500 项的评论批次。
+        assert comments == original
+        with manager.get_session() as session:
+            row = session.query(Comment).filter_by(rpid="1").one()
+            assert (row.content, row.level_info, row.vip, row.context_status) == (
+                "历史原文", {"current_level": 6}, {"vipStatus": 1}, "top_level")
+            reply = session.query(Comment).filter_by(rpid="0002").one()
+            assert (reply.context_status, reply.root_rpid, reply.parent_rpid) == ("reply", "8", "8")
+            tasks_before = session.query(Task).count()
+            latest = session.query(Task).order_by(Task.id.desc()).first()
+            assert latest.checkpoint == {"last_rpid": 1010}
+            assert latest.result == {"saved_count": 1002}
+        selects.clear()
+        assert asyncio.run(eng._save_comments_to_db("BV1", comments))["saved_count"] == 0
+        assert len(selects) == 4
+        # SQLite 会把布尔参数 True 与文本 ID "1" 匹配；不因批量预取改变旧行为。
+        assert asyncio.run(eng._save_comments_to_db("BV1", [_comment(True)]))["saved_count"] == 0
+        failing = [_comment("0002", vip={"vipStatus": 1})]
+        failing += [_comment(str(i)) for i in range(2000, 2500)]
+        failing += [{"rpid": "9999"}]
+        assert asyncio.run(eng._save_comments_to_db("BV1", failing))["success"] is False
+        with manager.get_session() as session:
+            assert session.query(Comment).count() == 1003
+            assert session.query(Task).count() == tasks_before
+            assert session.query(Comment).filter_by(rpid="0002").one().vip is None
+    finally:
+        event.remove(manager.engine, "before_cursor_execute", track)
