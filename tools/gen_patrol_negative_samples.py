@@ -208,7 +208,19 @@ LONG = [
 for text in LONG:
     SAMPLES.append({"name": "认真评论者", "sign": "", "text": text, "level": 4, "note": "真人分点"})
 
-assert len(SAMPLES) == 200, len(SAMPLES)
+# 腔调短语撞词的真人评论（20）：日常用语、吐槽 AI 腔
+PERSONA_HUMAN = [
+    "我记住了，下次不买这家", "好的我记下了谢谢up", "回去睡觉了晚安", "这游戏真稳，一次没崩",
+    "评论区一股AI味，张口就是我记下了这句话稳", "又是这套人机话术：这句话稳、我记住了",
+    "这个手机比上一代稳多了吧", "我不拦你，你开心就好", "看完了，回去睡", "不催不催，慢慢更",
+    "主播今天比之前的都强啊哈哈", "这种话一看就是机器人写的：你自己掂量", "我记得了，第三期有讲过",
+    "认这个，确实是我说错了", "收不回去了哈哈哈", "很平，没什么起伏的一期", "这波操作很稳啊",
+    "我跟你说这个真的好用", "比上次那个视频重多了，信息量好大", "这期剪辑比之前的都好，进步明显",
+]
+for text in PERSONA_HUMAN:
+    SAMPLES.append({"name": "日常观众", "sign": "", "text": text, "level": 4, "note": "腔调撞词"})
+
+assert len(SAMPLES) == 220, len(SAMPLES)
 
 out = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "patrol_negative_samples.json"
 out.parent.mkdir(parents=True, exist_ok=True)

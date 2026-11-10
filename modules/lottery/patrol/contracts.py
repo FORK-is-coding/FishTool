@@ -14,8 +14,8 @@ logger = get_logger(__name__)
 
 # ============ 版本 ============
 
-RULES_VERSION = "2026.11.10-a"
-PROMPT_VERSION = "patrol-judge-v1"
+RULES_VERSION = "2026.11.10-b"
+PROMPT_VERSION = "patrol-judge-v2"
 AI_CONSENT_VERSION = "patrol-v1"
 RISK_NOTICE_VERSION = "patrol-risk-v1"
 PROXY_CONSENT_VERSION = "patrol-report-v1"

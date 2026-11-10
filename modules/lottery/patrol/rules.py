@@ -26,6 +26,8 @@ from .rules_default import (
     DEFAULT_RULES,
     DRIVE_AWAY_PATTERN,
     FOCUS_TEXT_PATTERN,
+    PERSONA_MOCK_PATTERN,
+    PERSONA_PHRASES,
     RECOMMEND_PATTERN,
     SIGN_FACTOR,
     Rule,
@@ -47,6 +49,41 @@ _SEQUENCE_RE = re.compile(r"首先.*其次.*(?:最后|总之)", re.S)
 #: “6”只在单独成句（可带标点 / 空白）时算口语，避免“6分钟”“01:46”误判。
 _SLANG_RE = re.compile(r"哈哈|绷不住|草|笑死|^[\s!！~～.。]*6{1,3}[\s!！~～.。]*$")
 _FORMAL_RE = re.compile(r"——|「|」")
+_PERSONA_RES = tuple((label, re.compile(pattern), tier) for label, pattern, tier in PERSONA_PHRASES)
+_PERSONA_MOCK_RE = re.compile(PERSONA_MOCK_PATTERN)
+
+
+def persona_phrase_hit(text_norm: str, raw_text: str) -> Optional["Hit"]:
+    """AI 惯用短句腔调：同一条评论命中的不同短语累加，合计封顶。
+
+    评论在嘲讽 / 引用 AI 腔（含「AI 味」「人机」「又是这套」等）时不计分，避免误伤吐槽者。
+    """
+    if not text_norm or _PERSONA_MOCK_RE.search(text_norm):
+        return None
+    found = [(label, regex.search(text_norm), tier) for label, regex, tier in _PERSONA_RES]
+    found = [(label, m, tier) for label, m, tier in found if m]
+    if not found:
+        return None
+    # AI 腔调短促、不带语气词。去掉命中的腔调片段后，剩余文字仍带「哈 / 啊 / 吧 / 呢 / 嘛」等口语词时，
+    # 整句腔调只按弱信号计（“睡吧，我守着”本身含「吧」，不能因此降级）。
+    rest = text_norm
+    for _label, m, _tier in found:
+        rest = rest.replace(m.group(0), " ")
+    colloquial = bool(_COLLOQUIAL_RE.search(rest))
+    total = 0
+    matched: List[str] = []
+    first_snippet = ""
+    for label, m, tier in found:
+        total += COMPUTED_WEIGHTS["text.persona_phrase.weak" if colloquial else f"text.persona_phrase.{tier}"]
+        matched.append(label)
+        if not first_snippet:
+            first_snippet = _snippet(raw_text, m.group(0))
+    if not matched:
+        return None
+    weight = min(COMPUTED_WEIGHTS["text.persona_phrase.cap"], total)
+    group, kind, base_label = COMPUTED_LABELS["text.persona_phrase"]
+    shown = "、".join(matched[:3]) + ("等" if len(matched) > 3 else "")
+    return Hit("text.persona_phrase", group, "text", weight, kind, f"AI 惯用短句腔调：{shown}", first_snippet)
 
 
 @dataclass
@@ -255,6 +292,11 @@ def score_comment(comment: Dict[str, Any], compiled: Sequence[CompiledRule], set
     # 短评论书面化标点且无口语词。
     if 0 < text_len <= 60 and _FORMAL_RE.search(raw_text) and not _COLLOQUIAL_RE.search(text_norm):
         hits.append(_computed("text.formal_punct", "text"))
+
+    # AI 惯用短句腔调（用户提供的语料合集）。
+    persona = persona_phrase_hit(text_norm, raw_text)
+    if persona is not None:
+        hits.append(persona)
 
     # 人类信号。
     if 0 < text_len <= 20 and raw_text.strip().endswith(("?", "？")):
