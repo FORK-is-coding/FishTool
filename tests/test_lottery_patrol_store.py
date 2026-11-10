@@ -55,7 +55,7 @@ def test_list_comments_paging_folding_and_filters(db):
 
 def test_preferences_cas(db):
     pref = store.load_preferences()
-    assert pref["revision"] == 0 and pref["include_replies"] is True and pref["proxy_enabled"] is False
+    assert pref["revision"] == 0 and pref["include_replies"] is True and pref["proxy_enabled"] is True
     new = store.save_preferences({"include_replies": False}, expected_revision=0)
     assert new["revision"] == 1 and new["include_replies"] is False
     with pytest.raises(PreferenceConflict):

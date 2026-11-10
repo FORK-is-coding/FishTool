@@ -110,7 +110,7 @@ def test_preference_and_cache_roundtrip(manager):
                                    created_at=datetime.utcnow()))
         session.commit()
         pref = session.get(PatrolPreference, 1)
-        assert pref.revision == 0 and pref.proxy_enabled is False and pref.include_replies is True
+        assert pref.revision == 0 and pref.proxy_enabled is True and pref.include_replies is True
         assert session.get(PatrolLlmCache, "h" * 64).ai_score == 80
     finally:
         session.close()

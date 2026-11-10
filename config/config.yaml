@@ -156,7 +156,7 @@ patrol:
   fusion_weight_llm: 0.55
   report:
     default_mode: native          # native | proxy
-    proxy_enabled: false          # 是否允许开启代发举报（用户在界面仍需单独同意）
+    proxy_enabled: true           # 允许代发举报（默认开；首次代发仍需同意风险说明，每批仍需确认）
     dry_run: false                # true 时代发举报走全部流程但不发 POST
     require_ai: true              # 只允许 rule+llm 且 bot 档
     per_account_limit: 1          # 同一 mid 最多举报几条代表评论（≤ 2）

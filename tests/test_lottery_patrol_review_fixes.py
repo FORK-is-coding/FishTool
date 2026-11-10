@@ -12,12 +12,17 @@ from web.routers.lottery_patrol import _csv_safe
 
 
 def test_proxy_disabled_by_default_config():
-    """安全默认：无 patrol 配置时代发不可用（审查 Major 1）。"""
+    """代发默认开启（用户决定），但首次仍需同意风险说明才可用。"""
     s = build_settings({})
-    assert s.report_proxy_allowed is False
-    ok, why = reporter.proxy_report_available(s, {"proxy_enabled": True,
-                                                  "proxy_consent_version": PROXY_CONSENT_VERSION}, "127.0.0.1")
-    assert ok is False and "proxy_enabled" in why
+    assert s.report_proxy_allowed is True
+    ok, why = reporter.proxy_report_available(s, {"proxy_enabled": True}, "127.0.0.1")
+    assert ok is False and "同意" in why
+    # 配置层显式关闭时仍会被拦下。
+    off = build_settings({"report": {"proxy_enabled": False}})
+    ok_off, why_off = reporter.proxy_report_available(off, {"proxy_enabled": True,
+                                                            "proxy_consent_version": PROXY_CONSENT_VERSION},
+                                                      "127.0.0.1")
+    assert ok_off is False and "proxy_enabled" in why_off
 
 
 def test_cache_key_includes_focus():

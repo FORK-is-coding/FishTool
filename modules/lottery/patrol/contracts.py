@@ -84,7 +84,7 @@ DEFAULTS: Dict[str, Any] = {
     "fusion_weight_llm": 0.55,
     "report": {
         "default_mode": "native",
-        "proxy_enabled": False,
+        "proxy_enabled": True,
         "dry_run": False,
         "require_ai": True,
         "per_account_limit": 1,

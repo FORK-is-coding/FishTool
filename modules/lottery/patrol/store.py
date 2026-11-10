@@ -411,7 +411,7 @@ def _pref_dict(row: PatrolPreference) -> Dict[str, Any]:
 def _ensure_pref(s: Any) -> PatrolPreference:
     row = s.get(PatrolPreference, _PREF_ID)
     if row is None:
-        row = PatrolPreference(id=_PREF_ID, revision=0, proxy_enabled=False, include_replies=True,
+        row = PatrolPreference(id=_PREF_ID, revision=0, proxy_enabled=True, include_replies=True,
                                whitelist_mids=[], user_keywords=[])
         s.add(row)
         s.flush()
@@ -425,7 +425,7 @@ def load_preferences() -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - 读失败给默认值
         logger.warning("[巡检] 读取偏好失败，使用默认值: %s", exc)
         return {"revision": 0, "ai_consent_version": None, "ai_model_identity": None, "risk_notice_version": None,
-                "proxy_consent_version": None, "proxy_enabled": False, "include_replies": True,
+                "proxy_consent_version": None, "proxy_enabled": True, "include_replies": True,
                 "whitelist_mids": [], "user_keywords": [], "default_report_content": "",
                 "report_cooldown_until": None}
 

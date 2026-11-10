@@ -249,8 +249,6 @@
                 hint.textContent = '输入 BV 号后显示预计耗时';
             }
         }
-        const rules = $('patrol-rules-badge');
-        if (rules && data.settings) rules.textContent = '规则词典 ' + (data.settings.rules_version || '');
         syncButtons();
         return data;
     }
@@ -1109,11 +1107,32 @@
         modeNative.appendChild(rNative); modeNative.appendChild(el('span', '', '在 B站页面手动举报（推荐）'));
         const modeProxy = el('label', 'lottery-toggle patrol-mode-option');
         const rProxy = el('input'); rProxy.type = 'radio'; rProxy.name = 'patrol-report-mode'; rProxy.value = 'proxy';
-        rProxy.disabled = !report.proxy_available;
+        // 代发默认开启：唯一缺的是首次风险同意时仍允许选择，选中时再弹同意框。
+        const needsConsentOnly = !report.proxy_available && report.proxy_enabled && !report.proxy_consent_ok
+            && (report.proxy_unavailable_reason || '').indexOf('同意') >= 0;
+        rProxy.disabled = !report.proxy_available && !needsConsentOnly;
         modeProxy.appendChild(rProxy);
         modeProxy.appendChild(el('span', '', report.dry_run ? '由 FishTool 代为提交（演练模式，不会真的发出）' : '由 FishTool 代为提交'));
         body.push(modeNative, modeProxy);
-        if (!report.proxy_available) body.push(el('p', 'patrol-warn', '代为提交不可用：' + (report.proxy_unavailable_reason || '')));
+        if (needsConsentOnly) {
+            body.push(el('p', 'patrol-warn', '首次使用代为提交时需要先阅读并同意风险说明。'));
+        } else if (!report.proxy_available) {
+            body.push(el('p', 'patrol-warn', '代为提交不可用：' + (report.proxy_unavailable_reason || '')));
+        }
+        rProxy.addEventListener('change', async function () {
+            if (!rProxy.checked || !needsConsentOnly || state.proxyConsentGiven) return;
+            const ok = await showAppConfirm(
+                'FishTool 会在你确认后用当前登录的 B站账号直接提交举报。\n频繁或不当举报可能导致账号被平台限制，B站用户协议也限制自动化程序访问；若触发风控，FishTool 的其他采集功能会暂停至少 15 分钟。\n每次举报仍需逐批确认。',
+                { title: '首次使用代为提交', confirmText: '我已了解，继续', cancelText: '改为手动举报', danger: true });
+            if (!ok) { rNative.checked = true; rNative.dispatchEvent(new Event('change')); return; }
+            try {
+                await savePrefs({ proxy_consent: 'agree' });
+                state.proxyConsentGiven = true;
+            } catch (error) {
+                showAppAlert('错误: ' + errorMessage(error));
+                rNative.checked = true; rNative.dispatchEvent(new Event('change'));
+            }
+        });
 
         body.push(el('p', '', '举报账号：' + (login.uname || '未登录') + (login.level !== null && login.level !== undefined ? ' Lv' + Number(login.level) : '')));
         if (state.scan && state.scan.scanner_mid && login.mid && Number(state.scan.scanner_mid) !== Number(login.mid)) {
@@ -1223,6 +1242,10 @@
         await openModal(built, {
             submit: async function () {
                 const mode = currentMode();
+                if (mode === 'proxy' && needsConsentOnly && !state.proxyConsentGiven) {
+                    showAppAlert('请先同意代为提交的风险说明，或改为在 B站页面手动举报。');
+                    return undefined;
+                }
                 const confirmed = Array.prototype.slice.call(built.modal.querySelectorAll('[data-confirm]'))
                     .filter(function (n) { return n.checked; }).map(function (n) { return Number(n.getAttribute('data-confirm')); });
                 const ackUnknown = Array.prototype.slice.call(built.modal.querySelectorAll('[data-ack-unknown]'))
@@ -1344,7 +1367,7 @@
             proxyBox.disabled = !proxyBox.checked;
             body.push(el('p', 'patrol-warn', reason));
         } else {
-            body.push(el('p', '', '开启后，一键举报时可选择由 FishTool 用你的账号直接提交；每次仍需逐批确认。'));
+            body.push(el('p', '', '默认开启。一键举报时可选择由 FishTool 用你的账号直接提交；首次使用需同意风险说明，每次仍需逐批确认。'));
         }
 
         const whiteGroup = el('div', 'form-group');
@@ -1413,14 +1436,15 @@
                 const text = contentInput.value.trim();
                 if (text && (text.length < 2 || text.length > 200)) { showAppAlert('错误: 默认举报说明需为 2–200 字'); return undefined; }
                 const patch = { whitelist_mids: mids, user_keywords: keywords, default_report_content: text };
-                if (proxyBox.checked && !prefs.proxy_enabled) {
-                    const ok = await showAppConfirm(
-                        '开启后，FishTool 会在你确认后用当前登录的 B站账号直接提交举报。\n频繁或不当举报可能导致账号被平台限制，B站用户协议也限制自动化程序访问；若触发风控，FishTool 的其他采集功能会暂停至少 15 分钟。\n开启后每次举报仍需逐批确认。',
-                        { title: '开启代为提交举报', confirmText: '我已了解，开启', cancelText: '暂不开启', danger: true });
-                    if (!ok) { proxyBox.checked = false; return undefined; }
-                    patch.proxy_consent = 'agree';
-                    patch.proxy_enabled = true;
-                } else if (proxyBox.checked !== !!prefs.proxy_enabled) {
+                if (proxyBox.checked !== !!prefs.proxy_enabled) {
+                    // 重新打开代发且尚未同意过风险说明时，先确认一次。
+                    if (proxyBox.checked && !prefs.proxy_consent_ok) {
+                        const ok = await showAppConfirm(
+                            '开启后，FishTool 会在你确认后用当前登录的 B站账号直接提交举报。\n频繁或不当举报可能导致账号被平台限制，B站用户协议也限制自动化程序访问；若触发风控，FishTool 的其他采集功能会暂停至少 15 分钟。\n开启后每次举报仍需逐批确认。',
+                            { title: '开启代为提交举报', confirmText: '我已了解，开启', cancelText: '暂不开启', danger: true });
+                        if (!ok) { proxyBox.checked = false; return undefined; }
+                        patch.proxy_consent = 'agree';
+                    }
                     patch.proxy_enabled = proxyBox.checked;
                 }
                 try {

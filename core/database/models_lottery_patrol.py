@@ -152,7 +152,7 @@ class PatrolPreference(Base):
     risk_notice_at = Column(DateTime)
     proxy_consent_version = Column(String(32))
     proxy_consent_at = Column(DateTime)
-    proxy_enabled = Column(Boolean, nullable=False, default=False)
+    proxy_enabled = Column(Boolean, nullable=False, default=True)
     include_replies = Column(Boolean, nullable=False, default=True)
     whitelist_mids = Column(JSON)
     user_keywords = Column(JSON)
