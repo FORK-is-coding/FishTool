@@ -42,11 +42,19 @@ from typing import List, Dict, Any, Set, Tuple, Optional, Callable
 from datetime import datetime, timedelta
 from collections import defaultdict, Counter
 import hashlib
+from functools import lru_cache
 import logging
 
 from core.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+@lru_cache(maxsize=4096)
+def _character_bits(character: str) -> bytes:
+    """只缓存有上限的单字符贡献，不缓存完整评论或改变 MD5 指纹算法。"""
+    hashed = int(hashlib.md5(character.encode('utf-8')).hexdigest(), 16)
+    return bytes((hashed >> bit) & 1 for bit in range(64))
 
 
 class _SimHashBatch:
@@ -584,24 +592,12 @@ class CommentDeduplicator:
         if not text:
             return 0
         
-        # 简化的SimHash实现
-        # 1. 分词（简单按字符）
-        tokens = list(text)
-        
-        # 2. 计算每个token的hash
-        # 64维权重向量，token贡献+1或-1
+        # 相同字符的整数贡献可合并，权重和与原来的逐字符累加完全相同。
         v = [0] * 64
-        # 遍历 tokens 逐项处理
-        for token in tokens:
-            # 数值转换存入 h
-            h = int(hashlib.md5(token.encode('utf-8')).hexdigest(), 16)
-            for i in range(64):
-                bit = (h >> i) & 1
-                if bit:
-                    v[i] += 1
-                else:
-                    v[i] -= 1
-        
+        for character, count in Counter(text).items():
+            for bit, positive in enumerate(_character_bits(character)):
+                v[bit] += count if positive else -count
+
         # 3. 降维
         # 权重为正的位设为1，其余为0
         fingerprint = 0

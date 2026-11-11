@@ -722,17 +722,17 @@ async def get_llm_usage(days: int = Query(default=7, ge=1, le=365)):
 def _today_usage(session) -> Dict[str, Any]:
     """今日全局用量与上限，口径与 LLMClient 的每日限额检查一致。
 
-    当日用量用限额检查同一个按日期字符串取记录的函数（不按 created_at），
+    当日用量复用限额检查的日期字符串聚合口径（不按 created_at），
     上限按 LLMClient 同样的规整规则读取；上限为 0 时 remaining 为 None，表示不限制。
     不新建 LLMClient（构造要求已配置密钥）。
     """
     from datetime import date
-    from llm.client import _coerce_daily_limit, _remaining, _usage_records_on
+    from llm.client import _coerce_daily_limit, _remaining, _tokens_used_on
     from core.config import LLM_DAILY_TOKEN_LIMIT_DEFAULT
 
     limit = _coerce_daily_limit(
         ConfigManager().get('llm.daily_token_limit', LLM_DAILY_TOKEN_LIMIT_DEFAULT))
-    used = sum(int(r.total_tokens or 0) for r in _usage_records_on(session, date.today()))
+    used = _tokens_used_on(session, date.today())
     return {"total_tokens": used, "limit": limit, "remaining": _remaining(limit, used)}
 
 

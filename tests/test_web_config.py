@@ -1021,6 +1021,10 @@ def _fake_usage_session(closed: list, fail: bool = False):
             """无总计结果。"""
             return None
 
+        def one(self):
+            """今日用量聚合在空库返回一行 NULL。"""
+            return None, None, None
+
     class _Session:
         """会话替身。"""
 

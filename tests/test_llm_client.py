@@ -198,7 +198,7 @@ class _FakeSession:
         """累加关闭次数。"""
         self.closed += 1
 
-    def query(self, model):
+    def query(self, *entities):
         """返回自身以支持链式调用。"""
         return self
 
@@ -209,6 +209,11 @@ class _FakeSession:
     def all(self):
         """返回预置记录列表。"""
         return self.records
+
+    def one(self):
+        """模拟聚合结果；真实日期过滤与异常值语义由 SQLite 用例覆盖。"""
+        return (sum(r.total_tokens for r in self.records),
+                sum(r.request_count for r in self.records), 0)
 
 
 class _Rec:
@@ -1127,3 +1132,81 @@ def test_is_llm_available_false_when_not_configured(monkeypatch):
 
     monkeypatch.setattr(llm_module, "get_llm_client", _boom)
     assert llm_module.is_llm_available() is False
+
+
+def test_sql_usage_matches_legacy_dates_values_and_fallback(llm_env, tmp_path, monkeypatch):
+    from sqlalchemy import event, text
+    from core.database import DatabaseManager, LLMUsage
+
+    manager = DatabaseManager(str(tmp_path / "aggregate.db"))
+    monkeypatch.setattr(llm_module, "get_session", manager.get_session)
+    client = _make_client()
+    client.daily_tokens_used = 42
+    today = date.today()
+    cases = [[], [(100, 1), (50, 2)], [(None, 1)], [(100, None)],
+             [(1.5, 1), (2.5, 2)], [("bad", 1)], [(100, "bad")],
+             [(2**63 - 1, 1), (1, 1)]]
+    selects = []
+
+    def track(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects.append(statement)
+
+    event.listen(manager.engine, "before_cursor_execute", track)
+    try:
+        for values in cases:
+            with manager.get_session() as session:
+                session.query(LLMUsage).delete()
+                rows = [{"day": (today - timedelta(days=1)).isoformat(), "tokens": 9999, "requests": 99},
+                        {"day": (today + timedelta(days=1)).isoformat(), "tokens": 9999, "requests": 99}]
+                rows.extend({"day": today.isoformat() + (" 23:59:59" if i % 2 else ""),
+                             "tokens": tokens, "requests": requests}
+                            for i, (tokens, requests) in enumerate(values))
+                session.execute(text("INSERT INTO llm_usage(date, total_tokens, request_count) "
+                                     "VALUES (:day, :tokens, :requests)"), rows)
+                session.commit()
+                records = llm_module._usage_records_on(session, today)
+                try:
+                    expected_tokens = sum(int(row.total_tokens or 0) for row in records)
+                except (ValueError, TypeError):
+                    expected_tokens = None
+                try:
+                    expected_stats = (sum(row.total_tokens for row in records),
+                                      sum(row.request_count for row in records))
+                except TypeError:
+                    expected_stats = None
+
+            selects.clear()
+            assert llm_module._db_tokens_used_on(today) == expected_tokens
+            usage = client.get_daily_usage()
+            if expected_stats is None:
+                assert usage == {"date": today.isoformat(), "total_tokens": 42,
+                                 "limit": 1000, "remaining": 958}
+            else:
+                tokens, requests = expected_stats
+                assert usage["total_tokens"] == tokens
+                assert usage["total_requests"] == requests
+                assert usage["remaining"] == max(0, 1000 - tokens)
+            if not values or values == cases[1]:
+                assert len(selects) == 2
+                assert all("sum(" in statement.lower() for statement in selects)
+    finally:
+        event.remove(manager.engine, "before_cursor_execute", track)
+        manager.engine.dispose()
+
+
+def test_usage_totals_only_falls_back_on_sum_overflow():
+    """只有 SUM 整数溢出才回退逐行计算；锁库等其它数据库错误照常抛出。"""
+    from sqlalchemy.exc import OperationalError
+
+    class _Raising(_FakeSession):
+        def __init__(self, message):
+            super().__init__(records=[])
+            self.message = message
+
+        def one(self):
+            raise OperationalError("SELECT sum(...)", {}, Exception(self.message))
+
+    assert llm_module._usage_totals_on(_Raising("integer overflow"), date.today()) is None
+    with pytest.raises(OperationalError):
+        llm_module._usage_totals_on(_Raising("database is locked"), date.today())
