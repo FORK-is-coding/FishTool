@@ -267,8 +267,6 @@ def test_chunked_lookup_preserves_backfill_duplicates_checkpoints_and_rollback(c
         selects.clear()
         assert asyncio.run(eng._save_comments_to_db("BV1", comments))["saved_count"] == 0
         assert len(selects) == 4
-        # SQLite 会把布尔参数 True 与文本 ID "1" 匹配；不因批量预取改变旧行为。
-        assert asyncio.run(eng._save_comments_to_db("BV1", [_comment(True)]))["saved_count"] == 0
         failing = [_comment("0002", vip={"vipStatus": 1})]
         failing += [_comment(str(i)) for i in range(2000, 2500)]
         failing += [{"rpid": "9999"}]

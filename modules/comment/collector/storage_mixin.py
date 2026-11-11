@@ -24,7 +24,7 @@ def _comments_with_existing(
 ) -> Iterator[Tuple[Dict[str, Any], Dict[str, Comment]]]:
     for start in range(0, len(comments), _COMMENT_LOOKUP_BATCH_SIZE):
         batch = comments[start:start + _COMMENT_LOOKUP_BATCH_SIZE]
-        rpids = [item.get('rpid') for item in batch if type(item.get('rpid')) in (int, str)]
+        rpids = [item.get('rpid') for item in batch if item.get('rpid') is not None]
         existing = {}
         if rpids:
             existing = {
@@ -77,11 +77,8 @@ class CommentStorageMixin:
                 if rpid is None or rpid in batch_rpids:
                     continue
                 batch_rpids.add(rpid)
-                # 常规 int/str ID 与字符串列匹配；其它值沿用 SQLite 原绑定语义。
-                if type(rpid) in (int, str):
-                    existing = existing_by_rpid.get(str(rpid))
-                else:
-                    existing = session.query(Comment).filter_by(rpid=rpid).first()
+                # rpid 列为字符串；接口给的整数 ID 按字符串形式匹配已有记录。
+                existing = existing_by_rpid.get(str(rpid))
 
                 # 已存在评论只原位补齐缺失的等级/会员/上下文字段，不重复插入。
                 if existing:
