@@ -45,9 +45,9 @@ import json
 # 从 bilibili.api 导入符号
 from bilibili.api import BilibiliAPI
 # 从 llm.client 导入符号
-from llm.client import LLMClient
+from llm.client import LLMClient, configured_max_tokens, raise_if_truncated
 # 从 core.exceptions 导入符号
-from core.exceptions import LLMNotConfiguredError, TokenLimitExceededError
+from core.exceptions import LLMNotConfiguredError, LLMOutputTruncatedError, TokenLimitExceededError
 # 从 core.logger 导入符号
 from core.logger import get_logger
 # 从 core.database 导入符号
@@ -210,15 +210,17 @@ class TopicGenerator:
         
         # 调用LLM
         try:
+            # 不写死 max_tokens：由 LLMClient 读取配置 llm.max_tokens（配置页“单次输出上限”）。
             response = await self.llm_client.chat_completion(
                 messages=[
                     {"role": "system", "content": "你是一位资深的B站内容创作顾问，擅长根据热点趋势生成创意选题。"},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.8,  # 提高创意性
-                max_tokens=2000
             )
-            
+            # 截断的 JSON 数组不完整，拿不到可用选题，按失败处理并提示调大输出上限。
+            raise_if_truncated(response, max_tokens=configured_max_tokens())
+
             # 解析LLM返回的JSON
             # 正确解析 OpenAI 格式返回：response['choices'][0]['message']['content']
             # 将结果交回调用方
@@ -256,8 +258,8 @@ class TopicGenerator:
             logger.info(f"LLM生成了 {len(topics)} 个选题")
             return topics
             
-        except TokenLimitExceededError:
-            # 每日上限是可预期的状态，由调用方记 warning 并回退，不在这里打 ERROR 堆栈。
+        except (TokenLimitExceededError, LLMOutputTruncatedError):
+            # 每日上限、输出截断都是可预期的状态（已记 warning），由调用方回退，不在这里打 ERROR 堆栈。
             raise
         except Exception as e:
             logger.error(f"LLM生成选题失败: {e}", exc_info=True)
@@ -457,6 +459,10 @@ class TopicGenerator:
                 # 每日上限不是“生成失败”：说清楚原因和调整入口，再走规则回退。
                 logger.warning(f"LLM 每日 token 上限已用完，切换到降级方案: {e}")
                 warning = f'{e.user_message}本次使用了降级方案。'
+            except LLMOutputTruncatedError as e:
+                # 输出被截断：提示调大单次输出上限，再走规则回退。
+                logger.warning(f"LLM 选题输出被截断，切换到降级方案: {e}")
+                warning = f'{e.user_message}本次使用了降级方案。'
             except Exception as e:
                 # 其它模型侧错误同样统一走规则回退（修 §11.6 缺陷一）
                 logger.warning(f"LLM生成选题失败，切换到降级方案: {e}")
@@ -522,6 +528,9 @@ class TopicGenerator:
                 raise
             except TokenLimitExceededError as e:
                 logger.warning(f"事件模式 LLM 每日 token 上限已用完，切换到规则模板: {e}")
+                warning = f'{e.user_message}本次使用了事件规则模板。'
+            except LLMOutputTruncatedError as e:
+                logger.warning(f"事件模式 LLM 输出被截断，切换到规则模板: {e}")
                 warning = f'{e.user_message}本次使用了事件规则模板。'
             except Exception as e:
                 logger.warning(f"事件模式模型生成失败，切换到规则模板: {e}")

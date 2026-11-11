@@ -153,6 +153,8 @@ def run_web(host: str, port: int, reload: bool) -> int:
     logger.info("启动Web服务器: http://%s:%s", host, port)
     logger.info("开发模式: %s", "开启" if reload else "关闭")
 
+    # 记录监听地址：AI 伪人巡检的代发举报只在仅监听本机时可用。
+    os.environ["FISHTOOL_LISTEN_HOST"] = str(host)
     options = {"host": host, "port": port, "reload": reload, "log_level": "info"}
     if getattr(sys, "frozen", False):
         # 打包后的 exe 是无控制台程序，sys.stdout / sys.stderr 为 None；uvicorn 默认的

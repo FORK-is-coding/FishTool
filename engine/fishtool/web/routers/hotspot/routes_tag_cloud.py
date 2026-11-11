@@ -3,14 +3,23 @@
 
 拆分自 hotspot.py 原始 L299-L428。
 """
-import asyncio
 import time
 import uuid
 
 from fastapi import HTTPException
 
 from . import router
-from .deps import TagCloudGenerator, ValidationError, _run_tag_cloud_task, _tag_cloud_tasks, get_api
+from .deps import (
+    TagCloudGenerator,
+    ValidationError,
+    _prune_tag_cloud_tasks,
+    _spawn_tag_cloud_task,
+    _tag_cloud_tasks,
+    get_api,
+)
+
+# 查询接口不对外暴露的内部计时字段。
+_TAG_CLOUD_INTERNAL_KEYS = frozenset({"started_monotonic", "finished_monotonic"})
 from .schemas import TagCloudRequest
 
 
@@ -20,6 +29,8 @@ async def start_tag_cloud_task(request: TagCloudRequest):
     if not TagCloudGenerator.is_collectable_zone(request.zone_name):
         raise HTTPException(status_code=400, detail=f"未知的分区名称: {request.zone_name}")
     task_id = uuid.uuid4().hex
+    # 先清理过期任务，避免内存表只增不减（与分析任务一致）。
+    _prune_tag_cloud_tasks()
     _tag_cloud_tasks[task_id] = {
         "task_id": task_id,
         "status": "running",
@@ -30,8 +41,8 @@ async def start_tag_cloud_task(request: TagCloudRequest):
         "started_monotonic": time.monotonic(),
         "result": None,
     }
-    # 将耗时工作交给后台协程，接口立即返回任务 ID 供前端轮询。
-    asyncio.create_task(_run_tag_cloud_task(task_id, request))
+    # 将耗时工作交给后台协程，接口立即返回任务 ID 供前端轮询（强引用由 deps 侧保存）。
+    _spawn_tag_cloud_task(task_id, request)
     return {"success": True, "task_id": task_id}
 
 @router.get("/tag-cloud/tasks/{task_id}")
@@ -42,7 +53,7 @@ async def get_tag_cloud_task(task_id: str):
     if not task:
         raise HTTPException(status_code=404, detail="词云任务不存在或已过期")
     return {"success": True, "data": {
-        key: value for key, value in task.items() if key != "started_monotonic"
+        key: value for key, value in task.items() if key not in _TAG_CLOUD_INTERNAL_KEYS
     }}
 
 @router.post("/tag-cloud")

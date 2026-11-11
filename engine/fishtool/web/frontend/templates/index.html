@@ -11,7 +11,8 @@
     <!-- 内嵌空图标，避免浏览器默认请求 /favicon.ico 产生无关 404 console 错误。 -->
     <link rel="icon" href="data:,">
     <!-- 版本参数用于让 8000 端口在修复后主动获取最新前端资源，避免浏览器继续使用旧缓存。 -->
-    <link rel="stylesheet" href="/static/css/style.lottery.css?v=split-20260824-ui20261101">
+    <link rel="stylesheet" href="/static/css/style.lottery.css?v=split-20260824-ui20261101-commentmode20261109">
+<link rel="stylesheet" href="/static/css/style.lottery.patrol.css?v=patrol20261110">
 <link rel="stylesheet" href="/static/css/style.resident.css?v=split-20260824-ui20261101">
 <link rel="stylesheet" href="/static/css/style.base.css?v=split-20260824-ui20261101-v029ui20261101">
 <link rel="stylesheet" href="/static/css/style.pages.css?v=ui-20261026-ui20261101">
@@ -30,7 +31,7 @@
 <!-- 首次启动开场动画与欢迎页重播按钮的样式；不写 flex gap，放在 flex gap 兜底之前。 -->
 <link rel="stylesheet" href="/static/css/style.intro.css?v=ui20261101">
 <!-- 桌面端 Chromium 83 的 flex gap 兜底：只在 <html class="no-flex-gap"> 下生效，必须最后加载。 -->
-<link rel="stylesheet" href="/static/css/style.flexgap.css?v=flexgap-20261030-ui20261101-v029ui20261101">
+<link rel="stylesheet" href="/static/css/style.flexgap.css?v=flexgap-20261030-ui20261101-v029ui20261101-flexgap20261105">
 <!-- 开场首屏判断：必须在 head 同步执行，决定是否先遮住主界面；不依赖 app.core.js。 -->
 <script src="/static/js/intro-gate.js?v=ui20261101"></script>
 </head>
@@ -65,7 +66,7 @@
                 <span class="logo-mark" aria-hidden="true">FISH<br>TOOL</span>
                 <div class="logo-copy">
                     <h2>FishTool运营助手</h2>
-                    <span class="logo-version">v0.3.0测试版</span>
+                    <span class="logo-version">v0.3.1测试版</span>
                 </div>
             </div>
             <nav class="nav-menu">
@@ -119,7 +120,7 @@
                 <i class="cta-rule"></i>
                 <span>开始<br>监控</span>
             </a>
-            <span class="side-ver">v0.3.0</span>
+            <span class="side-ver">v0.3.1</span>
         </aside>
 
         <!-- 主内容区：首个子元素是吸顶细条，面包屑 / 页码 / 时钟由 app.core.js 更新。 -->
@@ -140,7 +141,7 @@
                     <div class="hero-meta">
                         <span class="meta-lattice" aria-hidden="true"></span>
                         <span>INFO.// FISHTOOL OPERATIONS CONSOLE</span>
-                        <span class="meta-r">BUILD 0.3.0</span>
+                        <span class="meta-r">BUILD 0.3.1</span>
                         <!-- 重播开场动画：24px 浅灰颗粒小方块 + 回旋箭头；悬停时变深灰斜纹、左侧黄色短竖条，并向左展开 REPLAY INTRO -->
                         <button type="button" class="intro-replay" id="intro-replay-btn" onclick="FishIntro.replay(event)" aria-label="重播开场动画" title="重播开场动画">
                             <span class="intro-replay-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v4.5h-4.5"/></svg></span>
@@ -443,7 +444,7 @@
                         <input type="text" id="event-topic-direction" class="form-control" placeholder="例如：差异化实测与避坑">
                     </div>
                     <details class="event-brief">
-                        <summary>CreatorBrief · 可用素材 · 制作时间（§15.2-1）</summary>
+                        <summary>CreatorBrief · 可用素材 · 制作时间</summary>
                         <div class="event-brief-grid">
                             <label>制作(h)<input type="number" id="event-brief-production" class="form-control" value="2" min="0" step="0.5"></label>
                             <label>复核(h)<input type="number" id="event-brief-review" class="form-control" value="1" min="0" step="0.5"></label>
@@ -795,6 +796,14 @@
                         <small>所有 AI 功能共用，0 表示不限制。</small>
                     </div>
                     <button class="btn btn-secondary" onclick="saveLLMDailyLimit()">保存上限</button>
+                    <!-- 单次输出上限（llm.max_tokens）：没有自带上限的 AI 功能都按它限制每次回复的长度。
+                         与每日上限一样单独保存，不需要重新填写 API Key。 -->
+                    <div class="form-group" style="margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--rule);">
+                        <label for="llm-max-tokens">单次输出上限（token）：</label>
+                        <input type="number" id="llm-max-tokens" class="form-control" min="1" step="1" inputmode="numeric" placeholder="2000">
+                        <small>每次 AI 回复最多生成的 token 数。AI 自诊等功能提示“未按 JSON 返回”或输出被截断时调大；开启思考模式的模型，思考过程也计入这个上限。超过模型支持的最大值时服务商会报错。</small>
+                    </div>
+                    <button class="btn btn-secondary" onclick="saveLLMMaxTokens()">保存输出上限</button>
                 </section>
 
                 <section class="section">
@@ -810,10 +819,15 @@
                     <span class="ph-no">06</span>
                     <div class="ph-title"><span class="ch-tag">lottery</span><h1>抽奖工具</h1></div>
                     <span class="ph-hollow" aria-hidden="true">LOTTERY</span>
-                    <p class="subtitle">先核对内容，再复用本地评论数据完成真人筛选或随机抽取</p>
+                    <p class="subtitle">先核对内容，再采集评论完成真人筛选或随机抽取。视频可选常规采集，或登录发布者账号后读取包含楼中楼的完整评论。</p>
                 </div>
 
-                <div class="lottery-layout">
+                <div class="lottery-view-switch" role="group" aria-label="抽奖工具视图切换">
+                    <button id="lottery-view-draw" class="btn btn-primary btn-sm" type="button" aria-pressed="true" data-lottery-view="draw">抽奖工具</button>
+                    <button id="lottery-view-patrol" class="btn btn-secondary btn-sm" type="button" aria-pressed="false" data-lottery-view="patrol">AI 伪人巡检</button>
+                </div>
+
+                <div id="lottery-draw-view" class="lottery-layout">
                     <section class="section lottery-workbench">
                         <div class="lottery-section-heading">
                             <div>
@@ -825,6 +839,14 @@
                         <div class="form-group">
                             <label for="lottery-filter-target">视频 BV 号或动态完整链接</label>
                             <input id="lottery-filter-target" class="form-control" type="text" placeholder="BV1xx... 或 https://t.bilibili.com/...">
+                        </div>
+                        <div class="form-group lottery-comment-mode-field">
+                            <label for="lottery-filter-comment-mode">视频评论采集方式</label>
+                            <select id="lottery-filter-comment-mode" class="form-control lottery-select" data-lottery-target="lottery-filter-target" onchange="syncLotteryCommentMode('lottery-filter')">
+                                <option value="standard" selected>常规（任意视频）</option>
+                                <option value="up_fulllist">楼中楼（仅限本人视频）</option>
+                            </select>
+                            <small id="lottery-filter-comment-mode-hint" class="lottery-comment-mode-hint">读取公开评论区，近 10 分钟内有完整快照时直接复用；楼中楼回复可能不全。</small>
                         </div>
                         <div class="form-group">
                             <label for="lottery-focus-template">AI 判定侧重点模板</label>
@@ -860,7 +882,7 @@
                                 <p class="dashboard-eyebrow">RANDOM DRAW</p>
                                 <h2>评论区随机抽奖</h2>
                             </div>
-                            <span class="lottery-badge success">本地优先</span>
+                            <span class="lottery-badge success">两种采集方式</span>
                         </div>
                         <div class="lottery-draw-controls">
                             <div class="form-group lottery-target-field">
@@ -871,6 +893,14 @@
                                 <label for="lottery-winner-count">中奖人数</label>
                                 <input id="lottery-winner-count" class="form-control" type="number" value="1" min="1" max="100">
                             </div>
+                        </div>
+                        <div class="form-group lottery-comment-mode-field">
+                            <label for="lottery-draw-comment-mode">视频评论采集方式</label>
+                            <select id="lottery-draw-comment-mode" class="form-control lottery-select" data-lottery-target="lottery-draw-target" onchange="syncLotteryCommentMode('lottery-draw')">
+                                <option value="standard" selected>常规（任意视频）</option>
+                                <option value="up_fulllist">楼中楼（仅限本人视频）</option>
+                            </select>
+                            <small id="lottery-draw-comment-mode-hint" class="lottery-comment-mode-hint">读取公开评论区，近 10 分钟内有完整快照时直接复用；楼中楼回复可能不全。</small>
                         </div>
                         <div class="lottery-filter-grid" aria-label="候选用户筛选条件">
                             <label class="lottery-toggle lottery-vip-toggle"><input id="lottery-vip-only" type="checkbox"><span>仅限大会员</span></label>
@@ -903,6 +933,95 @@
                         <div id="lottery-preview-result" class="lottery-preview" aria-live="polite"></div>
                         <div id="lottery-draw-result" class="result-area" aria-live="polite"></div>
                         <div id="lottery-winner-verification-result" class="result-area" aria-live="polite"></div>
+                    </section>
+                </div>
+
+                <div id="lottery-patrol-panel" class="lottery-patrol-view" hidden>
+                    <section class="section patrol-workbench">
+                        <div class="lottery-section-heading">
+                            <div>
+                                <p class="dashboard-eyebrow">AI BOT PATROL</p>
+                                <h2>AI 伪人巡检</h2>
+                            </div>
+                            <span id="patrol-account-badge" class="lottery-badge secondary">未登录</span>
+                        </div>
+                        <p class="patrol-intro">定向筛查低质量AI账号，伪人率是估计值，举报前请逐条核对。</p>
+                        <div class="form-group">
+                            <label for="patrol-target">视频 BV 号或视频链接</label>
+                            <input id="patrol-target" class="form-control" type="text" maxlength="500" placeholder="BV1xx... 或 https://www.bilibili.com/video/BV...">
+                        </div>
+                        <div class="lottery-filter-grid patrol-option-grid" aria-label="扫描与甄别选项">
+                            <div class="form-group">
+                                <label for="patrol-max-comments">采集上限</label>
+                                <select id="patrol-max-comments" class="form-control lottery-select">
+                                    <option value="200">200 条</option>
+                                    <option value="500" selected>500 条</option>
+                                    <option value="1000">1000 条</option>
+                                    <option value="2000">2000 条</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="patrol-sort-mode">采集顺序</label>
+                                <select id="patrol-sort-mode" class="form-control lottery-select">
+                                    <option value="time" selected>按时间</option>
+                                    <option value="hot">热门优先</option>
+                                </select>
+                            </div>
+                            <label class="lottery-toggle lottery-vip-toggle"><input id="patrol-include-replies" type="checkbox" checked><span>采集楼中楼</span></label>
+                            <div class="form-group">
+                                <label for="patrol-judge-scope">AI 甄别范围</label>
+                                <select id="patrol-judge-scope" class="form-control lottery-select">
+                                    <option value="gray" selected>灰区（推荐）</option>
+                                    <option value="suspect">全部可疑</option>
+                                    <option value="selected">仅勾选的评论</option>
+                                    <option value="all">全部评论</option>
+                                </select>
+                            </div>
+                        </div>
+                        <small id="patrol-eta-hint" class="patrol-hint">输入 BV 号后显示预计耗时</small>
+                        <details class="patrol-focus">
+                            <summary>AI 判定侧重点（可选）</summary>
+                            <div class="form-group">
+                                <textarea id="patrol-focus" class="form-control lottery-prompt" rows="3" maxlength="600" placeholder="例如：重点看是否@他人后推荐视频；不要因为讨论 DeepSeek 就判为机器人。"></textarea>
+                                <small>只追加侧重点，不能替换系统规则；内容会随评论一起发给模型。</small>
+                            </div>
+                        </details>
+                        <div class="patrol-actions">
+                            <button id="patrol-scan-button" class="btn btn-primary" type="button">开始扫描</button>
+                            <button id="patrol-judge-button" class="btn btn-secondary" type="button" disabled>AI 甄别</button>
+                            <button id="patrol-report-button" class="btn btn-danger" type="button" disabled>一键举报</button>
+                        </div>
+                        <div id="patrol-progress" class="patrol-progress" aria-live="polite"></div>
+                    </section>
+
+                    <section class="section patrol-results-card">
+                        <div class="lottery-section-heading">
+                            <div>
+                                <p class="dashboard-eyebrow">PATROL RESULT</p>
+                                <h2>巡检结果</h2>
+                            </div>
+                            <span id="patrol-rules-badge" class="lottery-badge secondary">内置规则+AI智能检测</span>
+                        </div>
+                        <div id="patrol-summary" aria-live="polite"><p class="card-empty">输入 BV 号后点击「开始扫描」。未配置 AI 也能得到规则估计的伪人率。</p></div>
+                        <div id="patrol-filters" class="patrol-filters" hidden></div>
+                        <div id="patrol-table-host" class="patrol-table-host"></div>
+                        <div id="patrol-pager" class="patrol-pager"></div>
+                    </section>
+
+                    <section class="section patrol-ledger-card">
+                        <div class="lottery-section-heading">
+                            <div>
+                                <p class="dashboard-eyebrow">REPORT LEDGER</p>
+                                <h2>举报台账</h2>
+                            </div>
+                            <span class="lottery-badge secondary">本地记录</span>
+                        </div>
+                        <div id="patrol-ledger"><p class="card-empty">暂无举报记录。</p></div>
+                        <div class="patrol-actions">
+                            <button id="patrol-settings-button" class="btn btn-secondary btn-sm" type="button">巡检设置</button>
+                            <button id="patrol-export-button" class="btn btn-secondary btn-sm" type="button" disabled>导出 CSV</button>
+                            <button id="patrol-clear-button" class="btn btn-secondary btn-sm" type="button">清除巡检数据</button>
+                        </div>
                     </section>
                 </div>
             </div>
@@ -984,7 +1103,7 @@
                         <div class="usage-card-content" tabindex="0"><!-- 免责声明内容支持在卡片内使用鼠标滚轮独立滚动。 -->
                             <div class="usage-disclaimer"><!-- 按协议章节保留原始文案，便于阅读和维护。 -->
                                 <p>免责声明与边界限定协议</p>
-                                <p>1. 项目性质与开源协议<br>本项目（以下简称"本工具"）系面向B站个人创作者的辅助性开源代码，旨在提供技术学习与经验交流的工具。本工具完全免费，源代码以 GNU Affero General Public License v3.0（AGPL-3.0）发布，完整条款见项目仓库根目录的 LICENSE 文件。v0.3.0 起由 MIT 改为 AGPL-3.0；v0.3.0 之前发布的版本仍按其附带的 MIT 许可证授权。</p>
+                                <p>1. 项目性质与开源协议<br>本项目（以下简称"本工具"）系面向B站个人创作者的辅助性开源代码，旨在提供技术学习与经验交流的工具。本工具完全免费，源代码以 GNU Affero General Public License v3.0（AGPL-3.0）发布，完整条款见项目仓库根目录的 LICENSE 文件。</p>
                                 <p>2. 免责条款<br>本工具按"原样（AS IS）"提供，开发者不提供任何明示或暗示的保证（包括但不限于对适销性、特定用途适用性和非侵权性的保证）。<br>技术风险：因使用、修改或分发本工具源码而导致的任何直接、间接、偶然、特殊或后果性的损害（包括但不限于账号封禁、数据丢失、设备故障等），开发者及贡献者概不负责。<br>合规风险：用户在使用本工具获取B站公开数据及调用AI大模型时，必须严格遵守《中华人民共和国网络安全法》、《数据安全法》及B站平台用户协议。因用户自行修改代码、绕过限制、高频抓取或滥用AI生成内容而引发的任何法律纠纷、平台处罚或经济损失，均由用户自行承担。</p>
                                 <p>3. 数据与隐私边界限定<br>公开数据原则：本工具默认仅获取B站平台向公众公开的数据。<br>本地化与隐私：本工具未设置任何后门或云端数据收集机制。用户的API Key、Cookie等敏感凭证均由用户自行配置，并以加密形式仅存储于本地设备。因用户本地环境不安全或操作不当导致的凭证泄露，开发者不承担任何责任。</p>
                                 <p>4. 知识产权与禁止滥用<br>本项目的源代码、UI设计及文档以 AGPL-3.0 发布。分发本工具或其衍生版本，或将修改后的版本部署为网络服务供他人使用时，须保留版权与许可声明，并以 AGPL-3.0 公开对应的完整源代码。任何个人或组织不得将本工具或其衍生版本用于违法用途、恶意攻击、数据倒卖或破坏平台生态的行为。</p>
@@ -1003,18 +1122,20 @@
     <!-- 版本参数用于让 8000 端口加载本次弹窗修复后的脚本，避免旧 JS 缓存导致 onclick 无响应。 -->
     <script src="/static/js/app.core.js?v=progress-20261026-fix20261027-fix20261030-ui20261101"></script>
 <!-- 开场动画控制器：three.js 与 LOGO 数据只在播放完整版时按需加载。 -->
-<script src="/static/js/app.intro.js?v=ui20261101-v029ui20261101-v030" data-three="/static/vendor/three.min.js?v=r160" data-logo="/static/intro/logo-mark.js?v=ui20261101"></script>
-<script src="/static/js/app.hotspot.js?v=progress-20261026-fix20261027-fix20261030-ui20261101"></script>
+<script src="/static/js/app.intro.js?v=ui20261101-v029ui20261101-v030-v031" data-three="/static/vendor/three.min.js?v=r160" data-logo="/static/intro/logo-mark.js?v=ui20261101"></script>
+<script src="/static/js/app.hotspot.js?v=progress-20261026-fix20261027-fix20261030-ui20261101-fix20261107"></script>
 <!-- 第三批 g：事件工作台 / 机会列表 / 证据回看 / 最小反馈（新增脚本，不改既有结构）。 -->
-<script src="/static/js/app.events.js?v=batch3h-20261003-fix20261027"></script>
+<script src="/static/js/app.events.js?v=batch3h-20261003-fix20261027-fix20261107"></script>
 <script src="/static/js/app.comment.js?v=progress-20261026-ui20261101-semantic20261102-budget20261104"></script>
-<script src="/static/js/app.config.js?v=split-20260824-fix20261030"></script>
+<script src="/static/js/app.config.js?v=split-20260824-fix20261030-fix20261107"></script>
 <script src="/static/js/app.up.js?v=report5-20261026-fix20261027-ui20261101"></script>
 <script src="/static/js/app.auth.js?v=split-20260824-fix20261027-fix20261030-ui20261101-v029ui20261101"></script>
-<script src="/static/js/app.lottery.js?v=welcomefix-20261026-fix20261027-fix20261030-v029ui20261101"></script>
+<script src="/static/js/app.lottery.js?v=welcomefix-20261026-fix20261027-fix20261030-v029ui20261101-fix20261107-commentmode20261109"></script>
 <script src="/static/js/app.ui.js?v=split-20261026-toast-fix20261030-v029ui20261101"></script>
 <!-- 语义折叠实验面板：依赖 app.core.js 工具与 app.ui.js 的 mountAppModal/showAppConfirm，须在二者之后加载。 -->
-<script src="/static/js/app.comment.semantic.js?v=semantic-20261102-budget20261104"></script>
+<script src="/static/js/app.comment.semantic.js?v=semantic-20261102-budget20261104-fix20261107"></script>
+<!-- AI 伪人巡检：依赖 app.core.js 工具与 app.ui.js 的 mountAppModal/showAppConfirm，须在二者之后加载。 -->
+<script src="/static/js/app.lottery.patrol.js?v=patrol20261110-ui20261110"></script>
 <!-- 欢迎页启动公告：依赖 app.ui.js 的 mountAppModal，必须在它之后加载。 -->
 <script src="/static/js/app.notice.js?v=notice20261101-v030"></script>
 

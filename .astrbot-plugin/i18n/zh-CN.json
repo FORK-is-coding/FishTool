@@ -16,7 +16,8 @@
       "port": { "description": "引擎端口，0=自动分配（仅监听 127.0.0.1）" },
       "request_timeout_s": { "description": "普通请求超时（秒）" },
       "long_request_timeout_s": { "description": "长请求超时（秒）" },
-      "block_api_key_write": { "description": "禁止 Open API Key 调用写接口与凭据接口" }
+      "block_api_key_write": { "description": "禁止 Open API Key 调用写接口与凭据接口" },
+      "allow_proxy_report": { "description": "允许 AI 伪人巡检代发举报" }
     },
     "chat": {
       "description": "聊天指令与告警推送",

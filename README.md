@@ -48,6 +48,7 @@ https://github.com/FORK-is-coding/astrbot_plugin_FishTool
 | `engine.request_timeout_s` | `120` | 普通请求超时 |
 | `engine.long_request_timeout_s` | `1800` | 评论分析、账号自诊等长请求超时 |
 | `engine.block_api_key_write` | `false` | 禁止 AstrBot Open API Key 调用写接口与凭据接口 |
+| `engine.allow_proxy_report` | `false` | 允许 AI 伪人巡检代发举报（默认只能在 B站页面手动举报；修改后重启引擎） |
 | `chat.enable` | `true` | 启用聊天指令与告警推送 |
 | `chat.restricted_scope` | `admin` | `告警`、`监控 状态` 谁能用：`admin` 仅管理员 / `subscribed` 管理员 + 已订阅推送的会话 / `everyone` 所有人 |
 | `chat.cooldown_seconds` | `10` | 公开指令在同一会话的最短间隔，0 = 不限制 |
@@ -92,13 +93,21 @@ docker run ... -v /path/fonts:/AstrBot/data/fonts:ro ...
 
 ### 收不到文件
 
-PDF 存放在 `data/plugin_data/astrbot_plugin_fishtool/exports/`（24 小时后清理），以文件消息发给协议端（NapCat 等）：
+PDF 存放在 `data/plugin_data/astrbot_plugin_fishtool/exports/`（24 小时后清理），以文件消息发给协议端（NapCat 等）。发送方式由 AstrBot 的 `callback_api_base` 设置决定：
 
-- **AstrBot 与协议端在同一台机器 / 同一容器**：直接按本地路径发送，无需配置。
-- **分开部署（常见的两个 Docker 容器）**：协议端读不到 AstrBot 容器里的路径。二选一：
-  - 在 AstrBot 配置 `callback_api_base`，填协议端能访问到的 AstrBot 地址（如 `http://astrbot:6185`）。此时协议端回来下载文件，链接 **300 秒内有效、只能下载一次**（AstrBot 文件服务的默认值），协议端下载失败重试会拿到 404；
-  - 或把 AstrBot 的 `data` 目录以**相同路径**挂载进协议端容器。
-- 协议端先返回成功、再在后台下载失败时插件感知不到，所以摘要消息末尾固定附了一句提示。
+> `callback_api_base` 是 **AstrBot 自己的系统设置，不在本插件的配置里**。位置：AstrBot 面板 → 系统设置 → 常规 → 基础运行 →「对外可达的回调接口地址」。
+
+- **没填 `callback_api_base`**：按本地路径发送，协议端要能用同一个路径读到这个文件。以下情况可以直接用，无需配置：
+  - AstrBot 与协议端装在同一台机器上（都不用 Docker）；
+  - 两者在同一个容器里；
+  - 分开部署，但把 AstrBot 的 `data` 目录以**相同路径**挂载进了协议端容器。
+- **协议端读不到 AstrBot 的路径时**，在上述位置填写协议端能访问到的 AstrBot 地址（如 `http://astrbot:6185`）。常见情况：
+  - AstrBot 与协议端各在一个 Docker 容器里；
+  - 一个在 Docker 里，另一个直接装在宿主机上；
+  - 两者在不同机器上；
+  - 一个在 WSL 里，另一个在 Windows 上。
+- **填了 `callback_api_base` 后，所有文件都改走下载链接**，同机部署也一样（例如为 TTS 等其他功能填过）。协议端会回来下载，所以必须能访问填写的地址。链接 **300 秒内有效、只能下载一次**（AstrBot 文件服务的默认值），协议端下载失败后重试会拿到 404。
+- 协议端先返回成功、再在后台下载失败时，插件感知不到，所以摘要消息末尾固定附了一句提示。
 
 ## 已知限制
 

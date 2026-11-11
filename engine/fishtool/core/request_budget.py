@@ -349,7 +349,12 @@ def log_quota_usage(now: Optional[int] = None) -> Optional[str]:
     return line
 
 
-def before_http_attempt(domain: Optional[str] = None, category: Optional[str] = None):
+def before_http_attempt(
+    domain: Optional[str] = None,
+    category: Optional[str] = None,
+    *,
+    skip_domain_cooldown: bool = False,
+):
     """HTTP 发送前钩子：任务内预算 → IP 级熔断 → 分域冷却 → 进程级滚动配额。
 
     判定顺序（规格 §2.4）：**先查冷却、再查配额**；熔断/冷却命中即拒发。
@@ -357,6 +362,10 @@ def before_http_attempt(domain: Optional[str] = None, category: Optional[str] = 
     Args:
         domain: 凭证域（cookie / no_cookie）；缺省 ``None``。
         category: 配额类别（discovery / watch / ...）；缺省 ``None``。
+        skip_domain_cooldown: 为 ``True`` 时跳过「分域冷却」判定，但仍保留 IP 级
+            熔断与配额判定。仅供用户显式发起的登录恢复请求使用：此时本地
+            ``domain:cooling`` 往往正是上一次采集风控留下的状态，继续拦截会把
+            登录校验误报成 Cookie 失效。
 
     Returns:
         无。
@@ -371,6 +380,7 @@ def before_http_attempt(domain: Optional[str] = None, category: Optional[str] = 
         只做任务内预算计数，不做熔断 / 冷却 / 配额拦截、不写任何表。
         只传 ``domain`` 不传 ``category`` 时：做熔断与分域冷却判定，**不记账配额**
         （免凭证通道由调用方在 sources 层显式记账，避免同一次请求被计两次）。
+        ``skip_domain_cooldown`` 只放宽分域冷却，绝不放宽 IP 级熔断。
     """
     budget = current_attempt_budget.get()
     if budget is not None:
@@ -378,7 +388,7 @@ def before_http_attempt(domain: Optional[str] = None, category: Optional[str] = 
     # 完全没有域上下文（既有调用方）：整条链路一根不动，行为与改造前一致。
     if domain is None:
         return
-    _enforce_risk_gate(domain)
+    _enforce_risk_gate(domain, skip_domain_cooldown=skip_domain_cooldown)
     if category is None:
         return
     _enforce_quota(domain, category)
@@ -503,11 +513,12 @@ def _cooldown_bounds(domain: str) -> Tuple[int, int]:
     return limits.base_of(domain), limits.max_of(domain)
 
 
-def _enforce_risk_gate(domain: str) -> None:
+def _enforce_risk_gate(domain: str, *, skip_domain_cooldown: bool = False) -> None:
     """判定 IP 级熔断与分域冷却；命中即拒发（规格 §2.4）。
 
     Args:
         domain: 凭证域。
+        skip_domain_cooldown: 为 ``True`` 时跳过该域冷却检查，但仍检查 IP 级熔断。
 
     Returns:
         无（通过时本次请求可继续走配额判定）。
@@ -526,6 +537,12 @@ def _enforce_risk_gate(domain: str) -> None:
     if circuit is not None:
         # 熔断只能人工清除（见 clear_ip_circuit），不做「到期自动恢复」。
         raise RequestQuotaExceeded('ip:circuit_open')
+
+    # 登录恢复只放宽分域冷却，IP 级熔断仍然是一票否决：后者代表整个出口已被
+    # 平台连续风控，继续发登录校验只会扩大影响。
+    if skip_domain_cooldown:
+        logger.info('登录恢复请求跳过域冷却判定 domain=%s', domain)
+        return
 
     try:
         cooldown = quota_store.get_domain_cooldown(domain)

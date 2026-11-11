@@ -73,6 +73,13 @@ from .models_comment_semantic import (
     CONTEXT_REPLY,
     CONTEXT_UNKNOWN,
 )
+from .models_lottery_patrol import (
+    PatrolScan,
+    PatrolComment,
+    PatrolReport,
+    PatrolPreference,
+    PatrolLlmCache,
+)
 from .models_hotspot import Hotspot, Topic, Activity
 from .models_hotspot_signal import HotspotSignal, HotKeywordSignal
 from .models_system import Task, OperationLog, LLMUsage, MonitorState
@@ -98,6 +105,7 @@ __all__ = [
     'SemanticRun', 'SemanticGroup', 'SemanticGroupMember', 'SemanticPreference',
     'SemanticProtection', 'SemanticAudit', 'SemanticDailyUsage',
     'CONTEXT_TOP_LEVEL', 'CONTEXT_REPLY', 'CONTEXT_UNKNOWN',
+    'PatrolScan', 'PatrolComment', 'PatrolReport', 'PatrolPreference', 'PatrolLlmCache',
     'Task', 'OperationLog', 'LLMUsage', 'MonitorState', 'BenchmarkRun',
     'HttpQuotaBucket',
     'HotspotWatch',

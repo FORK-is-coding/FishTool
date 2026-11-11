@@ -250,3 +250,8 @@ html:not(.no-flex-gap) .lottery-modal-actions > .btn { margin-left: 0; }
     .lottery-section-heading .lottery-badge { max-width: 120px; white-space: normal; text-align: center; }
     .lottery-preview { align-items: flex-start; flex-direction: column; }
 }
+
+/* 视频评论采集方式：独占一行，提示文案紧跟选择栏。 */
+.lottery-comment-mode-field { max-width: 420px; }
+.lottery-comment-mode-hint { display: block; margin-top: 6px; color: var(--ink-3, #6b6b6b); line-height: 1.5; }
+.lottery-comment-mode-field select:disabled { cursor: not-allowed; opacity: .6; }

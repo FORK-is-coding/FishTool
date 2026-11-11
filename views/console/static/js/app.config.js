@@ -42,9 +42,12 @@ async function loadLLMModels() {
     const status = document.getElementById('llm-model-status');
     if (status) status.textContent = '正在获取模型列表...';
     try {
+        // 空白密钥表示“本次没填”，必须省略 api_key 字段而不是发空串：
+        // 后端把空串当作明确未填会直接拒绝，导致页面加载时无法回退已保存的密钥（#87）。
+        const payload = apiKey ? { base_url: baseUrl, api_key: apiKey } : { base_url: baseUrl };
         const data = await apiRequest('/config/llm/models', {
             method: 'POST',
-            body: JSON.stringify({ base_url: baseUrl, api_key: apiKey })
+            body: JSON.stringify(payload)
         });
         if (data.success && data.models?.length) {
             useModelSelect(data.models, document.getElementById('llm-model')?.value.trim());
@@ -68,6 +71,10 @@ async function loadLLMConfig() {
         if (limitInput && Number.isInteger(config.daily_token_limit)) {
             limitInput.value = String(config.daily_token_limit);
         }
+        const maxTokensInput = document.getElementById('llm-max-tokens');
+        if (maxTokensInput && Number.isInteger(config.max_tokens)) {
+            maxTokensInput.value = String(config.max_tokens);
+        }
         await loadLLMModels();
     } catch (error) {
         console.error('加载 AI 大模型配置失败:', error);
@@ -83,19 +90,20 @@ async function saveLLMConfig() {
     const baseUrl = document.getElementById('llm-base-url').value;
     const model = document.getElementById('llm-model').value;
     
-    if (!apiKey) {
+    if (!apiKey.trim()) {
         showAppAlert('请输入API Key');
         return;
     }
-    
+
     try {
+        // 去掉首尾空白后为空的 base_url / model 直接省略：后端把“省略”当作保留已保存值，
+        // 把空串当作非法输入（422）。api_key 上面已经保证非空。
+        const payload = { api_key: apiKey.trim() };
+        if (baseUrl.trim()) payload.base_url = baseUrl.trim();
+        if (model.trim()) payload.model = model.trim();
         await apiRequest('/config/llm', {
             method: 'POST',
-            body: JSON.stringify({
-                api_key: apiKey,
-                base_url: baseUrl,
-                model: model
-            })
+            body: JSON.stringify(payload)
         });
         
         showAppAlert('配置保存成功！');
@@ -120,6 +128,26 @@ async function saveLLMDailyLimit() {
             body: JSON.stringify({ key: 'llm.daily_token_limit', value })
         });
         showAppAlert(value === 0 ? '已设置为不限制每日 token 用量' : `每日 token 上限已设置为 ${value}`);
+    } catch (error) {
+        showAppAlert(`保存失败: ${error.message}`);
+    }
+}
+
+// 单次输出上限（llm.max_tokens）单独保存：同样走 PUT /config/，后端校验取值并热重载 LLM 客户端。
+async function saveLLMMaxTokens() {
+    const input = document.getElementById('llm-max-tokens');
+    const raw = input ? input.value.trim() : '';
+    const value = Number(raw);
+    if (raw === '' || !Number.isInteger(value) || value < 1) {
+        showAppAlert('单次输出上限必须是大于 0 的整数');
+        return;
+    }
+    try {
+        await apiRequest('/config/', {
+            method: 'PUT',
+            body: JSON.stringify({ key: 'llm.max_tokens', value })
+        });
+        showAppAlert(`单次输出上限已设置为 ${value}`);
     } catch (error) {
         showAppAlert(`保存失败: ${error.message}`);
     }

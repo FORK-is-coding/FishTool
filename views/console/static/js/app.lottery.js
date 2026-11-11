@@ -241,6 +241,59 @@ window.addEventListener('DOMContentLoaded', () => {
     Object.keys(LOTTERY_ACTIVE_TASKS).forEach(lotterySyncTaskButton);
 });
 
+// ============ 视频评论采集方式（常规 / 楼中楼） ============
+// 两种方式只对视频生效；动态链接一律走动态评论接口，选择栏置灰并提示。
+const LOTTERY_COMMENT_MODE_HINTS = {
+    standard: '读取公开评论区，近 10 分钟内有完整快照时直接复用；楼中楼回复可能不全。',
+    up_fulllist: '读取创作中心评论管理列表，包含全部楼中楼；需在 FishTool 登录该视频的发布者账号，每次实时采集，评论多时耗时较长。',
+    dynamic: '动态链接只走动态评论接口，此选项仅对视频生效。',
+};
+
+/** 输入是否像动态链接（t.bilibili.com / opus / dynamic）；BV 号与视频链接返回 false。 */
+function isLotteryDynamicInput(value) {
+    const text = String(value || '').trim();
+    if (!text || /BV[0-9A-Za-z]{10}/i.test(text)) return false;
+    return /t\.bilibili\.com|\/opus\/|\/dynamic\/|^\d{6,}$/i.test(text);
+}
+
+/** 读取某张卡片当前的视频评论采集方式，缺省为常规。 */
+function getLotteryCommentMode(prefix) {
+    const value = document.getElementById(`${prefix}-comment-mode`)?.value;
+    return value === 'up_fulllist' ? 'up_fulllist' : 'standard';
+}
+
+/** 根据目标类型与所选方式刷新选择栏状态和提示文案。 */
+function syncLotteryCommentMode(prefix) {
+    const select = document.getElementById(`${prefix}-comment-mode`);
+    const hint = document.getElementById(`${prefix}-comment-mode-hint`);
+    if (!select) return;
+    const dynamic = isLotteryDynamicInput(document.getElementById(`${prefix}-target`)?.value);
+    select.disabled = dynamic;
+    if (hint) hint.textContent = LOTTERY_COMMENT_MODE_HINTS[dynamic ? 'dynamic' : getLotteryCommentMode(prefix)];
+}
+
+/** 当前目标与方式对应的采集说明，用于确认弹窗与加载提示。 */
+function describeLotteryCollection(prefix, target) {
+    if (isLotteryDynamicInput(target)) {
+        return '确认后将优先复用近期完整的动态评论快照；没有时启动低频采集。';
+    }
+    if (getLotteryCommentMode(prefix) === 'up_fulllist') {
+        return '确认后将通过评论管理接口实时读取全部评论（含楼中楼），需当前登录账号是视频发布者。';
+    }
+    return '确认后将优先复用近期完整的本地评论；没有时启动低频采集。';
+}
+
+/** 结果条里的数据来源标签。 */
+function lotteryDataSourceLabel(result) {
+    if (result.data_source === 'local') return '本地数据复用';
+    return result.comment_mode === 'up_fulllist' ? '评论管理接口实时采集' : '现有爬虫采集';
+}
+
+['lottery-filter', 'lottery-draw'].forEach(prefix => {
+    document.getElementById(`${prefix}-target`)?.addEventListener('input', () => syncLotteryCommentMode(prefix));
+    syncLotteryCommentMode(prefix);
+});
+
 /** 启动评论区全用户筛选并持续展示采集与 AI 阶段进度；已有后台任务时继续查看该任务。 */
 async function startRealUserFilter() {
     const target = document.getElementById('lottery-filter-target')?.value.trim();
@@ -249,13 +302,17 @@ async function startRealUserFilter() {
     if (!taskId && !target) return showAppAlert('请先输入视频 BV 号或动态完整链接');
     button.disabled = true;
     showLoading('lottery-filter-result', {
-        message: taskId ? '正在继续查看后台筛选任务' : '正在建立筛选任务，随后将优先检查本地评论数据',
+        message: taskId ? '正在继续查看后台筛选任务' : `正在建立筛选任务。${describeLotteryCollection('lottery-filter', target)}`,
     });
     try {
         if (!taskId) {
             const started = await apiRequest('/lottery/filter/tasks', {
                 method: 'POST',
-                body: JSON.stringify({ target, focus_template: getLotteryFocusTemplate() }),
+                body: JSON.stringify({
+                    target,
+                    focus_template: getLotteryFocusTemplate(),
+                    comment_mode: getLotteryCommentMode('lottery-filter'),
+                }),
             });
             taskId = started.task_id;
             lotteryWriteActiveTask('filter', taskId);
@@ -275,7 +332,7 @@ async function startRealUserFilter() {
                 <span>真人 ${realUsers.length}</span>
                 <span>疑似 ${suspiciousUsers.length}</span>
                 <span>未知 ${indeterminateUsers.length}</span>
-                <span>${result.data_source === 'local' ? '本地数据复用' : '现有爬虫采集'}</span>
+                <span>${lotteryDataSourceLabel(result)}</span>
             </div>
             <div class="lottery-result-columns">
                 <section><h3>真人候选</h3>${realUsers.map(renderLotteryUser).join('') || '<p class="card-empty">暂无真人候选</p>'}</section>
@@ -365,15 +422,15 @@ function renderVerifyWinnersResult(data, resultHost) {
 }
 
 /** 使用项目统一暖色弹窗询问是否确认开始抽奖。 */
-function confirmLotteryTarget(metadata) {
+function confirmLotteryTarget(metadata, collectionNote) {
     return new Promise(resolve => {
-        const { backdrop, confirm } = buildLotteryConfirmModal(metadata, resolve);
+        const { backdrop, confirm } = buildLotteryConfirmModal(metadata, resolve, collectionNote);
         confirm.focus();
     });
 }
 
 // 构建抽奖确认弹窗，点击确认/取消/遮罩都会结束 Promise。
-function buildLotteryConfirmModal(metadata, resolve) {
+function buildLotteryConfirmModal(metadata, resolve, collectionNote) {
     const backdrop = document.createElement('div');
     backdrop.className = 'app-modal-backdrop';
     backdrop.setAttribute('role', 'dialog');
@@ -383,7 +440,7 @@ function buildLotteryConfirmModal(metadata, resolve) {
     const title = document.createElement('h3');
     title.textContent = '确认抽奖内容';
     const copy = document.createElement('p');
-    copy.textContent = `标题：${metadata.title}\n发布者：${metadata.author}\n\n确认后将优先复用本地评论；仅在无缓存时启动低频采集。`;
+    copy.textContent = `标题：${metadata.title}\n发布者：${metadata.author}\n\n${collectionNote || '确认后将优先复用本地评论；仅在无缓存时启动低频采集。'}`;
     const actions = document.createElement('div');
     actions.className = 'lottery-modal-actions';
     const cancel = document.createElement('button');
@@ -464,6 +521,7 @@ async function previewLotteryDraw() {
     let filters;
     try {
         filters = getLotteryDrawFilters();
+        filters.comment_mode = getLotteryCommentMode('lottery-draw');
     } catch (error) {
         return showAppAlert(error.message);
     }
@@ -478,7 +536,7 @@ async function previewLotteryDraw() {
         document.getElementById('lottery-preview-result').innerHTML = `
             <strong>${escapeHtml(metadata.title || '未获取到标题')}</strong>
             <span>发布者：${escapeHtml(metadata.author || '未知')}</span>`;
-        if (!await confirmLotteryTarget(metadata)) return;
+        if (!await confirmLotteryTarget(metadata, describeLotteryCollection('lottery-draw', target))) return;
         await runLotteryDraw(target, winnerCount, uniqueUsers, filters);
     } catch (error) {
         handleLotteryTaskError('draw', error, 'lottery-draw-result', '抽奖准备失败');
@@ -504,7 +562,9 @@ async function resumeLotteryDraw() {
 /** 创建随机抽奖任务并渲染中奖名单。 */
 async function runLotteryDraw(target, winnerCount, uniqueUsers, filters) {
     showLoading('lottery-draw-result', {
-        message: '正在检索工具箱本地目录与数据库，找不到可复用评论后才会启动爬虫',
+        message: filters.comment_mode === 'up_fulllist' && !isLotteryDynamicInput(target)
+            ? '正在通过评论管理接口读取全部评论（含楼中楼），评论较多时需要几分钟'
+            : '正在检索工具箱本地目录与数据库，找不到可复用评论后才会启动爬虫',
     });
     const started = await apiRequest('/lottery/draw/tasks', {
         method: 'POST',
@@ -543,7 +603,7 @@ function renderLotteryDrawResult(result) {
             <span>会员排除 ${Number(excluded.vip) || 0}</span>
             <span>日期排除 ${Number(excluded.date) || 0}</span>
             ${realFilterSummary}
-            <span>${result.data_source === 'local' ? '本地数据复用' : '现有爬虫采集'}</span>
+            <span>${lotteryDataSourceLabel(result)}</span>
         </div>
         <section class="lottery-candidate-section">
             <h3>候选用户</h3>

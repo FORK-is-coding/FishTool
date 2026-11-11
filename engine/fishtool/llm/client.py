@@ -42,9 +42,15 @@ from datetime import datetime, date, timedelta
 import logging
 # 导入模块
 import httpx
+# 从 sqlalchemy 导入符号
+from sqlalchemy import case, func, or_
+# 从 sqlalchemy.exc 导入符号
+from sqlalchemy.exc import OperationalError
 
 # 从 core.exceptions 导入符号
-from core.exceptions import LLMError, LLMNotConfiguredError, LLMAPIError, TokenLimitExceededError
+from core.exceptions import (
+    LLMError, LLMNotConfiguredError, LLMAPIError, LLMOutputTruncatedError, TokenLimitExceededError,
+)
 # 从 core.logger 导入符号
 from core.logger import get_logger
 # 从 core.config 导入符号
@@ -90,17 +96,120 @@ def _usage_records_on(db, day: date) -> list:
     return db.query(LLMUsage).filter(LLMUsage.date >= start, LLMUsage.date < end).all()
 
 
+def _usage_totals_on(db, day: date) -> Optional[tuple[int, int]]:
+    """聚合当日用量；旧库存在非整数值或 SUM 溢出时交回原来的逐行计算。"""
+    start = day.isoformat()
+    end = (day + timedelta(days=1)).isoformat()
+    # SQLite 旧库可以含 NULL/非整数值；保留原来各调用方对这些值的不同处理。
+    non_integer = or_(
+        func.typeof(LLMUsage.total_tokens) != 'integer',
+        func.typeof(LLMUsage.request_count) != 'integer',
+    )
+    try:
+        tokens, requests, legacy_rows = db.query(
+            func.sum(LLMUsage.total_tokens),
+            func.sum(LLMUsage.request_count),
+            func.sum(case((non_integer, 1), else_=0)),
+        ).filter(LLMUsage.date >= start, LLMUsage.date < end).one()
+    except OperationalError as e:
+        # Python 整数求和没有 SQLite SUM 的 64 位上限，溢出时保留旧行为。
+        # 锁库、磁盘等其它错误直接抛出，避免回退逐行查询再等一轮 busy_timeout。
+        if 'integer overflow' not in str(e.orig):
+            raise
+        return None
+    if legacy_rows:
+        return None
+    return int(tokens or 0), int(requests or 0)
+
+
+def _tokens_used_on(db, day: date) -> int:
+    """指定自然日 token 总量；NULL 计 0，聚合不可用时按逐行 int() 口径计算。
+
+    供每日限额预检与配置页今日用量共用，保证两处口径一致。
+    """
+    totals = _usage_totals_on(db, day)
+    if totals is not None:
+        return totals[0]
+    return sum(int(r.total_tokens or 0) for r in _usage_records_on(db, day))
+
+
 def _db_tokens_used_on(day: date) -> Optional[int]:
     """读取指定自然日数据库中已记录的 token 总量；数据库不可用时返回 None。"""
     try:
         db = get_session()
         try:
-            return sum(int(r.total_tokens or 0) for r in _usage_records_on(db, day))
+            return _tokens_used_on(db, day)
         finally:
             db.close()
     except Exception as e:
         logger.warning(f"读取当日Token用量失败，回退内存计数: {e}")
         return None
+
+
+def raise_if_truncated(result: Any, *, max_tokens: Optional[int] = None) -> None:
+    """响应的 finish_reason 为 length 时抛 LLMOutputTruncatedError，其余情况什么都不做。
+
+    给自己从 ``choices[0].message.content`` 取正文、并且对缺 choices 有既定处理的调用方用：
+    只补上截断检测，不改变它们对畸形响应的处理方式。
+    """
+    choices = result.get('choices') if isinstance(result, dict) else None
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return
+    choice = choices[0]
+    if choice.get('finish_reason') != 'length':
+        return
+    message = choice.get('message') if isinstance(choice.get('message'), dict) else {}
+    content = message.get('content') if isinstance(message.get('content'), str) else ''
+    reasoning = message.get('reasoning_content')
+    reasoning_chars = len(reasoning) if isinstance(reasoning, str) else 0
+    logger.warning(
+        "LLM 输出被截断: finish_reason=length max_tokens=%s 正文=%d字 思考内容=%d字",
+        max_tokens, len(content), reasoning_chars,
+    )
+    raise LLMOutputTruncatedError(max_tokens, len(content), reasoning_chars)
+
+
+def configured_max_tokens() -> Any:
+    """当前配置的单次输出上限 llm.max_tokens；不传 max_tokens 的请求按它限制输出。"""
+    return config.get('llm.max_tokens', 2000)
+
+
+def extract_reply(result: Any, *, max_tokens: Optional[int] = None) -> str:
+    """从 chat completion 响应里取出回复正文；输出被截断时抛 LLMOutputTruncatedError。
+
+    - ``finish_reason == "length"``：输出达到上限，正文不完整。不管正文里有没有半截 JSON，
+      都不能当结果用，抛截断异常。
+    - 推理模型把思考过程放在 ``message.reasoning_content``，那是草稿，不参与解析，
+      只在日志里记录长度，便于判断是不是思考把额度用完了。
+    - 其他 ``finish_reason``（stop、缺失等）照常返回正文，保持与旧行为一致。
+
+    Args:
+        result: ``chat_completion`` 返回的响应字典。
+        max_tokens: 本次请求的输出上限，只用于报错信息。
+
+    Raises:
+        LLMAPIError: 响应缺少 choices 或 message。
+        LLMOutputTruncatedError: finish_reason 为 length。
+    """
+    choices = result.get('choices') if isinstance(result, dict) else None
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        raise LLMAPIError("API返回数据格式错误")
+    choice = choices[0]
+    message = choice.get('message') if isinstance(choice.get('message'), dict) else None
+    if message is None:
+        raise LLMAPIError("API返回数据格式错误")
+    raise_if_truncated(result, max_tokens=max_tokens)
+    content = message.get('content')
+    content = content if isinstance(content, str) else ''
+    reasoning = message.get('reasoning_content')
+    reasoning_chars = len(reasoning) if isinstance(reasoning, str) else 0
+    finish_reason = choice.get('finish_reason')
+    if not content.strip():
+        # 不是截断却没有正文，多半是端点或模型异常；记下结束原因便于排查，不在这里抛错。
+        logger.warning(
+            "LLM 返回空正文: finish_reason=%s 思考内容=%d字", finish_reason, reasoning_chars,
+        )
+    return content
 
 
 class LLMClient:
@@ -358,14 +467,18 @@ class LLMClient:
             # 对模型不存在做可操作的中文提示，避免用户只能看到原始英文错误
             response_text = e.response.text or ''
             status_code = e.response.status_code
+            # 只保留状态码进 message（#108）。message 会经 ai_report['error'] 与
+            # /api/analysis/self-diagnosis 响应原样交给调用方，而上游错误体常回显
+            # API Key 片段、内部 trace id、请求片段；原始体只放 detail 属性。
+            # detail 不截断：它只在进程内供上层归类（错误码提取、semantic provider
+            # 关键词匹配），截断会把 JSON 报文切坏、把关键词切掉。
             if 'model_not_found' in response_text or 'model does not exist' in response_text.lower():
                 message = f"LLM模型不存在：{self.model}。请在配置中改为 qwen-plus、qwen-max 或 qwen-turbo，并确认API Key已配置"
             else:
-                message = f"API请求失败: {response_text}"
+                message = f"API请求失败: HTTP {status_code}"
             # 日志只记状态码，不落原始响应体（可能含密钥/敏感信息）
             logger.error(f"LLM API请求失败: HTTP {status_code}")
-            # 在异常实例上附带状态码与原始细节，供上层（如 provider）归类后脱敏；
-            # 不改变异常消息，保持既有调用方兼容。
+            # 在异常实例上附带状态码与原始细节，供上层（如 provider）归类后脱敏。
             err = LLMAPIError(message)
             err.status_code = status_code
             err.detail = response_text
@@ -459,9 +572,13 @@ class LLMClient:
                             continue
                             
         except httpx.HTTPStatusError as e:
-            logger.error(f"LLM API流式请求失败: HTTP {e.response.status_code}")
-            # 抛出异常中断流程
-            raise LLMAPIError(f"流式请求失败: {e.response.text}")
+            status_code = e.response.status_code
+            logger.error(f"LLM API流式请求失败: HTTP {status_code}")
+            # 与 chat_completion 一致：message 只带状态码，原始体放 detail。
+            err = LLMAPIError(f"流式请求失败: HTTP {status_code}")
+            err.status_code = status_code
+            err.detail = e.response.text or ''
+            raise err
         # 异常处理
         except Exception as e:
             logger.error(f"LLM流式请求异常: {e}", exc_info=True)
@@ -491,15 +608,12 @@ class LLMClient:
             messages.append({"role": "system", "content": system})
         # 追加到列表
         messages.append({"role": "user", "content": prompt})
-        
+
+        max_tokens = kwargs.get('max_tokens')
+        if max_tokens is None:
+            max_tokens = configured_max_tokens()
         result = await self.chat_completion(messages, **kwargs)
-        
-        # 校验响应结构
-        if 'choices' not in result or len(result['choices']) == 0:
-            # 抛出异常中断流程
-            raise LLMAPIError("API返回数据格式错误")
-        
-        return result['choices'][0]['message']['content']
+        return extract_reply(result, max_tokens=max_tokens)
     
     async def batch_process(self,
                           prompts: List[str],
@@ -572,12 +686,14 @@ class LLMClient:
             try:
                 # 赋值并准备后续使用
                 today = date.today()
-                # 取当日记录（字符串区间，与 _check_token_limit 共用同一口径）
-                usage_records = _usage_records_on(db, today)
-                
-                total_tokens = sum(r.total_tokens for r in usage_records)
-                # 赋值并准备后续使用
-                total_requests = sum(r.request_count for r in usage_records)
+                # 按相同日期区间聚合，旧库异常值保留逐行处理口径。
+                totals = _usage_totals_on(db, today)
+                if totals is None:
+                    usage_records = _usage_records_on(db, today)
+                    total_tokens = sum(r.total_tokens for r in usage_records)
+                    total_requests = sum(r.request_count for r in usage_records)
+                else:
+                    total_tokens, total_requests = totals
                 
                 return {
                     'date': today.isoformat(),

@@ -53,7 +53,7 @@ from core.database import init_database
 # 从 core.logger 导入符号
 from core.logger import get_logger
 from core.exceptions import format_exception
-from core.error_policy import ErrorPriority, report_exception
+from core.error_policy import ErrorPriority, log_low_priority, report_exception
 from core.toast import emit_toast, register_toast_sink
 from core.monitor_service import ResidentCommentMonitor
 # 排名服务由本层组装（modules 不反向 import web）；client 限定自己拥有、只关自己。
@@ -68,7 +68,7 @@ from web.local_guard import is_cross_site_origin
 # 从 routers 导入符号
 from .routers import (
     hotspot, comment, config as config_router, logs, analysis,
-    auth as auth_router, lottery, benchmark, comment_semantic,
+    auth as auth_router, lottery, benchmark, comment_semantic, lottery_patrol,
 )
 # 本机同源校验（Host / Origin），用于配置接口防 DNS rebinding 读取
 from .local_guard import require_local_read
@@ -290,6 +290,11 @@ async def lifespan(app: FastAPI):
     init_database()
     # 抽奖任务：上次进程遗留的运行中任务标为已中断（等用户点「继续执行」，不自动续跑），并清理过期记录。
     lottery.recover_tasks_on_startup()
+    # AI 伪人巡检：同样标记中断、恢复举报台账状态（发送中→结果未知）并清理过期数据；失败不影响启动。
+    try:
+        lottery_patrol.recover_tasks_on_startup()
+    except Exception as exc:  # noqa: BLE001 - 巡检收尾失败不阻断主应用
+        log_low_priority(exc, logger=logger, action="AI伪人巡检启动恢复")
     # 仅接线评论区常驻监控；动态采集没有常驻任务入口。
     global monitor_service
     monitor_service = ResidentCommentMonitor(comment.get_monitor, config_manager)
@@ -541,17 +546,19 @@ async def no_cache_static_assets(request: Request, call_next):
 # CORS 白名单只阻止跨站页面「读取响应」，并不阻止请求被执行：任意网页都能用
 # fetch(..., {mode: 'no-cors'}) 发出不带 Content-Type 的 POST，而 FastAPI 仍会按 JSON
 # 解析请求体，于是可以跨站改写 LLM 配置、退出登录、增删监控目标等。
-# 浏览器跨站请求一定带 Origin 头；这里对 /api/ 下的非安全方法，只要 Origin 不属于
-# 本机允许集合就直接 403。无 Origin 的请求（同源 GET、CLI、桌面内嵌页、测试客户端）不受影响。
+# 浏览器跨站请求一定带 Origin 头；这里对 /api/ 下的非安全方法，只要 Origin 不是同源
+# （scheme/host/port，见 web/local_guard.py）就直接 403。无 Origin 的请求（同源 GET、CLI、
+# 桌面内嵌页、测试客户端）不受影响；需要 token 的写端点仍各自挂 require_local_write。
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
 @app.middleware("http")
 async def block_cross_site_writes(request: Request, call_next):
+    """拦截跨站写请求（Origin 必须与请求同源）。"""
     if (
         request.method in _UNSAFE_METHODS
         and request.url.path.startswith("/api/")
-        and is_cross_site_origin(request.headers.get("origin"))
+        and is_cross_site_origin(request.headers.get("origin"), request_port=request.url.port)
     ):
         logger.warning("已拦截跨站写请求: %s %s origin=%s", request.method, request.url.path, request.headers.get("origin"))
         return JSONResponse(status_code=403, content={"detail": "cross_site_request_blocked"})
@@ -624,6 +631,8 @@ app.include_router(
 app.include_router(logs.router, prefix="/api/logs", tags=["日志查看"])
 # 抽奖工具（目标预览、真人筛选与随机抽奖）
 app.include_router(lottery.router, prefix="/api", tags=["抽奖工具"])
+# AI 伪人巡检（抽奖工具子功能）：路由自带 require_local_* 依赖与 patrol.enabled 总开关。
+app.include_router(lottery_patrol.router, prefix="/api", tags=["AI伪人巡检"])
 app.include_router(analysis.router, prefix="/api", tags=["UP分析与自诊"])
 # 01 正确排名：候选发现 / 任务编排 / 冻结结果读取
 app.include_router(benchmark.router, prefix="/api", tags=["同行排名"])
@@ -773,7 +782,9 @@ async def websocket_endpoint(websocket: WebSocket):
     """
     # WebSocket 不受 CORS 约束：跨站页面可直接连接并订阅预警（含评论原文），握手前校验 Origin。
     # 桌宠客户端（websocket-client）不带 Origin，不受影响。
-    if is_cross_site_origin(websocket.headers.get("origin")):
+    # 必须传入本次连接的端口：服务跑在自定义端口（如 start_web.bat 9000）时，
+    # 同源页面的 Origin 端口不在默认放行集合里，只能靠与请求端口一致来判定同源。
+    if is_cross_site_origin(websocket.headers.get("origin"), request_port=websocket.url.port):
         logger.warning("已拒绝跨站 WebSocket 连接: origin=%s", websocket.headers.get("origin"))
         await websocket.close(code=1008)
         return

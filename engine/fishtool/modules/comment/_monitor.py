@@ -6,6 +6,7 @@
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 
+from core.exceptions import CircuitBreakerError, RateLimitError
 from core.logger import get_logger
 from .collector import CommentCollector
 
@@ -135,22 +136,35 @@ class MonitorActionsMixin:
         results = []
         total_alerts = []
         
+        aborted_reason = None
+
         # 逐个视频执行监控
         for bvid in bvids:
-            result = await self.monitor_video(bvid, strategy=strategy)
+            try:
+                result = await self.monitor_video(bvid, strategy=strategy)
+            except (RateLimitError, CircuitBreakerError) as exc:
+                # 限频 / 熔断：继续请求只会加重风控。停止剩余视频，但保留已完成视频的结果，
+                # 不让一次限频把整批已入库的预警一起变成 500。
+                logger.warning("批量监控在 %s 处遇到限频，停止剩余 %s 个视频: %s",
+                               bvid, len(bvids) - len(results), exc)
+                results.append({'bvid': bvid, 'success': False, 'error': str(exc)})
+                aborted_reason = 'rate_limited'
+                break
             results.append(result)
-            
+
             # 聚合所有预警
             if result.get('alerts'):
                 # 批量扩展列表
                 total_alerts.extend(result['alerts'])
-        
+
         # 组装批量汇总结果
         summary = {
             'total_videos': len(bvids),
             'successful_count': sum(1 for r in results if r.get('success')),
             'total_alerts': len(total_alerts),
             'results': results,
+            'complete': aborted_reason is None,
+            'aborted_reason': aborted_reason,
             'monitored_at': datetime.now().isoformat()
         }
         
