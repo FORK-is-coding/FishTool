@@ -42,8 +42,10 @@ from datetime import datetime, date, timedelta
 import logging
 # 导入模块
 import httpx
+# 从 sqlalchemy 导入符号
 from sqlalchemy import case, func, or_
-from sqlalchemy.exc import DataError, OperationalError
+# 从 sqlalchemy.exc 导入符号
+from sqlalchemy.exc import OperationalError
 
 # 从 core.exceptions 导入符号
 from core.exceptions import (
@@ -109,8 +111,11 @@ def _usage_totals_on(db, day: date) -> Optional[tuple[int, int]]:
             func.sum(LLMUsage.request_count),
             func.sum(case((non_integer, 1), else_=0)),
         ).filter(LLMUsage.date >= start, LLMUsage.date < end).one()
-    except (DataError, OperationalError):
+    except OperationalError as e:
         # Python 整数求和没有 SQLite SUM 的 64 位上限，溢出时保留旧行为。
+        # 锁库、磁盘等其它错误直接抛出，避免回退逐行查询再等一轮 busy_timeout。
+        if 'integer overflow' not in str(e.orig):
+            raise
         return None
     if legacy_rows:
         return None
@@ -118,6 +123,10 @@ def _usage_totals_on(db, day: date) -> Optional[tuple[int, int]]:
 
 
 def _tokens_used_on(db, day: date) -> int:
+    """指定自然日 token 总量；NULL 计 0，聚合不可用时按逐行 int() 口径计算。
+
+    供每日限额预检与配置页今日用量共用，保证两处口径一致。
+    """
     totals = _usage_totals_on(db, day)
     if totals is not None:
         return totals[0]

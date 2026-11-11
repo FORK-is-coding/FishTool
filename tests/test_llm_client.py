@@ -1193,3 +1193,20 @@ def test_sql_usage_matches_legacy_dates_values_and_fallback(llm_env, tmp_path, m
     finally:
         event.remove(manager.engine, "before_cursor_execute", track)
         manager.engine.dispose()
+
+
+def test_usage_totals_only_falls_back_on_sum_overflow():
+    """只有 SUM 整数溢出才回退逐行计算；锁库等其它数据库错误照常抛出。"""
+    from sqlalchemy.exc import OperationalError
+
+    class _Raising(_FakeSession):
+        def __init__(self, message):
+            super().__init__(records=[])
+            self.message = message
+
+        def one(self):
+            raise OperationalError("SELECT sum(...)", {}, Exception(self.message))
+
+    assert llm_module._usage_totals_on(_Raising("integer overflow"), date.today()) is None
+    with pytest.raises(OperationalError):
+        llm_module._usage_totals_on(_Raising("database is locked"), date.today())
