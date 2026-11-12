@@ -3,10 +3,12 @@
 拆分自原 pet_window.py 的 PetWindow 交互部分：
 支持长按/拖拽移动、悬停缩放与单击菜单触发。
 """
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QTimer, Qt
+from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QTimer, Qt
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication
 
 from .assets import logger
+from .geometry import clamp_to_desktop, drag_target, drag_target_across_screens
 
 
 class DragMixin:
@@ -84,8 +86,13 @@ class DragMixin:
         """鼠标按下时记录起点并启动长按计时；超过 100ms 才进入拖拽态。"""
         try:
             if event.button() == Qt.LeftButton:
-                self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-                self._drag_start_position = event.globalPosition().toPoint()
+                cursor = event.globalPosition().toPoint()
+                self.drag_position = cursor - self.frameGeometry().topLeft()
+                # 抓取偏移换算成物理像素保存：跨到 DPR 不同的屏幕后按当前 DPR 折回，
+                # 否则偏移会被放大/缩小，表现为「桌宠不在鼠标下面」。
+                dpr = self._screen_dpr_at(cursor)
+                self._drag_offset_physical = (self.drag_position.x() * dpr, self.drag_position.y() * dpr)
+                self._drag_start_position = cursor
                 # 关键：按下瞬间不能切 STATE_DRAGGING，否则单击会闪拖拽素材。
                 self._is_dragging = False
                 self._left_button_pressed = True
@@ -124,7 +131,17 @@ class DragMixin:
                 self._is_dragging = True
                 self.set_state(self.STATE_DRAGGING)
             # 先移动桌宠窗口，再按新位置同步快捷卡片；后续菜单功能改动不能省略 move。
-            self.move(event.globalPosition().toPoint() - self.drag_position)
+            cursor = event.globalPosition().toPoint()
+            offset_phys = getattr(self, "_drag_offset_physical", None)
+            if offset_phys is None:
+                target = cursor - self.drag_position
+            else:
+                target, exact = self._drag_target_at(cursor, offset_phys)
+                if not exact:
+                    target = self._fit_target_to_cursor_screen(target, cursor)
+            self.move(target)
+            # 跨 DPI 边界时 Qt 会重算窗口尺寸，这里每帧纠正一次，避免累积漂移。
+            self._keep_pet_size_after_move()
             self._sync_menu_position()
             event.accept()
         else:
@@ -152,8 +169,8 @@ class DragMixin:
             was_dragging = getattr(self, "_is_dragging", False) or moved_enough
             self._is_dragging = False
             self.set_state(self.STATE_IDLE)
-            # 保存位置到本地配置，下一次启动可恢复桌宠位置。
-            self.settings.setValue("position", self.pos())
+            # 保存位置前先确保窗口落在可见区内，避免坏坐标被持久化。
+            self._save_position_within_desktop()
             # 拖拽释放后再同步一次，消除最后一帧位置误差。
             self._sync_menu_position()
             if not was_dragging:
@@ -166,6 +183,123 @@ class DragMixin:
             self.set_state(self.STATE_IDLE)
             logger.exception("[桌宠] 鼠标释放处理失败: %s", exc)
             event.accept()
+
+    def _drag_target_at(self, cursor, offset_phys):
+        """算出拖动到 ``cursor`` 时窗口应处的逻辑坐标。
+
+        优先走跨屏物理换算（避免落进异构 DPI 的逻辑空隙），拿不到屏幕信息时
+        退回「鼠标逻辑坐标 - 物理偏移 / 当前 DPR」的近似算法。
+
+        Args:
+            cursor: 鼠标当前全局坐标（``QPoint``）。
+            offset_phys: 按下时记录的物理偏移 ``(x, y)``。
+
+        Returns:
+            tuple[QPoint, bool]: 窗口左上角逻辑坐标，以及是否由跨屏物理换算得出
+            （``True`` 表示结果已落在某块屏的逻辑空间内，无需再做可见性兜底）。
+        """
+        screens = QGuiApplication.screens()
+        primary = QGuiApplication.primaryScreen()
+        snapshot = [
+            (s.geometry().x(), s.geometry().y(), s.geometry().width(), s.geometry().height(), float(s.devicePixelRatio()) or 1.0)
+            for s in screens
+        ]
+        primary_dpr = float(primary.devicePixelRatio()) if primary is not None else 1.0
+        exact = drag_target_across_screens(
+            cursor.x(), cursor.y(), offset_phys[0], offset_phys[1], snapshot, primary_dpr or 1.0
+        )
+        if exact is not None:
+            return QPoint(*exact), True
+        dpr = self._screen_dpr_at(cursor)
+        approx = drag_target(cursor.x(), cursor.y(), offset_phys[0], offset_phys[1], dpr)
+        return QPoint(*approx), False
+
+    def _fit_target_to_cursor_screen(self, target, cursor):
+        """把拖动目标夹进鼠标所在屏幕，避免落进多屏逻辑空隙。
+
+        异构 DPI 下 Qt 的逻辑坐标空间在屏幕之间可能不连续（主屏 100% + 副屏
+        150% 时存在 853px 的空隙）。目标中心一旦落进空隙，``move()`` 的落点就
+        不可预测（实测逻辑 -812 会被送到物理 62、-612 送到物理 362，直接被丢到
+        另一块屏）。这里把目标中心夹进鼠标所在屏幕的可用区：代价是交界处最多
+        贴边一个抓取偏移，但位置始终可预测、始终跟手。
+
+        目标中心仍在某块屏内时原样返回（允许半挂屏幕边缘）。
+
+        Args:
+            target: 期望的窗口左上角（``QPoint``）。
+            cursor: 鼠标当前全局坐标（``QPoint``）。
+
+        Returns:
+            QPoint: 夹紧后的窗口左上角。
+        """
+        width, height = self.width(), self.height()
+        center = QPoint(target.x() + width // 2, target.y() + height // 2)
+        if QGuiApplication.screenAt(center) is not None:
+            return target
+        screen = QGuiApplication.screenAt(cursor) or QGuiApplication.primaryScreen()
+        if screen is None:
+            return target
+        area = screen.availableGeometry()
+        if width > area.width():
+            next_x = area.x()
+        else:
+            next_x = min(max(target.x(), area.x()), area.x() + area.width() - width)
+        if height > area.height():
+            next_y = area.y()
+        else:
+            next_y = min(max(target.y(), area.y()), area.y() + area.height() - height)
+        return QPoint(next_x, next_y)
+
+    def _screen_dpr_at(self, point) -> float:
+        """返回指定逻辑坐标所在屏幕的设备像素比。
+
+        跨 DPI 拖动时用「鼠标当前所在屏幕」而不是「窗口当前所在屏幕」：窗口还
+        停在旧屏时，旧屏的 DPR 会把偏移折算错。
+
+        Args:
+            point: 全局逻辑坐标（``QPoint``）。
+
+        Returns:
+            float: 设备像素比；找不到屏幕时按 1.0 处理。
+        """
+        screen = QGuiApplication.screenAt(point) or QGuiApplication.primaryScreen()
+        if screen is None:
+            return 1.0
+        return float(screen.devicePixelRatio()) or 1.0
+
+    def _keep_pet_size_after_move(self) -> None:
+        """窗口移动后纠正跨屏尺寸漂移。
+
+        真实窗口由 :meth:`PetWindowBase._keep_pet_size` 实现；测试替身没有窗口
+        尺寸概念，直接跳过，不影响事件流程。
+        """
+        keeper = getattr(self, "_keep_pet_size", None)
+        if keeper is not None:
+            keeper()
+
+    def _save_position_within_desktop(self) -> None:
+        """把窗口拉回可见区后保存位置。
+
+        跨不同分辨率的屏幕拖动时，Qt 的逻辑坐标在屏幕之间并不连续，窗口可能落到
+        任何屏幕之外；这里在松手（低频时机）做一次兜底，避免坏坐标被写进 QSettings
+        后重启依然「消失」。拖动过程中不做约束，以免与用户手势对抗。
+        """
+        # 先恢复逻辑尺寸，否则跨屏漂移后的宽高会让夹紧算错目标矩形。
+        keeper = getattr(self, "_keep_pet_size", None)
+        if keeper is not None:
+            keeper()
+        frame = self.frameGeometry()
+        rect = (self.pos().x(), self.pos().y(), frame.width(), frame.height())
+        fitted = rect
+        try:
+            fitted = clamp_to_desktop(rect)
+        except Exception as exc:  # noqa: BLE001 - 校正失败不能打断松手流程
+            logger.error(f"[桌宠] 可见性校正失败，保留原位置: {exc}", exc_info=True)
+        if (fitted[0], fitted[1]) != (rect[0], rect[1]):
+            logger.info(f"[桌宠] 位置不在可见区，已拉回: {rect} -> {fitted}")
+            self.move(QPoint(fitted[0], fitted[1]))
+        # 保存校正后的坐标：即使窗口因 DPR 换算被 Qt 微调，下次启动也会再校正一次。
+        self.settings.setValue("position", QPoint(fitted[0], fitted[1]))
 
     def mouseDoubleClickEvent(self, event):
         """鼠标双击事件处理

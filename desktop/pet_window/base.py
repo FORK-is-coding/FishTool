@@ -3,12 +3,13 @@
 拆分自原 pet_window.py 的 PetWindow 基础部分。
 """
 from PySide6.QtWidgets import QApplication, QLabel, QVBoxLayout
-from PySide6.QtCore import Qt, QPoint, QSettings, QTimer
+from PySide6.QtCore import QSize, Qt, QPoint, QSettings, QTimer
 from PySide6.QtGui import QColor, QPainter, QPixmap
 
 from desktop.icon_utils import load_app_icon
 from desktop.ui_theme import pet_notify_style
 from .assets import PET_ASSET_DIRS, logger
+from .geometry import clamp_to_desktop
 from .image_label import PetImageLabel
 from .ws_thread import WebSocketThread
 
@@ -104,6 +105,10 @@ class PetWindowBase:
         
         # 窗口大小
         self.resize(150, 150)
+        # 记下设计尺寸：跨不同 DPI 的屏幕时 Qt 会用新屏幕的 DPR 重算窗口尺寸，
+        # 反复跨界会让逻辑尺寸累积漂移（实测 150 -> 100 -> 67 ...，反方向 150 -> 225），
+        # 表现为桌宠忽大忽小直至完全偏出屏幕。移动后按这份基准纠正。
+        self._pet_size = QSize(self.width(), self.height())
         
         # 布局
         layout = QVBoxLayout(self)
@@ -141,11 +146,54 @@ class PetWindowBase:
         # Qt6 删除了 QApplication.desktop()；用可用区域的 right()/bottom()，任务栏在左边或上边时原点不为 0 也正确。
         saved_position = self.settings.value("position")
         if isinstance(saved_position, QPoint):
-            self.move(saved_position)
+            self.move(self._clamp_saved_position(saved_position))
         else:
             self.move(default_pet_position(QApplication.primaryScreen(), self.width(), self.height()))
-        
+        # 启动定位可能已经跨屏，尺寸同样可能被重算。
+        self._keep_pet_size()
+
         logger.info("[桌宠] UI初始化完成")
+
+    def _clamp_saved_position(self, position: QPoint) -> QPoint:
+        """把上次保存的位置修正到当前屏幕可见区。
+
+        显示器被拔掉、分辨率或缩放改过之后，旧坐标可能落在任何屏幕之外；直接使用
+        会让桌宠「消失」且无法用鼠标找回。这里只在越界时修正，屏内位置原样保留。
+
+        Args:
+            position: QSettings 中保存的窗口左上角坐标。
+
+        Returns:
+            QPoint: 可用的窗口左上角坐标。
+        """
+        rect = (position.x(), position.y(), self.width(), self.height())
+        try:
+            fitted = clamp_to_desktop(rect)
+        except Exception as exc:  # noqa: BLE001 - 校正失败时沿用旧坐标
+            logger.error(f"[桌宠] 保存位置校正失败，沿用原坐标: {exc}", exc_info=True)
+            return position
+        if (fitted[0], fitted[1]) != (rect[0], rect[1]):
+            logger.info(f"[桌宠] 保存位置不在可见区，已修正: {rect} -> {fitted}")
+        return QPoint(fitted[0], fitted[1])
+
+    def _keep_pet_size(self) -> None:
+        """把窗口逻辑尺寸恢复成设计尺寸。
+
+        跨不同 DPI 的屏幕调用 ``move()`` 时，Qt 会按新屏幕的 DPR 重新换算窗口尺寸；
+        没有基准做纠正时，每跨一次边界就缩放一次（150 -> 100 -> 67 ...），反方向
+        则是放大（150 -> 225 -> 337 ...），表现为桌宠忽大忽小、最终落到屏幕外。
+
+        这里只纠正尺寸，不动位置；尺寸未变化时不做任何事（幂等，可高频调用）。
+        """
+        expected = getattr(self, "_pet_size", None)
+        if expected is None or self.size() == expected:
+            return
+        actual = self.size()
+        logger.info(
+            f"[桌宠] 跨屏导致尺寸被重算，已恢复: "
+            f"{actual.width()}x{actual.height()} -> {expected.width()}x{expected.height()}"
+        )
+        self.resize(expected)
 
     def load_placeholder_images(self):
         """加载占位符图片（纯色方块）
