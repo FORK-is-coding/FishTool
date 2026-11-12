@@ -324,7 +324,7 @@
                     </div>
                     <div class="form-group">
                         <label for="hotspot-watch-bvid">新增跟踪：</label>
-                        <input id="hotspot-watch-bvid" class="form-control" type="text" placeholder="输入 BV 号，如 BV1xx411c7mD">
+                        <input id="hotspot-watch-bvid" class="form-control" type="text" placeholder="BV 号或视频链接，如 BV1xx411c7mD">
                         <input id="hotspot-watch-interval" class="form-control" type="number" min="60" placeholder="采样间隔(秒，可选)">
                         <button class="btn btn-primary" type="button" onclick="submitHotspotWatch()">加入跟踪</button>
                     </div>
@@ -497,7 +497,7 @@
                         <span>失败退避 <strong id="resident-failures">0</strong> 次</span>
                     </div>
                     <div class="resident-monitor-controls">
-                        <input id="resident-bvids" class="form-control" placeholder="BV号，多个用逗号分隔">
+                        <input id="resident-bvids" class="form-control" placeholder="BV号或视频链接，多个用逗号分隔">
                         <button class="btn btn-primary" onclick="enableResidentMonitor()">开启/恢复</button>
                         <button class="btn btn-secondary" onclick="pauseResidentMonitor()">暂停</button>
                         <button class="btn btn-secondary" onclick="stopResidentMonitor()">停止</button>
@@ -510,7 +510,7 @@
                     <div class="monitor-target-grid">
                         <div class="form-group">
                             <label for="monitor-bvid">视频BV号：</label>
-                            <input type="text" id="monitor-bvid" class="form-control" placeholder="BV1xx411c7XZ" autocomplete="off">
+                            <input type="text" id="monitor-bvid" class="form-control" placeholder="BV1xx411c7XZ 或视频链接" autocomplete="off">
                         </div>
                         <div class="form-group">
                             <label for="monitor-uid">UP主UID：</label>
@@ -606,7 +606,7 @@
                     </div>
                     <!-- 独立 BV 选择：历史数据 / 刷新后也有入口，不依赖本次采集。 -->
                     <div class="semantic-selector">
-                        <input type="text" id="semantic-bvid" class="form-control" placeholder="BV号（留空则用当前采集视频）" autocomplete="off">
+                        <input type="text" id="semantic-bvid" class="form-control" placeholder="BV号或视频链接（留空则用当前采集视频）" autocomplete="off">
                         <button type="button" id="semantic-load-btn" class="btn btn-secondary">加载</button>
                     </div>
                     <div id="semantic-body"><p class="semantic-hint">输入视频 BV 号并点「加载」，或先采集单个视频后在此按语义折叠等价评论。</p></div>
@@ -1249,7 +1249,12 @@
     async function submitHotspotWatch() {
         const bvidInput = document.getElementById('hotspot-watch-bvid');
         const intervalInput = document.getElementById('hotspot-watch-interval');
-        const bvid = bvidInput ? bvidInput.value.trim() : '';
+        const video = parseVideoInput(bvidInput ? bvidInput.value : '');
+        if (video.error) {
+            showAppAlert(video.error);
+            return;
+        }
+        const bvid = video.bvid;
         if (!bvid) {
             showAppAlert('请输入 BV 号');
             return;

@@ -45,6 +45,7 @@ class _FakeCollector:
     save_result: dict = {"warning": None, "saved": 1}
     progress: dict = {"phase": "done", "collected": 1, "limit": None, "finished": True}
     collect_error: Exception | None = None
+    collect_calls: list = []
 
     def __init__(self, api) -> None:
         self.api = api
@@ -52,6 +53,7 @@ class _FakeCollector:
 
     async def collect_video_comments(self, bvid, strategy, max_count):
         """返回预置评论或抛出注入异常。"""
+        type(self).collect_calls.append((bvid, strategy, max_count))
         if type(self).collect_error is not None:
             raise type(self).collect_error
         return type(self).comments
@@ -78,6 +80,7 @@ class _FakeMonitor:
     alerts: list = [{"id": 1, "level": "high"}]
     read_result: bool = True
     video_error: Exception | None = None
+    video_calls: list = []
     account_error: Exception | None = None
     alerts_error: Exception | None = None
     read_error: Exception | None = None
@@ -90,6 +93,7 @@ class _FakeMonitor:
 
     async def monitor_video(self, bvid, enable_dedup, enable_sentiment, strategy):
         """返回预置监控结果或抛出注入异常。"""
+        type(self).video_calls.append((bvid, enable_dedup, enable_sentiment, strategy))
         if type(self).video_error is not None:
             raise type(self).video_error
         return type(self).video_result
@@ -160,12 +164,14 @@ def client(monkeypatch, db):
     _FakeCollector.comments = [{"rpid": "1", "content": "你好"}]
     _FakeCollector.save_result = {"warning": None, "saved": 1}
     _FakeCollector.collect_error = None
+    _FakeCollector.collect_calls = []
     _FakeCollector.progress = {"phase": "done", "collected": 1, "limit": None, "finished": True}
     _FakeMonitor.video_result = {"bvid": "BV1", "total_comments": 3}
     _FakeMonitor.account_result = {"uid": "1", "monitored_videos": 2}
     _FakeMonitor.alerts = [{"id": 1, "level": "high"}]
     _FakeMonitor.read_result = True
     _FakeMonitor.video_error = None
+    _FakeMonitor.video_calls = []
     _FakeMonitor.account_error = None
     _FakeMonitor.alerts_error = None
     _FakeMonitor.read_error = None
@@ -596,3 +602,44 @@ def test_get_monitor_unexpected_llm_error_logs_exception(monitor_env):
     state["error"] = RuntimeError("boom")
     assert comment_module.get_monitor().llm_client is None
     assert recorder.records == ["exception"]
+
+
+def test_collect_accepts_video_link(client):
+    """采集器收到提取后的 BV 号，保留策略和数量参数。"""
+    ok = client.post("/api/comment/collect",
+                     json={"bvid": "https://www.bilibili.com/video/BV1xx411c7mD/?p=2", "strategy": "normal", "max_count": 25})
+    assert ok.status_code == 200
+    assert _FakeCollector.collect_calls == [("BV1xx411c7mD", "normal", 25)]
+
+
+def test_monitor_accepts_video_link(client):
+    """监控器收到提取后的 BV 号，保留去重、情感分析和策略参数。"""
+    response = client.post("/api/comment/monitor", json={
+        "bvid": "https://www.bilibili.com/video/BV1xx411c7mD/?p=2&t=30",
+        "enable_dedup": False, "enable_sentiment": False, "strategy": "full",
+    })
+    assert response.status_code == 200
+    assert _FakeMonitor.video_calls == [("BV1xx411c7mD", False, False, "full")]
+
+
+@pytest.mark.parametrize("path,payload", [
+    ("/api/comment/collect", {"bvid": "https://b23.tv/AbC123x"}),
+    ("/api/comment/monitor", {"bvid": "https://b23.tv/AbC123x"}),
+    ("/api/comment/resident/enable", {"bvids": ["BV1xx411c7mD", "https://b23.tv/AbC123x"]}),
+])
+def test_video_short_link_rejected_before_service_call(client, path, payload):
+    """短链在请求校验阶段拒绝，不能触发采集、监控或部分启用。"""
+    short = client.post(path, json=payload)
+    assert short.status_code == 422
+    assert "b23.tv" in short.json()["detail"][0]["msg"]
+    assert _FakeCollector.collect_calls == []
+    assert _FakeMonitor.video_calls == []
+    assert _FakeMonitorService.calls == []
+
+
+def test_resident_enable_converts_video_links(client):
+    """常驻监控目标里的视频链接换成 BV 号，认不出的原样交给服务。"""
+    response = client.post("/api/comment/resident/enable",
+                json={"bvids": ["https://www.bilibili.com/video/BV1xx411c7mD?p=2", "BV1"]})
+    assert response.status_code == 200
+    assert _FakeMonitorService.calls[-1] == ("enable", ["BV1xx411c7mD", "BV1"])

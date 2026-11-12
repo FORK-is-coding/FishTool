@@ -412,9 +412,10 @@ async function loadResidentMonitorStatus() {
     catch (error) { console.error('读取常驻监控状态失败:', error); }
 }
 
-// 从输入框读取目标 BV 列表：按逗号拆分、去空白、过滤空串后返回数组。
+// 从输入框读取目标 BV 列表：按逗号拆分、去空白、过滤空串；视频链接换成 BV 号，认不出的原样交给后端报错。
 function residentTargets() {
-    return (document.getElementById('resident-bvids')?.value || '').split(',').map(item => item.trim()).filter(Boolean);
+    return (document.getElementById('resident-bvids')?.value || '').split(',').map(item => item.trim()).filter(Boolean)
+        .map(item => parseVideoInput(item).bvid || item);
 }
 
 // 开启常驻监控：把当前输入框的 BV 列表作为采集目标提交后端。

@@ -315,6 +315,26 @@ function escapeHtml(value) {
 // 浏览器先解实体再解析 JS，单靠 escapeHtml 无法阻止跳出 JS 字符串。
 function jsArg(value) { return escapeHtml(JSON.stringify(String(value ?? ''))); }
 
+// 视频输入识别：口径与 bilibili/link.py 一致，改规则时两边同步。
+// 第 1 组 = b23.tv 短链（第 2 组为路径），第 3 组 = 文本中独立出现的 BV 号。
+const VIDEO_INPUT_PATTERN = /((?:https?:\/\/)?(?:b23\.tv|bili2233\.cn)\/([0-9A-Za-z]+))|(?<![0-9A-Za-z])(BV[0-9A-Za-z]{10})(?![0-9A-Za-z])/i;
+
+/**
+ * 从用户输入里取出 BV 号：纯 BV 号、浏览器地址栏的视频链接、带 BV 号的分享文字都能认。
+ * b23.tv 短链要联网才知道指向哪个视频，暂不支持（``b23.tv/BV…`` 这种直接带 BV 号的除外）。
+ * @param {string} value 用户输入。
+ * @returns {{bvid: string, error: string}} 认出时 error 为空；输入为空时两者都为空，由调用方提示必填。
+ */
+function parseVideoInput(value) {
+    const text = String(value ?? '').trim();
+    if (!text) return { bvid: '', error: '' };
+    const match = VIDEO_INPUT_PATTERN.exec(text);
+    if (!match) return { bvid: '', error: '没有识别到 BV 号，请填写 BV 号或视频链接' };
+    if (match[3]) return { bvid: match[3], error: '' };
+    if (/^BV[0-9A-Za-z]{10}$/i.test(match[2])) return { bvid: match[2], error: '' };
+    return { bvid: '', error: '暂不支持 b23.tv 短链，请在浏览器打开后复制地址栏里的链接，或直接填 BV 号' };
+}
+
 // 接口列表字段归一：数组原样返回，null/undefined/对象/字符串等一律视为空列表，避免渲染时抛错。
 function asArray(value) {
     return Array.isArray(value) ? value : [];

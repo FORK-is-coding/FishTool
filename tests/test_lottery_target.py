@@ -368,3 +368,14 @@ def test_fetch_target_metadata_rejects_invalid_input_before_request() -> None:
         asyncio.run(fetch_target_metadata(api, "https://example.com/dynamic/1"))
 
     assert calls == []
+
+
+def test_parse_target_input_rejects_short_link_with_hint() -> None:
+    """b23.tv 短链可能指向视频也可能指向动态，提示用户换成地址栏链接。"""
+    with pytest.raises(ValueError, match="b23.tv"):
+        parse_target_input("https://b23.tv/AbC123x")
+
+
+def test_parse_target_input_accepts_short_link_with_bvid() -> None:
+    """b23.tv/BV… 直接带 BV 号，按视频处理。"""
+    assert parse_target_input("https://b23.tv/BV1xx411c7mD") == ("video", "BV1xx411c7mD")

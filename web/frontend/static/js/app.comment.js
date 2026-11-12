@@ -466,16 +466,23 @@ async function monitorVideo() {
 // 读取并校验监控输入，非法输入直接提示并返回空目标。
 function readMonitorTarget() {
     // 对两个输入值统一去除首尾空白，避免空格导致后端校验失败。
-    const bvid = document.getElementById('monitor-bvid').value.trim();
+    const rawBvid = document.getElementById('monitor-bvid').value.trim();
     const uid = document.getElementById('monitor-uid').value.trim();
     // 数量输入只对 UID 账号监控生效，先保留原始文本以便严格校验整数格式。
     const videoLimitInput = document.getElementById('monitor-video-limit').value.trim();
 
     // 两种目标都为空时不发请求，直接提示用户补充采集目标。
-    if (!uid && !bvid) {
+    if (!uid && !rawBvid) {
         showAppAlert('请输入视频BV号或UP主UID');
         return { bvid: '', uid: '' };
     }
+    // 只填视频时允许粘贴视频链接，取出其中的 BV 号；填了 UID 时走账号采集，视频框不参与校验。
+    const video = uid ? { bvid: rawBvid, error: '' } : parseVideoInput(rawBvid);
+    if (video.error) {
+        showAppAlert(video.error);
+        return { bvid: '', uid: '' };
+    }
+    const bvid = video.bvid;
     // UID 只接受纯数字，提前阻止主页链接或非法字符进入账号接口。
     if (uid && !/^\d+$/.test(uid)) {
         showAppAlert('UP主UID只能包含数字');
