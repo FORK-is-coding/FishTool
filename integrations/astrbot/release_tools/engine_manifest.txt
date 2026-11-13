@@ -8,5 +8,5 @@ bilibili/
 llm/
 config/config.yaml
 config/budget.yaml
-# 前端静态资源由 views/console/ 提供，引擎不再重复打包（后端不读取 static，只在目录存在时挂载）。
+# 前端静态资源由 pages/console/ 提供，引擎不再重复打包（后端不读取 static，只在目录存在时挂载）。
 !web/frontend/static/**

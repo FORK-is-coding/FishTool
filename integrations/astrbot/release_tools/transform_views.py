@@ -1,4 +1,4 @@
-"""构建期视图转换：FishTool 前端 → AstrBot 插件视图 ``views/console/``。
+"""构建期视图转换：FishTool 前端 → AstrBot 插件视图 ``pages/console/``。
 
 只改写发布产物，不改仓库原文件。规则（执行案 5.2）：
 
@@ -104,7 +104,7 @@ def transform_views(frontend_dir: Path, shim_dir: Path, out_dir: Path) -> Path:
     Args:
         frontend_dir: FishTool ``web/frontend``。
         shim_dir: ``integrations/astrbot/frontend_shim``。
-        out_dir: 输出 ``views/console``（会被清空）。
+        out_dir: 输出 ``pages/console``（会被清空）。
 
     Returns:
         Path: 输出目录。

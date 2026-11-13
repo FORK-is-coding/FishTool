@@ -61,5 +61,11 @@
       "title": "FishTool Console",
       "description": "Comment monitoring, trending topics, self-diagnosis, lottery tools and settings"
     }
+  },
+  "pages": {
+    "console": {
+      "title": "FishTool Console",
+      "description": "Comment monitoring, trending topics, self-diagnosis, lottery tools and settings"
+    }
   }
 }

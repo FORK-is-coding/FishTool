@@ -10,7 +10,7 @@
  */
 (function () {
   "use strict";
-  var B = window.AstrBotPluginView;
+  var B = window.AstrBotPluginView || window.AstrBotPluginPage;
   if (!B || !window.__FISHTOOL_ASTRBOT__) return;
 
   function toast(message, level, title) {

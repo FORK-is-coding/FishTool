@@ -30,9 +30,9 @@ REQUIRED_FILES = (
     "engine/fishtool/config/budget.yaml",
     "engine_launcher/launcher.py",
     "fishtool_adapter/__init__.py",
-    "views/console/index.html",
-    "views/console/bridge-shim.js",
-    "views/console/astrbot-overrides.js",
+    "pages/console/index.html",
+    "pages/console/bridge-shim.js",
+    "pages/console/astrbot-overrides.js",
     ".astrbot-plugin/i18n/zh-CN.json",
     ".astrbot-plugin/i18n/en-US.json",
 )
@@ -110,7 +110,7 @@ def verify(root: Path, max_zip_mb: float = 16.0) -> list[str]:
             continue
         if path.is_file() and (path.name in FORBIDDEN_NAMES or path.suffix.lower() in FORBIDDEN_SUFFIX):
             errors.append(f"forbidden file: {rel.as_posix()}")
-        if path.is_file() and not rel.as_posix().isascii() and rel.parts[0] == "views":
+        if path.is_file() and not rel.as_posix().isascii() and rel.parts[0] == "pages":
             errors.append(f"non-ascii view asset name: {rel.as_posix()}")
 
     size = zip_size(root)

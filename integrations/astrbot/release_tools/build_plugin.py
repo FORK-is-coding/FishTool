@@ -169,7 +169,7 @@ def build(out: Path, version: str | None = None, repo_root: Path = REPO_ROOT) ->
     # 不带 LICENSE 会把目标仓库已有的许可证文件删掉。
     shutil.copy2(repo_root / "LICENSE", out / "LICENSE")
 
-    views_out = out / "views" / "console"
+    views_out = out / "pages" / "console"
     transform_views(
         repo_root / "web" / "frontend",
         ASTRBOT_DIR / "frontend_shim",

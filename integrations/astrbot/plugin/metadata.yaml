@@ -8,7 +8,7 @@ desc: |
 version: 0.1.0
 author: FORK-is-coding
 repo: https://github.com/FORK-is-coding/astrbot_plugin_FishTool
-astrbot_version: ">=4.29,<5"
+astrbot_version: ">=4.28,<5"
 tags:
   - bilibili
   - 运营

@@ -238,7 +238,7 @@ def smoke(h: Harness) -> list[dict]:
         return d["http_status"]
 
     def view_entry():
-        resp = h.http.get(f"{h.base}/api/v1/plugins/{PLUGIN}/views/console", headers=h.h())
+        resp = h.http.get(f"{h.base}/api/v1/plugins/{PLUGIN}/pages/console", headers=h.h())
         data = resp.json()
         path = (data.get("data") or {}).get("content_path")
         assert path, data
