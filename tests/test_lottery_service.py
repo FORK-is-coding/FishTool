@@ -1285,6 +1285,49 @@ def test_draw_rejects_winner_count_over_pool(service: LotteryService) -> None:
     assert "筛选后有效候选仅 1 人" in str(excinfo.value)
 
 
+def test_draw_never_awards_same_uid_twice(service: LotteryService) -> None:
+    """关闭 UID 去重后候选池按评论计，但一个人仍然只能中一份奖（issue #59）。"""
+    _install_complete_local_comments(
+        service,
+        [
+            _candidate(1, "a1", level=6, ctime="2024-05-01T00:00:00"),
+            _candidate(1, "a2", level=6, ctime="2024-05-02T00:00:00"),
+            _candidate(1, "a3", level=6, ctime="2024-05-03T00:00:00"),
+            _candidate(2, "b1", level=6, ctime="2024-05-04T00:00:00"),
+            _candidate(3, "c1", level=6, ctime="2024-05-05T00:00:00"),
+        ],
+    )
+
+    # 多跑几轮，避免偶发顺序让断言走空。
+    for _ in range(20):
+        result = asyncio.run(service.draw(_video_target(), winner_count=3, unique_users=False))
+
+        uids = [item["uid"] for item in result["winners"]]
+        assert len(uids) == 3
+        assert len(set(uids)) == 3
+        # 候选池仍按评论计，去重后人数单独给出。
+        assert result["candidate_count"] == 5
+        assert result["unique_candidate_count"] == 3
+
+
+def test_draw_rejects_winner_count_over_unique_users(service: LotteryService) -> None:
+    """名额上限按去重后的候选人数校验，不是评论条数（issue #59）。"""
+    _install_complete_local_comments(
+        service,
+        [
+            _candidate(1, "a1", level=6, ctime="2024-05-01T00:00:00"),
+            _candidate(1, "a2", level=6, ctime="2024-05-02T00:00:00"),
+            _candidate(1, "a3", level=6, ctime="2024-05-03T00:00:00"),
+        ],
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        asyncio.run(service.draw(_video_target(), winner_count=2, unique_users=False))
+
+    assert "筛选后有效候选仅 1 人" in str(excinfo.value)
+    assert "3 条评论" in str(excinfo.value)
+
+
 def test_draw_serializes_filters_and_dates(service: LotteryService) -> None:
     """筛选条件回显应把 datetime 序列化为日期字符串。"""
     _install_complete_local_comments(

@@ -593,12 +593,16 @@ function renderLotteryDrawResult(result) {
     const excluded = result.excluded || {};
     const realFilter = result.real_filter || {};
     const realStats = realFilter.stats || {};
+    // 关闭 UID 去重时候选按评论计，单列去重后人数；两者相同（已去重或每人一条）时不重复显示。
+    const candidateCount = Number(result.candidate_count) || 0;
+    const uniqueCandidateCount = Number(result.unique_candidate_count ?? result.candidate_count) || 0;
     const realFilterSummary = realFilter.enabled
         ? `<span>真人 ${Number(realStats.real) || 0}</span><span>非真人 ${Number(realStats.non_real) || 0}</span><span>未知 ${Number(realStats.indeterminate) || 0}（${realFilter.indeterminate_policy === 'include' ? '已保留' : '已排除'}）</span>`
         : '<span>真人筛选未启用</span>';
     document.getElementById('lottery-draw-result').innerHTML = `
         <div class="lottery-summary-strip">
-            <span>候选 ${Number(result.candidate_count) || 0}</span>
+            <span>候选 ${candidateCount} 条评论</span>
+            ${uniqueCandidateCount !== candidateCount ? `<span>去重后 ${uniqueCandidateCount} 人</span>` : ''}
             <span>等级排除 ${Number(excluded.level) || 0}</span>
             <span>会员排除 ${Number(excluded.vip) || 0}</span>
             <span>日期排除 ${Number(excluded.date) || 0}</span>

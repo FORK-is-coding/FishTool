@@ -76,6 +76,43 @@ _GROUP_FIELDS: Dict[str, tuple] = {
 }
 
 
+def _weighted_sample_by_uid(
+    by_uid: Dict[int, List[Dict[str, Any]]],
+    winner_count: int,
+) -> List[Dict[str, Any]]:
+    """按评论加权、按人不放回地抽取中奖评论。
+
+    同一条候选评论权重相同，所以发得多的人中奖概率更高；但只要该 UID 中过一份奖，
+    它剩下的评论就退出池子，一份奖只对应一个人（issue #59）。
+
+    Args:
+        by_uid: UID 到该用户候选评论列表的映射，插入顺序即候选池顺序。
+        winner_count: 需要抽出的中奖人数，调用方保证不超过 UID 数。
+
+    Returns:
+        中奖评论列表，长度等于 ``winner_count``，UID 互不重复。
+    """
+    # 用系统加密随机源抽样，保证公平不可预测。
+    rng = secrets.SystemRandom()
+    # 剩余权重：每个 UID 尚未中奖的评论条数。
+    remaining: Dict[int, int] = {uid: len(items) for uid, items in by_uid.items()}
+    winners: List[Dict[str, Any]] = []
+    for _ in range(winner_count):
+        # 权重前缀和区间定位，等价于「抽一条评论但抽完即移除该用户全部评论」。
+        target = rng.randrange(sum(remaining.values()))
+        cursor = 0
+        chosen_uid = next(iter(remaining))
+        for uid, weight in remaining.items():
+            cursor += weight
+            if target < cursor:
+                chosen_uid = uid
+                break
+        # 中奖评论在该用户的多条评论里等概率取一条。
+        winners.append(rng.choice(by_uid[chosen_uid]))
+        del remaining[chosen_uid]
+    return winners
+
+
 # 抽奖服务编排层，负责缓存、采集、判定与抽取全流程。
 class LotteryService:
     """编排目标预览、本地复用、评论采集、真人筛选与随机抽取。"""
@@ -960,16 +997,24 @@ class LotteryService:
                 focus_template=focus_template,
                 progress=progress,
             )
-        if winner_count > len(pool):
-            raise ValueError(f"筛选后有效候选仅 {len(pool)} 人，无法抽取 {winner_count} 人")
-        # 用系统加密随机源抽样，保证公平不可预测。
-        winners = secrets.SystemRandom().sample(pool, winner_count)
+        # 按人去重：候选池按评论计时，先聚合成「UID → 该用户的候选评论」。
+        by_uid: Dict[int, List[Dict[str, Any]]] = {}
+        for item in pool:
+            by_uid.setdefault(int(item.get("uid") or 0), []).append(item)
+        # 名额按人数校验：一人只能拿一份奖，所以上限是去重后的候选人数（issue #59）。
+        if winner_count > len(by_uid):
+            raise ValueError(
+                f"筛选后有效候选仅 {len(by_uid)} 人（{len(pool)} 条评论），无法抽取 {winner_count} 人"
+            )
+        # 按评论加权、按人不放回地抽样，同一 UID 不会重复中奖。
+        winners = _weighted_sample_by_uid(by_uid, winner_count)
         # 返回候选池、中奖名单与排除统计。
         return {
             "target": target.to_dict(),
             "data_source": source,
             "comment_mode": comment_mode,
             "candidate_count": len(pool),
+            "unique_candidate_count": len(by_uid),
             "candidates": pool,
             "excluded": excluded,
             "filters": {
