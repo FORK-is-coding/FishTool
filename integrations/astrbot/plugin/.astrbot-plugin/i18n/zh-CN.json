@@ -61,5 +61,11 @@
       "title": "FishTool 控制台",
       "description": "评论监控、热点发现、账号自诊、抽奖工具与配置"
     }
+  },
+  "pages": {
+    "console": {
+      "title": "FishTool 控制台",
+      "description": "评论监控、热点发现、账号自诊、抽奖工具与配置"
+    }
   }
 }

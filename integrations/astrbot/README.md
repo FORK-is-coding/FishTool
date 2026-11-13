@@ -5,8 +5,8 @@
 ## 架构
 
 ```text
-AstrBot 面板 → 插件视图 iframe（views/console，原前端 + bridge-shim.js）
-   └─ window.AstrBotPluginView.apiGet/apiPost/subscribeSSE/download
+AstrBot 面板 → 插件视图 iframe（pages/console，原前端 + bridge-shim.js）
+   └─ window.AstrBotPluginView（4.29）/ window.AstrBotPluginPage（4.28）.apiGet/apiPost/subscribeSSE/download
         → /api/v1/plugins/extensions/astrbot_plugin_fishtool/<endpoint>（面板 JWT 鉴权）
            → main.py（AstrBot 进程内，只做进程管理 + 代理 + 事件中继）
               → 127.0.0.1:<随机端口> FishTool 引擎子进程（独立 venv，原样代码）

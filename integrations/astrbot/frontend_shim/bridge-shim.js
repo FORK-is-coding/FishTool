@@ -3,7 +3,8 @@
  *
  * 加载顺序：<head> 最前依次是 bridge-sdk.js、本文件、shim.css，之后才是 FishTool 原有资源。
  * 服务端发现已有 bridge-sdk 标签时只改写其 URL、不重复注入（plugin_page_service.py:601-617），
- * 所以执行到这里时 window.AstrBotPluginView 必然已存在。
+ * 所以执行到这里时 AstrBot 的插件视图 SDK 必然已存在：
+ * 4.29 暴露 window.AstrBotPluginView，4.28 暴露 window.AstrBotPluginPage。
  *
  * 适配内容：
  *   1) fetch('/api/…') → bridge.apiGet / apiPost（POST 隧道还原 PUT/PATCH/DELETE 与 query），
@@ -14,7 +15,7 @@
  */
 (function () {
   "use strict";
-  var B = function () { return window.AstrBotPluginView; };
+  var B = function () { return window.AstrBotPluginView || window.AstrBotPluginPage; };
   if (!B()) {
     console.error("[FishTool] AstrBot bridge SDK 未加载，插件视图无法工作");
     return;
