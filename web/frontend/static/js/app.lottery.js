@@ -599,6 +599,7 @@ function renderLotteryDrawResult(result) {
     document.getElementById('lottery-draw-result').innerHTML = `
         <div class="lottery-summary-strip">
             <span>候选 ${Number(result.candidate_count) || 0}</span>
+            <span>去重后 ${Number(result.unique_candidate_count ?? result.candidate_count) || 0} 人</span>
             <span>等级排除 ${Number(excluded.level) || 0}</span>
             <span>会员排除 ${Number(excluded.vip) || 0}</span>
             <span>日期排除 ${Number(excluded.date) || 0}</span>
