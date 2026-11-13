@@ -238,15 +238,18 @@ def smoke(h: Harness) -> list[dict]:
         return d["http_status"]
 
     def view_entry():
-        resp = h.http.get(f"{h.base}/api/v1/plugins/{PLUGIN}/views/console", headers=h.h())
+        resp = h.http.get(f"{h.base}/api/v1/plugins/{PLUGIN}/pages/console", headers=h.h())
         data = resp.json()
         path = (data.get("data") or {}).get("content_path")
         assert path, data
         page = h.http.get(f"{h.base}{path}")
         assert page.status_code == 200 and "bridge-shim.js" in page.text, page.status_code
-        js = h.http.get(f"{h.base}{path.split('?')[0]}static/js/app.core.js")
+        # 4.28 的资源令牌在 query（?asset_token=…），丢掉 query 会 401；4.29 的令牌在路径（/_t/<token>/），
+        # query 只是回显。保留原 query 两版都能取到静态资源。
+        base, _, query = path.partition("?")
+        js = h.http.get(f"{h.base}{base}static/js/app.core.js" + (f"?{query}" if query else ""))
         assert js.status_code == 200 and "javascript" in js.headers.get("content-type", ""), js.headers.get("content-type")
-        return path.split("?")[0]
+        return base
 
     def data_layout():
         root = h.root / "data" / "plugin_data" / PLUGIN

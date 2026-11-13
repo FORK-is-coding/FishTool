@@ -17,7 +17,7 @@ FishTool的未来更新目标是成为开源、免费、共创、普惠、为所
 https://github.com/FORK-is-coding/astrbot_plugin_FishTool
 ```
 
-要求 AstrBot ≥ 4.29。
+要求 AstrBot ≥ 4.28。
 
 ## 首次启动
 
