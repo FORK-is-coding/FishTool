@@ -368,3 +368,42 @@ def test_fetch_target_metadata_rejects_invalid_input_before_request() -> None:
         asyncio.run(fetch_target_metadata(api, "https://example.com/dynamic/1"))
 
     assert calls == []
+
+
+def test_parse_target_input_rejects_short_link_with_hint() -> None:
+    """b23.tv 短链可能指向视频也可能指向动态，提示用户换成地址栏链接。"""
+    with pytest.raises(ValueError, match="b23.tv"):
+        parse_target_input("https://b23.tv/AbC123x")
+
+
+def test_parse_target_input_accepts_short_link_with_bvid() -> None:
+    """b23.tv/BV… 直接带 BV 号，按视频处理。"""
+    assert parse_target_input("https://b23.tv/BV1xx411c7mD") == ("video", "BV1xx411c7mD")
+
+
+def test_parse_target_input_ignores_b23_in_share_query() -> None:
+    """动态链接带 ?share_from=b23.tv/… 分享参数时仍按动态识别，不误报短链。"""
+    assert parse_target_input("https://www.bilibili.com/opus/123456789?share_from=b23.tv/abc") == (
+        "dynamic",
+        "123456789",
+    )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "BV1xx411c7mDX",
+        "XBV1xx411c7mD",
+        "https://www.bilibili.com/video/BV1xx411c7mDx",
+    ],
+)
+def test_parse_target_input_rejects_bvid_embedded_in_longer_token(raw: str) -> None:
+    """BV 号前后紧挨字母数字时不再截出一段当 BV 号（旧实现会截出错的视频）。"""
+    with pytest.raises(ValueError):
+        parse_target_input(raw)
+
+
+def test_parse_target_input_rejects_short_link_before_bvid() -> None:
+    """短链在前、BV 号在后时不静默选后面的视频，提示换成地址栏链接。"""
+    with pytest.raises(ValueError, match="b23.tv"):
+        parse_target_input("【标题】 https://b23.tv/AbC123x 看看 BV1xx411c7mD")

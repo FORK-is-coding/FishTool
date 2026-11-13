@@ -35,11 +35,13 @@ import asyncio
 from contextlib import closing
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+from pydantic_core import PydanticCustomError
 from typing import List, Optional
 
 from bilibili.api import BilibiliAPI
 from bilibili.cookie_pool import get_cookie_pool
+from bilibili.link import VideoInputError, coerce_bvid
 from llm.client import LLMClient, get_llm_client as get_global_llm_client
 from core.config import ConfigManager
 from core.database import Comment, Video, get_session
@@ -145,6 +147,14 @@ def get_monitor() -> CommentMonitor:
 
 # ============ 请求/响应数据模型 ============
 
+def _bvid_from_input(value: str) -> str:
+    """bvid 入参允许填视频链接：认出 BV 号就换成 BV 号，b23.tv 短链返回 422。"""
+    try:
+        return coerce_bvid(value)
+    except VideoInputError as exc:
+        raise PydanticCustomError("video_link", str(exc)) from None
+
+
 class CollectRequest(BaseModel):
     """
     评论采集请求模型
@@ -184,6 +194,11 @@ class CollectRequest(BaseModel):
     strategy: str = "normal"  # 采集策略: fast/normal/full
     max_count: Optional[int] = None  # 最大采集数量
 
+    @field_validator("bvid")
+    @classmethod
+    def _accept_video_link(cls, value: str) -> str:
+        return _bvid_from_input(value)
+
 
 class MonitorRequest(BaseModel):
     """
@@ -222,10 +237,21 @@ class MonitorRequest(BaseModel):
     enable_sentiment: bool = True  # 是否启用情感分析
     strategy: str = "normal"  # 采集策略: normal(快速100条)/full(全面全量)
 
+    @field_validator("bvid")
+    @classmethod
+    def _accept_video_link(cls, value: str) -> str:
+        return _bvid_from_input(value)
+
 
 class ResidentMonitorRequest(BaseModel):
     """常驻监控控制请求；bvids 为空时沿用 SQLite 中已保存的目标。"""
     bvids: Optional[List[str]] = None
+
+    @field_validator("bvids")
+    @classmethod
+    def _accept_video_links(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+        return None if value is None else [_bvid_from_input(item) for item in value]
+
 class AccountMonitorRequest(BaseModel):
     """
     账号监控请求模型

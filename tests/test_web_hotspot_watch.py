@@ -600,3 +600,18 @@ def test_index_html_shows_pending_enable_and_enable_hint():
     assert "item.last_success_epoch_s" in html
     # 三态筛选下拉不新增 pending_enable（过滤仍走后端三态）。
     assert '<option value="pending_enable"' not in html
+
+
+def test_create_watch_accepts_video_link(client, db):
+    """加入跟踪允许粘贴视频链接，入库的是 BV 号。"""
+    response = client.post("/api/hotspot/watch",
+                           json={"bvid": "https://www.bilibili.com/video/BV1LINK00001?spm_id_from=333"})
+    assert response.status_code == 200
+    assert response.json()["data"]["bvid"] == "BV1LINK00001"
+    assert _row_count(db, "BV1LINK00001") == 1
+
+
+def test_create_watch_rejects_short_link(client):
+    """b23.tv 短链要联网解析，暂不支持，返回 422。"""
+    response = client.post("/api/hotspot/watch", json={"bvid": "https://b23.tv/AbC123x"})
+    assert response.status_code == 422

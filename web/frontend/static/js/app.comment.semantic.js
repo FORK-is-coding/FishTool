@@ -1298,12 +1298,18 @@
     // 独立 BV 选择：历史数据 / 刷新后也有入口，不依赖本次采集。
     function onLoadClick() {
         const input = el('semantic-bvid');
-        const bvid = input ? input.value.trim() : '';
-        if (!bvid) {
+        const raw = input ? input.value.trim() : '';
+        if (!raw) {
             showAppAlert('请输入要分析的视频 BV 号');
             return;
         }
-        selectBvid(bvid);
+        // 允许粘贴视频链接，取出其中的 BV 号。
+        const video = parseVideoInput(raw);
+        if (video.error) {
+            showAppAlert(video.error);
+            return;
+        }
+        selectBvid(video.bvid);
     }
 
     function init() {
