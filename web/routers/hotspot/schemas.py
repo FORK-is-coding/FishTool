@@ -3,8 +3,11 @@
 
 拆分自 hotspot.py 原始 L143-L256。
 """
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic_core import PydanticCustomError
 from typing import Any, Dict, List, Optional
+
+from bilibili.link import VideoInputError, coerce_bvid
 
 
 # ============ 请求/响应数据模型 ============
@@ -149,6 +152,15 @@ class WatchCreateRequest(BaseModel):
     bvid: str  # 视频BV号（必填）
     collection_tid: Optional[int] = None  # 采集分区ID（可选）
     sample_interval_s: Optional[int] = None  # 采样间隔秒（可选，缺省 3600）
+
+    @field_validator("bvid")
+    @classmethod
+    def _accept_video_link(cls, value: str) -> str:
+        """允许填视频链接：认出 BV 号就换成 BV 号，b23.tv 短链返回 422；其余交给入库校验。"""
+        try:
+            return coerce_bvid(value)
+        except VideoInputError as exc:
+            raise PydanticCustomError("video_link", str(exc)) from None
 
 
 # ============ 第三批 g：事件 / 机会 / 反馈请求模型 ============

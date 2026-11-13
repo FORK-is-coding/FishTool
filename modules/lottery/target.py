@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 # B 站 API 客户端，负责元数据请求。
 from bilibili.api import BilibiliAPI
+from bilibili.link import KIND_SHORT_LINK, SHORT_LINK_MESSAGE, parse_video_input
 
 
 @dataclass(frozen=True)
@@ -53,12 +54,13 @@ def parse_target_input(raw_value: str) -> tuple[str, str]:
     """
     # 去掉首尾空白，避免前后空格导致误判。
     value = (raw_value or "").strip()
-    # 尝试提取视频 BV 号，命中后可直接走视频元数据接口。
-    bvid_match = re.search(r"BV[0-9A-Za-z]{10}", value, re.IGNORECASE)
-    # 命中 BV 号直接返回视频类型。
-    if bvid_match:
-        # 命中即返回视频类型与 BV 号。
-        return "video", bvid_match.group(0)
+    # BV 号与 b23.tv 短链的识别口径统一放在 bilibili/link.py。
+    video_ref = parse_video_input(value)
+    if video_ref is not None:
+        # 短链可能指向视频也可能指向动态，要联网才知道，这里先请用户换成地址栏链接。
+        if video_ref.kind == KIND_SHORT_LINK:
+            raise ValueError(SHORT_LINK_MESSAGE)
+        return "video", video_ref.value
 
     # 纯数字可能是 UID/AV 号，禁止误当动态 ID。
     if value.isdigit():
