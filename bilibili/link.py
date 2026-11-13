@@ -28,8 +28,13 @@ KIND_SHORT_LINK = "short_link"
 #: 前缀大小写不敏感，返回值保留用户原样（与 modules/lottery/target.py、语义折叠口径一致）。
 _BVID = r"BV[0-9A-Za-z]{10}"
 
+#: 短链前面不能紧挨的字符：字母数字（``notb23.tv``）、域名与路径符号（``x.b23.tv``、``/b23.tv``），
+#: 以及 query 里的 ``= ? & %``（``?share_from=b23.tv/xxx`` 只是分享来源参数，不是用户要填的短链）。
+_SHORT_LEFT_BOUNDARY = r"0-9A-Za-z.\-_/=?&%"
+
 #: 一次扫描同时认短链和 BV 号；短链放在前面，``b23.tv/BV…`` 整体按短链匹配后再看路径。
 _VIDEO_REF_RE = re.compile(
+    rf"(?<![{_SHORT_LEFT_BOUNDARY}])"
     r"(?P<short>(?:https?://)?(?:b23\.tv|bili2233\.cn)/(?P<code>[0-9A-Za-z]+))"
     rf"|(?<![0-9A-Za-z])(?P<bvid>{_BVID})(?![0-9A-Za-z])",
     re.IGNORECASE,

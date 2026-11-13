@@ -49,6 +49,18 @@ CASES = [
     ("BV1", None, False),
     ("123456", None, False),
     ("", None, False),
+    # 短链左边界：链接参数里的 b23.tv 只是分享来源，相似域名也不是短链。
+    ("https://www.bilibili.com/opus/123456789?share_from=b23.tv/abc", None, False),
+    ("https://www.bilibili.com/read/cv123?from=b23.tv/xyz", None, False),
+    ("https://example.com/redirect?to=b23.tv/abcd", None, False),
+    ("https://example.com/r?u=https%3A%2F%2Fb23.tv/abcd", None, False),
+    ("https://notb23.tv/abcdEF1", None, False),
+    ("https://xb23.tv/abcdEF1", None, False),
+    ("https://x.b23.tv/abcdEF1", None, False),
+    ("https://www.bilibili.com/video/BV1xx411c7mD?share_from=b23.tv/abc", "BV1xx411c7mD", False),
+    # 中文分享文字里紧挨着的短链、全角冒号后的短链照常识别。
+    ("【标题】-哔哩哔哩https://b23.tv/AbC123x", None, True),
+    ("看这个：b23.tv/AbC123x", None, True),
 ]
 
 
@@ -120,6 +132,13 @@ def test_link_module_only_depends_on_stdlib() -> None:
     source = (Path(__file__).resolve().parents[1] / "bilibili" / "link.py").read_text(encoding="utf-8")
     imports = [line.split()[1] for line in source.splitlines() if line.startswith(("import ", "from "))]
     assert set(imports) <= {"__future__", "re", "dataclasses", "typing"}, imports
+
+
+def test_frontend_video_pattern_avoids_lookbehind() -> None:
+    """前端正则不用后行断言 (?<! / (?<=：Safari 16.4 以前不支持，解析失败会让整份 app.core.js 加载不了。"""
+    source = (_JS_DIR / "app.core.js").read_text(encoding="utf-8")
+    line = next(item for item in source.splitlines() if item.startswith("const VIDEO_INPUT_PATTERN"))
+    assert "(?<!" not in line and "(?<=" not in line, line
 
 
 _NODE_SCRIPT = r"""

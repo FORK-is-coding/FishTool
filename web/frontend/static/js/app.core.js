@@ -317,7 +317,11 @@ function jsArg(value) { return escapeHtml(JSON.stringify(String(value ?? ''))); 
 
 // 视频输入识别：口径与 bilibili/link.py 一致，改规则时两边同步。
 // 第 1 组 = b23.tv 短链（第 2 组为路径），第 3 组 = 文本中独立出现的 BV 号。
-const VIDEO_INPUT_PATTERN = /((?:https?:\/\/)?(?:b23\.tv|bili2233\.cn)\/([0-9A-Za-z]+))|(?<![0-9A-Za-z])(BV[0-9A-Za-z]{10})(?![0-9A-Za-z])/i;
+// 左边界用「行首或非指定字符」的分组代替后行断言 (?<!…)：Safari 16.4 以前不支持后行断言，
+// 正则字面量解析失败会让整份 app.core.js 加载不了。边界字符只被消费、不进入捕获组。
+// 短链前不能紧挨字母数字、域名/路径符号和 query 的 = ? & %，
+// 否则 ?share_from=b23.tv/xxx 这类分享来源参数会被当成短链。
+const VIDEO_INPUT_PATTERN = /(?:^|[^0-9A-Za-z.\-_/=?&%])((?:https?:\/\/)?(?:b23\.tv|bili2233\.cn)\/([0-9A-Za-z]+))|(?:^|[^0-9A-Za-z])(BV[0-9A-Za-z]{10})(?![0-9A-Za-z])/i;
 
 /**
  * 从用户输入里取出 BV 号：纯 BV 号、浏览器地址栏的视频链接、带 BV 号的分享文字都能认。
