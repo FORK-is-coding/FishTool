@@ -449,3 +449,72 @@ def test_drag_target_with_non_unit_primary_dpr():
     phys_x = side[0] * 1.5 + (x - side[0]) * 1.0
     # 光标物理 = 10*1.5 = 15，减去 60 -> -45
     assert abs(phys_x - (-45)) <= 2
+
+
+# ===========================================================================
+# 拖动兜底：只在异构 DPI 下夹进鼠标所在屏
+# ===========================================================================
+class _FakeScreen:
+    """QScreen 替身：只提供兜底逻辑用到的 DPR 与可用区。"""
+
+    def __init__(self, dpr, available):
+        """记录 DPR 与可用区。"""
+        self._dpr = dpr
+        self._available = QRect(*available)
+
+    def devicePixelRatio(self):  # noqa: N802 - 对齐 Qt API
+        """返回设备像素比。"""
+        return self._dpr
+
+    def availableGeometry(self):  # noqa: N802 - 对齐 Qt API
+        """返回可用区。"""
+        return self._available
+
+
+class _FakeGuiApp:
+    """QGuiApplication 替身：目标中心落在任何屏幕之外。"""
+
+    def __init__(self, screens):
+        """记录屏幕列表。"""
+        self._screens = screens
+
+    def screens(self):
+        """返回屏幕列表。"""
+        return self._screens
+
+    def screenAt(self, point):  # noqa: N802 - 对齐 Qt API
+        """中心在屏外时返回 None；鼠标所在屏返回第一块。"""
+        return self._screens[0] if point.x() >= 0 else None
+
+    def primaryScreen(self):  # noqa: N802 - 对齐 Qt API
+        """返回主屏。"""
+        return self._screens[0]
+
+
+class _FitHost:
+    """``_fit_target_to_cursor_screen`` 所需的最小宿主。"""
+
+    def width(self):
+        """返回固定宽度。"""
+        return 150
+
+    def height(self):
+        """返回固定高度。"""
+        return 150
+
+
+def test_fit_target_keeps_outer_edge_overhang_with_uniform_dpi(monkeypatch):
+    """所有屏 DPR 相同时没有逻辑空隙：拖出桌面外缘保持原行为，不贴边。"""
+    screens = [_FakeScreen(1.0, (0, 0, 1920, 1032)), _FakeScreen(1.0, (1920, 0, 1920, 1032))]
+    monkeypatch.setattr(pet_drag, "QGuiApplication", _FakeGuiApp(screens))
+    target = QPoint(-140, 300)
+    result = pet_drag.DragMixin._fit_target_to_cursor_screen(_FitHost(), target, QPoint(5, 400))
+    assert result == target
+
+
+def test_fit_target_clamps_into_cursor_screen_with_mixed_dpi(monkeypatch):
+    """异构 DPI 下目标中心落进空隙时夹进鼠标所在屏。"""
+    screens = [_FakeScreen(1.0, (0, 0, 1920, 1032)), _FakeScreen(1.5, (-2560, -357, 1707, 912))]
+    monkeypatch.setattr(pet_drag, "QGuiApplication", _FakeGuiApp(screens))
+    result = pet_drag.DragMixin._fit_target_to_cursor_screen(_FitHost(), QPoint(-140, 300), QPoint(5, 400))
+    assert result == QPoint(0, 300)

@@ -223,7 +223,9 @@ class DragMixin:
         另一块屏）。这里把目标中心夹进鼠标所在屏幕的可用区：代价是交界处最多
         贴边一个抓取偏移，但位置始终可预测、始终跟手。
 
-        目标中心仍在某块屏内时原样返回（允许半挂屏幕边缘）。
+        目标中心仍在某块屏内时原样返回（允许半挂屏幕边缘）。所有屏幕 DPR 相同
+        时逻辑坐标连续、不存在空隙，也原样返回，保持把桌宠拖出桌面外缘的旧行为；
+        真正拖丢的情况由松手时的 :meth:`_save_position_within_desktop` 兜底。
 
         Args:
             target: 期望的窗口左上角（``QPoint``）。
@@ -232,6 +234,8 @@ class DragMixin:
         Returns:
             QPoint: 夹紧后的窗口左上角。
         """
+        if len({float(s.devicePixelRatio()) for s in QGuiApplication.screens()}) <= 1:
+            return target
         width, height = self.width(), self.height()
         center = QPoint(target.x() + width // 2, target.y() + height // 2)
         if QGuiApplication.screenAt(center) is not None:
