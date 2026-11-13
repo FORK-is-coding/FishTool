@@ -90,6 +90,7 @@ class PetWindow(PetWindowBase, WsMixin, NotifyMixin, MenuMixin, DragMixin, Lifec
     pass
 
 
+from .geometry import clamp_rect, clamp_to_desktop, screens_snapshot
 from .runner import run_pet_window
 
 __all__ = [
@@ -98,6 +99,9 @@ __all__ = [
     "PetImageLabel",
     "PetMenuPanel",
     "run_pet_window",
+    "clamp_rect",
+    "clamp_to_desktop",
+    "screens_snapshot",
     "PET_ASSET_DIRS",
     "_asset_roots",
     "logger",
