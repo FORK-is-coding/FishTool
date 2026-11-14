@@ -4,7 +4,7 @@
  *       app.ui.js（mountAppModal / showAppConfirm / showAppAlert / showToast），须在二者之后加载。
  * 约定：
  * - 所有用户内容走 escapeHtml；弹窗内文本用 textContent；不写内联事件处理器。
- * - 写请求带 X-Local-Token，并显式带 Content-Type（apiRequest 的 headers 会整体覆盖默认值）。
+ * - 写请求带 X-Local-Token；有 body 时显式带 Content-Type（apiRequest 本身也会补默认 JSON 头，#143）。
  * - 不用 pollTask（它每次都会重写目标元素且有 30 分钟上限），自写轮询，页面隐藏时暂停。
  * - Chromium 83 兼容：不用 replaceAll、可选链赋值等新语法；randomUUID 带兜底。
  */
