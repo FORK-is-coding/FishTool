@@ -351,6 +351,24 @@ def test_save_monitoring_record_rolls_back_on_commit_error(monkeypatch: pytest.M
     assert session.closed is True
 
 
+def test_save_monitoring_record_skips_callback_when_commit_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """提交失败时不推送预警：宁可少一条通知，也不通知一条查不到的预警。"""
+    session = _CommitFailSession()
+    monkeypatch.setattr(alerts_module, "get_session", lambda: session)
+    received: list = []
+
+    async def _callback(payload):
+        """记录回调载荷。"""
+        received.append(payload)
+
+    monitor = _monitor(callback=_callback)
+
+    _run(monitor._save_monitoring_record("BV1", [], [_alert()]))
+
+    assert session.rolled_back is True
+    assert received == []
+
+
 def test_save_monitoring_record_get_session_error_degrades(monkeypatch: pytest.MonkeyPatch) -> None:
     """get_session 抛异常时降级为仅记日志：except/finally 已有 ``session is not None`` 保护。"""
     def _boom():

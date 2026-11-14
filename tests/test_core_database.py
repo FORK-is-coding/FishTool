@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-from pathlib import Path
 
 import pytest
 from sqlalchemy import inspect, text
@@ -67,6 +66,43 @@ def test_session_roundtrip_persists_llm_usage(tmp_path):
         session.close()
 
 
+def test_file_database_sessions_do_not_share_transactions(tmp_path):
+    """两个文件库 Session 必须各自持有连接，提交/回滚不能串到另一会话。"""
+    manager = DatabaseManager(str(tmp_path / "ops.db"))
+    writer = manager.get_session()
+    reader = manager.get_session()
+    try:
+        writer.add(LLMUsage(date="2030-01-01", model="uncommitted", total_tokens=9))
+        writer.flush()
+
+        # 另一个 Session 不应看到未提交数据，也不应被 writer 的事务绑在同一连接上。
+        assert reader.query(LLMUsage).count() == 0
+        reader.rollback()
+        assert writer.in_transaction()
+
+        writer.commit()
+        assert reader.query(LLMUsage).count() == 1
+    finally:
+        writer.close()
+        reader.close()
+        manager.engine.dispose()
+
+
+def test_memory_database_reuses_one_connection():
+    """``:memory:`` 仍须用 StaticPool，确保不同 Session 看到同一张表。"""
+    manager = DatabaseManager(":memory:")
+    first = manager.get_session()
+    second = manager.get_session()
+    try:
+        first.add(LLMUsage(date="2030-01-01", model="memory", total_tokens=1))
+        first.commit()
+        assert second.query(LLMUsage).count() == 1
+    finally:
+        first.close()
+        second.close()
+        manager.engine.dispose()
+
+
 def test_create_tables_is_idempotent(tmp_path):
     """重复建表不抛异常（checkfirst 语义）。"""
     manager = DatabaseManager(str(tmp_path / "ops.db"))
@@ -90,7 +126,14 @@ def test_backup_auto_and_explicit_path(tmp_path):
         session.commit()
         session.add(LLMUsage(date="2030-01-01", model="uncommitted", total_tokens=9))
         session.flush()
-        assert Path(str(manager.db_path) + "-wal").stat().st_size > 0
+        # 只断言持久化的 journal_mode，不断言 -wal 文件大小：
+        # - WAL 是库文件级设置，由 DatabaseManager 初始化时设一次，之后所有连接沿用；
+        # - -wal 文件何时生成/清理由 SQLite 的 checkpoint 时机决定，连接池改用
+        #   NullPool（每个 Session 一条连接、用完即关）后这个时机不再可控；
+        # - 拿文件大小当断言，等于把连接池实现细节绑进备份正确性测试。
+        # 备份本身的正确性由下面的文件内容断言覆盖。
+        with manager.engine.connect() as connection:
+            assert connection.execute(text("PRAGMA journal_mode")).scalar_one().lower() == "wal"
 
         auto_path = manager.backup()
         explicit = tmp_path / "manual_backup.db"

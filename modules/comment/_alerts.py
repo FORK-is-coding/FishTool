@@ -242,7 +242,12 @@ class MonitorAlertsMixin:
         """
         # 预警入库链路：CommentAlert 表 + 可选回调推送
         # 事务失败回滚，保证预警不丢失
+        #
+        # 回调（WebSocket / 桌宠推送）放在 commit 之后：连接池改成每个 Session 独占
+        # 一条连接后，在事务里 await 外部 IO 会一直占着 SQLite 写锁，把其他写请求堵在
+        # busy_timeout 上。先落库再推送，既缩短持锁时间，也不会推送一条没存下来的预警。
         session = None
+        pending_push: List[Dict[str, Any]] = []
         try:
             # 赋值并准备后续使用
             session = get_session()
@@ -259,12 +264,13 @@ class MonitorAlertsMixin:
                 session.add(video)
                 # 刷新数据库会话
                 session.flush()
+            video_id = video.id
             
             # 保存预警
             for alert in alerts:
                 # 赋值并准备后续使用
                 comment_alert = CommentAlert(
-                    video_id=video.id,
+                    video_id=video_id,
                     alert_type=alert['type'],
                     alert_level=alert['level'],
                     message=alert['message'],
@@ -273,27 +279,16 @@ class MonitorAlertsMixin:
                 )
                 # 加入集合/数据库会话
                 session.add(comment_alert)
-                
-                # 如果有回调函数，实时推送预警
-                # 回调失败只记日志，不影响入库主流程
-                # 如 WebSocket 推送给桌宠/前端
-                if self.alert_callback:
-                    # 异常保护：局部失败不影响主流程
-                    try:
-                        alert_data = {
-                            'bvid': bvid,
-                            'video_id': video.id,
-                            'type': alert['type'],
-                            'level': alert['level'],
-                            'message': alert['message'],
-                            'details': alert.get('data', {}),
-                            'created_at': datetime.now().isoformat()
-                        }
-                        # 异步等待结果
-                        await self.alert_callback(alert_data)
-                    # 异常处理
-                    except Exception as e:
-                        logger.error(f"调用预警回调失败: {e}", exc_info=True)
+                # 推送载荷先攒着，等事务提交、写锁释放后再发
+                pending_push.append({
+                    'bvid': bvid,
+                    'video_id': video_id,
+                    'type': alert['type'],
+                    'level': alert['level'],
+                    'message': alert['message'],
+                    'details': alert.get('data', {}),
+                    'created_at': datetime.now().isoformat()
+                })
             
             # 提交事务
             session.commit()
@@ -304,11 +299,26 @@ class MonitorAlertsMixin:
             # 回滚事务；get_session 失败时 session 仍未创建，不能盲目回滚。
             if session is not None:
                 session.rollback()
+            # 入库失败就不推送：宁可少一条通知，也不通知一条查不到的预警。
+            return
         # 异常处理
         finally:
             # 关闭连接释放资源
             if session is not None:
                 session.close()
+        
+        # 事务已结束，此处推送不再持有 SQLite 写锁。
+        # 回调失败只记日志，不影响已入库的数据（如 WebSocket 推送给桌宠/前端）。
+        if not self.alert_callback:
+            return
+        for alert_data in pending_push:
+            # 异常保护：局部失败不影响主流程
+            try:
+                # 异步等待结果
+                await self.alert_callback(alert_data)
+            # 异常处理
+            except Exception as e:
+                logger.error(f"调用预警回调失败: {e}", exc_info=True)
 
     async def get_alerts(self, 
                         # 赋值并准备后续使用
