@@ -80,9 +80,9 @@
 
     async function apiWrite(path, method, body) {
         const headers = await writeHeaders();
-        // 必须显式带 Content-Type：app.core.js 的 apiRequest 在 headers 之后展开 ...options，
-        // options.headers 会整体覆盖其默认的 {'Content-Type':'application/json'}，
-        // 只传 {X-Local-Token} 会让 fetch 用 text/plain，FastAPI 不按 JSON 解析 → 422。
+        // 显式带 Content-Type 属保险写法：apiRequest 自己会补默认的
+        // {'Content-Type':'application/json'}（#143 修好了「传 headers 就整体覆盖默认头」
+        // 的老 bug）；这里再带一次只是为了不依赖上游默认值。
         return apiRequest(`${API_PREFIX}${path}`, {
             method,
             headers: Object.assign({ 'Content-Type': 'application/json' }, headers),

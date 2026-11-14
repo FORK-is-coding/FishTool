@@ -17,9 +17,9 @@ Content-Type 时浏览器会补 ``text/plain;charset=UTF-8``，FastAPI 对 pydan
 
 覆盖两层：
 
-- 静态契约：默认头与调用方头是"合并"，且合并结果必须传给 fetch。
+- 静态契约：旧覆盖式写法必须消失（不绑定具体实现字符串）。
 - 行为契约（本机有 node 时）：用 vm 加载真实 ``app.core.js``，假 fetch 记录实际
-  init，逐组合断言最终请求头。
+  init，逐组合断言最终请求头（合并后键名统一小写）。
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ import pytest
 
 _CORE_JS = Path(__file__).resolve().parents[1] / "web" / "frontend" / "static" / "js" / "app.core.js"
 
-_JSON_HEADER = {"Content-Type": "application/json"}
+_JSON_HEADER = {"content-type": "application/json"}
 
 
 def _api_request_source() -> str:
@@ -49,22 +49,19 @@ def _api_request_source() -> str:
 # ===========================================================================
 
 
-def test_api_request_merges_default_headers_instead_of_dropping_them():
-    """默认 Content-Type 与调用方 headers 必须合并后传给 fetch。"""
+def test_api_request_no_longer_spreads_options_over_headers():
+    """旧覆盖式写法必须消失，且仍保留调用方优先的合并逻辑。"""
     body = _api_request_source()
-    # 合并方向：默认值在前、调用方在后（调用方优先）。
-    assert "isFormData ? {} : { 'Content-Type': 'application/json' }" in body
-    assert "options.headers || {}" in body
-    # 合并结果必须真的交给 fetch，而不是被 {...options} 再覆盖一次。
-    assert "Object.assign({}, options, { headers: mergedHeaders })" in body
-    # 旧的覆盖式写法必须消失（headers 对象里再展开 options.headers 的老形态）。
-    assert "...options.headers\n" not in body
+    # 旧形态：headers 对象里再展开 options.headers（随后被 {...options} 整体覆盖）。
+    assert "...options.headers" not in body
+    # 合并仍然读取调用方传入的头，并把结果交给 fetch。
+    assert "options.headers" in body
+    assert "{ headers: mergedHeaders }" in body
 
 
 def test_api_request_skips_content_type_for_form_data():
     """FormData 的 Content-Type（含 boundary）由浏览器生成，不能预设。"""
-    body = _api_request_source()
-    assert "options.body instanceof FormData" in body
+    assert "instanceof FormData" in _api_request_source()
 
 
 # ===========================================================================
@@ -81,6 +78,26 @@ const cases = JSON.parse(fs.readFileSync(casesPath, 'utf8'));
 
 // 沙箱里的 FormData 替身：只用于触发 apiRequest 的 FormData 分支。
 class FakeFormData {}
+
+// 在宿主机上把 HeadersInit 的其它合法形态造出来（沙箱里不提供 Headers 全局）。
+function buildHeaders(spec, kind) {
+    if (!spec) return undefined;
+    if (kind === 'Headers') return new Headers(spec);
+    if (kind === 'array') return Object.entries(spec);
+    return spec;
+}
+
+// 统一转成 { 小写键: 值 }，Headers 实例与普通对象都能处理。
+function headersToObject(h) {
+    const out = {};
+    if (!h) return out;
+    if (typeof h.forEach === 'function') {
+        h.forEach((value, key) => { out[String(key).toLowerCase()] = value; });
+        return out;
+    }
+    Object.keys(h).forEach(key => { out[String(key).toLowerCase()] = h[key]; });
+    return out;
+}
 
 function makeContext() {
     const calls = [];
@@ -109,7 +126,8 @@ function makeContext() {
     for (const c of cases) {
         const { ctx, calls } = makeContext();
         const options = { method: c.method || 'GET' };
-        if (c.headers) options.headers = c.headers;
+        const headers = buildHeaders(c.headers, c.headersKind);
+        if (headers !== undefined) options.headers = headers;
         if (c.form) options.body = new FakeFormData();
         else if (c.body !== undefined) options.body = c.body;
         await ctx.apiRequest(c.path || '/probe', options);
@@ -119,7 +137,7 @@ function makeContext() {
             url: calls.length ? calls[0].url : null,
             method: init.method,
             body: typeof init.body === 'string' ? init.body : (init.body ? '__object__' : '__none__'),
-            headers: init.headers || {},
+            headers: headersToObject(init.headers),
         });
     }
     process.stdout.write(JSON.stringify(results));
@@ -145,24 +163,32 @@ def _run_cases(tmp_path: Path, cases: list[dict]) -> dict[str, dict]:
 
 @pytest.mark.skipif(_NODE is None, reason="本机无 node，跳过 JS 行为测试（静态契约仍覆盖）")
 def test_api_request_header_behavior_under_node(tmp_path):
-    """四种典型调用：带 token 头、无头、显式覆盖、FormData。"""
+    """调用方传 headers 的几种真实形态：纯对象 / 大小写 / Headers 实例 / 数组 / FormData。"""
     body = '{"rid": 4}'
+    token = "tok-value"
     results = _run_cases(tmp_path, [
         # 排行页的真实形态：只带 X-Local-Token，body 是 JSON 字符串。
-        {"name": "token_only", "method": "POST", "body": body,
-         "headers": {"X-Local-Token": "tok-value"}},
+        {"name": "token_only", "method": "POST", "body": body, "headers": {"X-Local-Token": token}},
         {"name": "no_headers", "method": "POST", "body": body},
         {"name": "explicit_override", "method": "POST", "body": "a,b",
          "headers": {"Content-Type": "text/csv"}},
+        # 大小写不同也算同一个头：不能拼成 "application/json, text/csv"。
+        {"name": "lowercase_override", "method": "POST", "body": "a,b",
+         "headers": {"content-type": "text/csv"}},
+        # HeadersInit 的其它合法形态不能被改坏（改动前 options.headers 是原样交给 fetch 的）。
+        {"name": "headers_instance", "method": "POST", "body": body,
+         "headersKind": "Headers", "headers": {"X-Local-Token": token}},
+        {"name": "headers_array", "method": "POST", "body": body,
+         "headersKind": "array", "headers": {"X-Local-Token": token}},
         {"name": "form_data", "method": "POST", "form": True,
-         "headers": {"X-Local-Token": "tok-value"}},
-        {"name": "get_with_headers", "method": "GET",
-         "headers": {"X-Local-Token": "tok-value"}},
+         "headers": {"X-Local-Token": token}},
+        # 旧实现下 GET 带 headers 同样会丢默认头；现在补齐（新增保证，不是保持原样）。
+        {"name": "get_with_headers", "method": "GET", "headers": {"X-Local-Token": token}},
     ])
 
     # 关键回归：带 token 头时默认 Content-Type 必须仍在。
     assert results["token_only"]["headers"] == {
-        "Content-Type": "application/json", "X-Local-Token": "tok-value"}
+        "content-type": "application/json", "x-local-token": token}
     assert results["token_only"]["method"] == "POST"
     assert results["token_only"]["body"] == body
     assert results["token_only"]["url"].endswith("/probe")
@@ -170,14 +196,20 @@ def test_api_request_header_behavior_under_node(tmp_path):
     # 不传 headers 时行为与改动前一致。
     assert results["no_headers"]["headers"] == _JSON_HEADER
 
-    # 调用方显式指定 Content-Type 时以调用方为准。
-    assert results["explicit_override"]["headers"] == {"Content-Type": "text/csv"}
+    # 调用方显式指定 Content-Type 时以调用方为准（大小写都算同一个头）。
+    assert results["explicit_override"]["headers"] == {"content-type": "text/csv"}
+    assert results["lowercase_override"]["headers"] == {"content-type": "text/csv"}
+
+    # Headers 实例 / 数组形态：既不丢默认头，也不丢调用方的头。
+    for name in ("headers_instance", "headers_array"):
+        assert results[name]["headers"] == {
+            "content-type": "application/json", "x-local-token": token}, name
 
     # FormData：不预设 Content-Type，其它头照常保留。
     form_headers = results["form_data"]["headers"]
-    assert "Content-Type" not in form_headers
-    assert form_headers == {"X-Local-Token": "tok-value"}
+    assert "content-type" not in form_headers
+    assert form_headers == {"x-local-token": token}
 
-    # GET 也保持默认 JSON 头（与改动前一致）。
+    # GET 带 headers：现在也会补齐默认 JSON 头（旧实现会丢）。
     assert results["get_with_headers"]["headers"] == {
-        "Content-Type": "application/json", "X-Local-Token": "tok-value"}
+        "content-type": "application/json", "x-local-token": token}

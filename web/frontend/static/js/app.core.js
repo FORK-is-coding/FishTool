@@ -159,13 +159,24 @@ async function apiRequest(url, options = {}, showError = true) {
         // headers 就会把默认头整体覆盖掉；字符串 body 没有 Content-Type 时浏览器
         // 会补 text/plain，FastAPI 的 pydantic body 直接 422——「01 正确排名」的
         // 候选发现 / 发起任务两个写接口就是这么坏的。
+        // 键统一小写后再合并：调用方写 content-type 也能覆盖默认值，不会拼成两个值；
+        // 同时兼容 HeadersInit 的三种形态（Headers 实例 / 二维数组 / 普通对象），
+        // 且不依赖全局 Headers，老环境与测试沙箱里也能跑。
         // FormData 的 Content-Type（含 boundary）必须由浏览器自己生成，不能预设。
         const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
-        const mergedHeaders = Object.assign(
-            {},
-            isFormData ? {} : { 'Content-Type': 'application/json' },
-            options.headers || {}
-        );
+        const mergedHeaders = {};
+        const setHeader = (key, value) => { mergedHeaders[String(key).toLowerCase()] = value; };
+        if (!isFormData) setHeader('Content-Type', 'application/json');
+        const extraHeaders = options.headers;
+        if (extraHeaders) {
+            if (Array.isArray(extraHeaders)) {
+                extraHeaders.forEach(pair => setHeader(pair[0], pair[1]));
+            } else if (typeof extraHeaders.forEach === 'function') {
+                extraHeaders.forEach((value, key) => setHeader(key, value));
+            } else {
+                Object.keys(extraHeaders).forEach(key => setHeader(key, extraHeaders[key]));
+            }
+        }
         const response = await fetch(`${API_BASE}${url}`, Object.assign({}, options, { headers: mergedHeaders }));
         responseStatus = response.status;
         
