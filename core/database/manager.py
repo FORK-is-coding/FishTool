@@ -22,15 +22,51 @@ from .base import Base, logger
 
 # ============ SQLite 连接参数 ============
 
-#: SQLite 忙等待超时（毫秒）。配额计数与业务写入并发时靠它排队，而不是立刻抛 "database is locked"。
-SQLITE_BUSY_TIMEOUT_MS = 5000
+#: SQLite 忙等待超时的默认值（毫秒）。
+#: 配额计数与业务写入并发时靠它排队，而不是立刻抛 "database is locked"。
+#: 连接池改成每个 Session 独占一条连接后，写锁竞争从"进程内静默串扰"变成了
+#: "排队等锁"，等待窗口太短会出现几秒就报错、根本没法用的观感，因此默认放宽到
+#: 15s（旧的 5s 在"持锁期间还要等一次慢操作"的场景下偏紧）。
+SQLITE_BUSY_TIMEOUT_MS_DEFAULT = 15000
+
+#: 忙等待超时允许的取值范围（毫秒）。过小会频繁误报，过大则失败要等太久才发现。
+SQLITE_BUSY_TIMEOUT_MS_MIN = 1000
+SQLITE_BUSY_TIMEOUT_MS_MAX = 120000
+
+
+def _resolve_busy_timeout_ms() -> int:
+    """读取 ``FISHTOOL_SQLITE_BUSY_TIMEOUT_MS`` 得到忙等待超时（毫秒）。
+
+    Returns:
+        int: 合法值收敛到 [MIN, MAX]；未设置或非法时回退到默认值。
+    """
+    raw = os.environ.get("FISHTOOL_SQLITE_BUSY_TIMEOUT_MS")
+    if raw is None or not str(raw).strip():
+        return SQLITE_BUSY_TIMEOUT_MS_DEFAULT
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        logger.warning(
+            "FISHTOOL_SQLITE_BUSY_TIMEOUT_MS=%r 不是整数，回退默认 %sms",
+            raw, SQLITE_BUSY_TIMEOUT_MS_DEFAULT,
+        )
+        return SQLITE_BUSY_TIMEOUT_MS_DEFAULT
+    return max(SQLITE_BUSY_TIMEOUT_MS_MIN, min(value, SQLITE_BUSY_TIMEOUT_MS_MAX))
+
+
+#: 实际生效的忙等待超时（毫秒）；可用 ``FISHTOOL_SQLITE_BUSY_TIMEOUT_MS`` 覆盖。
+SQLITE_BUSY_TIMEOUT_MS = _resolve_busy_timeout_ms()
 
 #: 同上，换算成 sqlite3 驱动的 ``timeout`` 参数口径（秒）。
 SQLITE_BUSY_TIMEOUT_S = SQLITE_BUSY_TIMEOUT_MS / 1000
 
 
 def _apply_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
-    """每条 SQLite 连接建立时开启外键约束、WAL 与 busy_timeout（规格 §2.6）。
+    """每条 SQLite 连接建立时开启外键约束与 busy_timeout（规格 §2.6）。
+
+    WAL 是库文件级持久设置，由 :meth:`DatabaseManager._enable_wal_journaling`
+    在初始化时设一次即可；放在这里会让每条新连接都多跑一次 PRAGMA，
+    连接池改成 NullPool 后等于每个请求都付这笔开销。
 
     SQLite 默认 ``foreign_keys=OFF``，模型里声明的 ``ForeignKey`` 只是注释，
     孤儿行可以照常写入。外键开关是连接级设置，必须在建连 hook 里打开，
@@ -52,11 +88,9 @@ def _apply_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
         enabled = cursor.fetchone()
         if not enabled or int(enabled[0]) != 1:
             logger.error("SQLite 外键约束未生效（PRAGMA foreign_keys=%s），孤儿行可能仍可写入", enabled)
-        # WAL 是库文件级设置，开启后读不阻塞写、写不阻塞读。
-        cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
     except Exception:
-        logger.exception("SQLite PRAGMA（foreign_keys / WAL / busy_timeout）设置失败，回退默认设置")
+        logger.exception("SQLite PRAGMA（foreign_keys / busy_timeout）设置失败，回退默认设置")
     finally:
         cursor.close()
 
@@ -74,6 +108,8 @@ class DatabaseManager:
     # 实例化对象并准备使用
     - 文件库用 NullPool（每个 Session 独占连接），内存库用 StaticPool
       复用唯一连接；配合 check_same_thread=False 支持多线程访问
+    - journal_mode=WAL 只在初始化时设一次（库文件级持久设置），
+      每条连接只设 foreign_keys 与 busy_timeout
     - 提供 get_session 获取独立会话（调用方负责关闭）
     # 读取数据并赋值给当前作用域变量
     - 提供 backup 备份与 drop_all_tables 清库（慎用）
@@ -105,8 +141,12 @@ class DatabaseManager:
             connect_args={"check_same_thread": False, "timeout": SQLITE_BUSY_TIMEOUT_S},
             poolclass=pool_class
         )
-        # 每条新连接都开 WAL + busy_timeout=5000，配额表与业务表共用同一库时不互相饿死。
+        # 每条新连接只设 foreign_keys + busy_timeout；WAL 是库文件级持久设置，
+        # 在下面调用一次 _enable_wal_journaling() 即可，不必每连接重复设置。
         event.listen(self.engine, "connect", _apply_sqlite_pragmas)
+
+        # WAL 一次性开启：读不阻塞写、写不阻塞读，配额表与业务表共用同一库时不互相饿死。
+        self._enable_wal_journaling()
         
         # 创建会话工厂
         # autocommit=False 手动管理事务，autoflush=False 延迟刷新
@@ -123,6 +163,23 @@ class DatabaseManager:
             否则每次建连都会拿到一个全新的空数据库。
         """
         return str(self.db_path).strip().lower() == ":memory:"
+
+    def _enable_wal_journaling(self) -> None:
+        """把库文件切到 WAL 日志模式（一次性设置，库文件级持久生效）。
+
+        WAL 写进库文件头，后续新连接自动沿用，因此不需要（也不应该）放进
+        ``connect`` hook：每条连接都执行 ``PRAGMA journal_mode=WAL`` 只会多拿
+        一次文件锁。``:memory:`` 不支持 WAL，直接跳过。
+        """
+        if self._is_memory_database():
+            return
+        try:
+            with self.engine.connect() as connection:
+                mode = connection.exec_driver_sql("PRAGMA journal_mode=WAL").scalar()
+            if str(mode).strip().lower() != "wal":
+                logger.warning("SQLite 未能切到 WAL 日志模式（当前 %s），将沿用默认日志模式", mode)
+        except Exception:
+            logger.exception("SQLite 切 WAL 日志模式失败，回退默认日志模式")
     
     def create_tables(self):
         """创建所有表

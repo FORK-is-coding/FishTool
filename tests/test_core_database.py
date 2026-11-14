@@ -126,8 +126,12 @@ def test_backup_auto_and_explicit_path(tmp_path):
         session.commit()
         session.add(LLMUsage(date="2030-01-01", model="uncommitted", total_tokens=9))
         session.flush()
-        # 断言 journal mode 而非 WAL 文件大小：文件何时落盘由 SQLite checkpoint 决定，
-        # 不能把实现细节（尤其连接池策略）绑进备份正确性测试。
+        # 只断言持久化的 journal_mode，不断言 -wal 文件大小：
+        # - WAL 是库文件级设置，由 DatabaseManager 初始化时设一次，之后所有连接沿用；
+        # - -wal 文件何时生成/清理由 SQLite 的 checkpoint 时机决定，连接池改用
+        #   NullPool（每个 Session 一条连接、用完即关）后这个时机不再可控；
+        # - 拿文件大小当断言，等于把连接池实现细节绑进备份正确性测试。
+        # 备份本身的正确性由下面的文件内容断言覆盖。
         with manager.engine.connect() as connection:
             assert connection.execute(text("PRAGMA journal_mode")).scalar_one().lower() == "wal"
 

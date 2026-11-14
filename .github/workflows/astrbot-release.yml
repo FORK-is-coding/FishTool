@@ -56,6 +56,8 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # 全量非桌面端测试本地约 15 分钟；给足余量避免慢机器误杀，也不必挂满默认的 6 小时上限。
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -93,6 +95,8 @@ jobs:
     needs: test
     if: startsWith(github.ref, 'refs/tags/astrbot-v') || (github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
+    # 构建插件包 + 推送 astrbot 分支 / 插件仓库；比测试给更宽的余量。
+    timeout-minutes: 60
     # 只有发布 job 需要写权限（推送 astrbot 分支 / 插件仓库），测试 job 保持只读。
     permissions:
       contents: write
