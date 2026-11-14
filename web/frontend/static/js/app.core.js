@@ -154,13 +154,19 @@ document.querySelectorAll('.nav-item').forEach(item => {
 async function apiRequest(url, options = {}, showError = true) {
     let responseStatus = 0;
     try {
-        const response = await fetch(`${API_BASE}${url}`, {
-            headers: {
-                'Content-Type': 'application/json',
-                ...options.headers
-            },
-            ...options
-        });
+        // 默认带 JSON 头，调用方显式传入的头优先覆盖。
+        // 顺序很关键：合并后的 headers 必须放在 {...options} 之后，否则调用方一传
+        // headers 就会把默认头整体覆盖掉；字符串 body 没有 Content-Type 时浏览器
+        // 会补 text/plain，FastAPI 的 pydantic body 直接 422——「01 正确排名」的
+        // 候选发现 / 发起任务两个写接口就是这么坏的。
+        // FormData 的 Content-Type（含 boundary）必须由浏览器自己生成，不能预设。
+        const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+        const mergedHeaders = Object.assign(
+            {},
+            isFormData ? {} : { 'Content-Type': 'application/json' },
+            options.headers || {}
+        );
+        const response = await fetch(`${API_BASE}${url}`, Object.assign({}, options, { headers: mergedHeaders }));
         responseStatus = response.status;
         
         if (!response.ok) {
