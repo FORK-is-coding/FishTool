@@ -481,11 +481,20 @@ def test_real_budget_yaml_blocks_at_category_limit(quota_env, frozen_now):
 
 
 def test_sqlite_connection_uses_wal_and_busy_timeout(quota_env):
-    """SQLite 连接必须开 WAL 且 busy_timeout=5000（规格 §2.6）。"""
+    """SQLite 连接必须是 WAL 且 busy_timeout 生效（规格 §2.6）。
+
+    busy_timeout 不再是写死的 5000：连接池改成每 Session 独占连接后它是并发写的
+    唯一兜底，默认值放宽到 15s 且可用 ``FISHTOOL_SQLITE_BUSY_TIMEOUT_MS`` 覆盖。
+    这里断言"实际生效值 == 配置值"，并保留一个下限，避免被设成 0/未生效。
+    """
+    from core.database import manager as db_manager_module
+
     connection = db_api.db_manager.engine.raw_connection()
     try:
         assert connection.execute('PRAGMA journal_mode').fetchone()[0].lower() == 'wal'
-        assert connection.execute('PRAGMA busy_timeout').fetchone()[0] == 5000
+        busy_timeout = connection.execute('PRAGMA busy_timeout').fetchone()[0]
+        assert busy_timeout == db_manager_module.SQLITE_BUSY_TIMEOUT_MS
+        assert busy_timeout >= 1000
     finally:
         connection.close()
 
