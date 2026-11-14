@@ -100,7 +100,11 @@ def test_closed_proxy():
 
 def test_local_token_never_reaches_iframe():
     proxy, client = make()
-    for path in ("analysis/benchmark/local-token", "comment/semantic/local-token"):
+    for path in (
+        "local-token",
+        "analysis/benchmark/local-token",
+        "comment/semantic/local-token",
+    ):
         out = run(proxy.handle(path, method="GET", query={}, body_json=None, username="astrbot"))
         assert out["data"]["body"]["data"]["token"] == "proxy-managed"
     assert not client.calls
@@ -151,6 +155,7 @@ def test_api_key_write_block_covers_patrol():
 def test_api_key_blocked_rules():
     assert api_key_blocked("api_key:1", "POST", "comment/monitor")
     assert api_key_blocked("api_key:1", "GET", "auth/status")
+    assert api_key_blocked("api_key:1", "GET", "local-token")
     assert api_key_blocked("api_key:1", "GET", "analysis/benchmark/local-token")
     assert not api_key_blocked("api_key:1", "GET", "comment/alerts")
     assert not api_key_blocked("astrbot", "POST", "config/llm")

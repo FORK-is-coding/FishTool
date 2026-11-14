@@ -15,7 +15,7 @@ from typing import Dict
 
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 
 from .base import Base, logger
 
@@ -72,8 +72,8 @@ class DatabaseManager:
     # 将数据持久化到表中
     - 自动创建数据库目录与所有表
     # 实例化对象并准备使用
-    - StaticPool 固定连接池，配合 check_same_thread=False
-      支持多线程/异步环境下共享引擎
+    - 文件库用 NullPool（每个 Session 独占连接），内存库用 StaticPool
+      复用唯一连接；配合 check_same_thread=False 支持多线程访问
     - 提供 get_session 获取独立会话（调用方负责关闭）
     # 读取数据并赋值给当前作用域变量
     - 提供 backup 备份与 drop_all_tables 清库（慎用）
@@ -93,14 +93,17 @@ class DatabaseManager:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         
         # 创建引擎
-        # StaticPool：固定单个连接，避免 SQLite 文件锁竞争
-        # check_same_thread=False：允许跨线程使用同一连接
+        # 文件库：NullPool 让每个 Session 独占一条连接，避免多个 Session 共用同一底层
+        # 连接时 commit/rollback 互相串扰（StaticPool 在并发事务下会互相回滚）。
+        # 内存库：:memory: 每个连接都是独立数据库，必须用 StaticPool 复用唯一连接。
+        # check_same_thread=False：允许跨线程使用同一连接（连接仍由池串行发放）。
+        pool_class = StaticPool if self._is_memory_database() else NullPool
         self.engine = create_engine(
             f"sqlite:///{self.db_path}",
             echo=False,
             # timeout 是 sqlite3 驱动级忙等待秒数，与 PRAGMA busy_timeout 同口径。
             connect_args={"check_same_thread": False, "timeout": SQLITE_BUSY_TIMEOUT_S},
-            poolclass=StaticPool
+            poolclass=pool_class
         )
         # 每条新连接都开 WAL + busy_timeout=5000，配额表与业务表共用同一库时不互相饿死。
         event.listen(self.engine, "connect", _apply_sqlite_pragmas)
@@ -111,6 +114,15 @@ class DatabaseManager:
         
         # 创建所有表
         self.create_tables()
+
+    def _is_memory_database(self) -> bool:
+        """判断当前引擎是否指向 SQLite 内存库。
+
+        Returns:
+            bool: ``db_path`` 为 ``:memory:`` 时为 True；内存库必须复用同一条连接，
+            否则每次建连都会拿到一个全新的空数据库。
+        """
+        return str(self.db_path).strip().lower() == ":memory:"
     
     def create_tables(self):
         """创建所有表

@@ -47,7 +47,7 @@ on:
         default: false
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: astrbot-release-${{ github.ref }}
@@ -93,6 +93,9 @@ jobs:
     needs: test
     if: startsWith(github.ref, 'refs/tags/astrbot-v') || (github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
+    # 只有发布 job 需要写权限（推送 astrbot 分支 / 插件仓库），测试 job 保持只读。
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }

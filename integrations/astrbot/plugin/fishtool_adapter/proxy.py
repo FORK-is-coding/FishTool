@@ -39,8 +39,13 @@ LONG_PREFIXES = (
     "hotspot/activities",
 )
 
-#: 前端先请求这两个接口拿 token 再带 X-Local-Token 写请求；真实 token 不交给 iframe，转发时由 client 注入。
-TOKEN_PATHS = {"analysis/benchmark/local-token", "comment/semantic/local-token"}
+#: 前端请求根路径或模块路径的 local-token 后再带 X-Local-Token 写请求；
+#: 真实 token 不交给 iframe，转发时由 client 从 supervisor 注入。
+TOKEN_PATHS = {
+    "local-token",
+    "analysis/benchmark/local-token",
+    "comment/semantic/local-token",
+}
 
 #: block_api_key_write 打开时，API Key 调用这些前缀的任意方法都会被拒。
 CREDENTIAL_PREFIXES = ("auth/", "config/", "config", "analysis/benchmark/", "comment/semantic/",

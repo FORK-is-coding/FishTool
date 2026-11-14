@@ -36,6 +36,8 @@ LLM接口封装 - OpenAI兼容接口
 import asyncio
 # 从 typing 导入符号
 from typing import List, Dict, Any, Optional, AsyncIterator
+# 用量计数的线程锁：SQLite 写入被移到线程池后，多个协程会并发累加
+import threading
 # 从 datetime 导入符号
 from datetime import datetime, date, timedelta
 # 导入模块
@@ -59,6 +61,66 @@ from core.config import config, LLM_DAILY_TOKEN_LIMIT_DEFAULT
 from core.database import get_session, LLMUsage
 
 logger = get_logger(__name__)
+
+#: 可重试的上游状态码：限流 + 网关/服务端临时故障。
+_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+#: 默认最多重试次数（不含首次请求）。
+LLM_MAX_RETRIES_DEFAULT = 2
+#: 默认批处理并发上限：避免一次 gather 上百个请求把上游打爆。
+LLM_MAX_CONCURRENCY_DEFAULT = 8
+#: 默认单批提示词数量；真正的并行度由 ``llm.max_concurrency`` 限制。
+LLM_BATCH_SIZE_DEFAULT = 100
+#: 指数退避基数与上限（秒）。
+LLM_RETRY_BACKOFF_BASE_S = 0.5
+LLM_RETRY_MAX_DELAY_S = 8.0
+
+
+def _coerce_retry_count(value: Any) -> int:
+    """把 ``llm.max_retries`` 规整为 0..10 的整数，非法值回退默认值。"""
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return LLM_MAX_RETRIES_DEFAULT
+    return max(0, min(count, 10))
+
+
+def _coerce_concurrency(value: Any) -> int:
+    """把 ``llm.max_concurrency`` 规整为 1..64 的整数，非法值回退默认值。"""
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return LLM_MAX_CONCURRENCY_DEFAULT
+    return max(1, min(count, 64))
+
+
+def _coerce_batch_size(value: Any) -> int:
+    """把 ``llm.batch_size`` 规整为 1..1000 的整数，非法值回退默认值。"""
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return LLM_BATCH_SIZE_DEFAULT
+    return max(1, min(count, 1000))
+
+
+def _retry_delay_seconds(response: Optional[httpx.Response], attempt: int) -> float:
+    """计算重试等待：优先 ``Retry-After``，否则指数退避。
+
+    Args:
+        response: 失败响应（连接错误时为 None）。
+        attempt: 已经失败的次数（从 0 开始）。
+
+    Returns:
+        float: 等待秒数，上限 ``LLM_RETRY_MAX_DELAY_S``。
+    """
+    if response is not None:
+        retry_after = response.headers.get('retry-after')
+        if retry_after:
+            try:
+                return min(max(float(retry_after), 0.0), LLM_RETRY_MAX_DELAY_S)
+            except ValueError:
+                # HTTP-date 形式的 Retry-After 暂不解析，回退指数退避。
+                logger.debug("忽略无法解析的 Retry-After: %r", retry_after)
+    return min(LLM_RETRY_BACKOFF_BASE_S * (2 ** attempt), LLM_RETRY_MAX_DELAY_S)
 
 
 def _coerce_daily_limit(value: Any) -> int:
@@ -273,6 +335,13 @@ class LLMClient:
         # 记录当前日期，跨天自动重置计数
         self.current_date = date.today()
         self.daily_tokens_used = 0
+        # 异步链路把用量落库移到线程池后，内存累加需要互斥。
+        self._usage_lock = threading.Lock()
+        # 重试与批处理上限在客户端构造时快照；配置保存后会重置全局单例。
+        self.max_retries = _coerce_retry_count(
+            config.get('llm.max_retries', LLM_MAX_RETRIES_DEFAULT))
+        self.max_concurrency = _coerce_concurrency(
+            config.get('llm.max_concurrency', LLM_MAX_CONCURRENCY_DEFAULT))
     
     async def __aenter__(self):
         """异步上下文管理器入口"""
@@ -300,19 +369,19 @@ class LLMClient:
         Args:
             estimated_tokens: 预计使用的Token数
         """
-        # 检查日期变更
-        # 新的一天重置累计用量
-        today = date.today()
-        # 边界/有效性检查
-        if today != self.current_date:
-            self.current_date = today
-            self.daily_tokens_used = 0
-        
+        # 日期重置与内存计数读取在同一把锁内完成，避免线程池中的并发请求互相覆盖。
+        with self._usage_lock:
+            today = date.today()
+            if today != self.current_date:
+                self.current_date = today
+                self.daily_tokens_used = 0
+            memory_used = self.daily_tokens_used
+
         # 已用量以数据库当日记录为准：各模块每次请求都会新建 LLMClient，重启也会清零内存计数，
         # 只看实例内计数会让每日限额形同虚设。取 max 兼容写库失败时内存计数更大的情况；
         # 数据库不可用时回退内存计数。并发请求可能各自通过预检，限额按软上限处理。
         db_used = _db_tokens_used_on(today)
-        used = self.daily_tokens_used if db_used is None else max(db_used, self.daily_tokens_used)
+        used = memory_used if db_used is None else max(db_used, memory_used)
 
         # 检查限额
         # 0 表示不限制：用量照常记账，但不拦截请求。
@@ -342,8 +411,10 @@ class LLMClient:
             module: 使用模块
         """
         total_tokens = prompt_tokens + completion_tokens
-        self.daily_tokens_used += total_tokens
-        
+        with self._usage_lock:
+            self.daily_tokens_used += total_tokens
+            used_after = self.daily_tokens_used
+
         # 保存到数据库
         # 便于跨进程/重启后仍能统计
         try:
@@ -380,7 +451,7 @@ class LLMClient:
         logger.info(
             f"Token使用: {total_tokens} "
             f"(输入: {prompt_tokens}, 输出: {completion_tokens}), "
-            f"今日累计: {self.daily_tokens_used}/{self.daily_token_limit}"
+            f"今日累计: {used_after}/{self.daily_token_limit}"
         )
     
     async def chat_completion(self,
@@ -416,7 +487,7 @@ class LLMClient:
         # 跳过全局日上限检查；用量照常写入 llm_usage。
         enforce_daily_limit = kwargs.pop('enforce_daily_limit', True)
         if enforce_daily_limit:
-            self._check_token_limit(estimated_tokens)
+            await asyncio.to_thread(self._check_token_limit, estimated_tokens)
 
         # 内部专用 kwarg：只用于本地记账/参数控制，绝不混入发往服务端的 payload。
         # - module: 用量归属标签（记录 LLMUsage 用）
@@ -440,54 +511,71 @@ class LLMClient:
                 else config.get('llm.temperature', 0.7)
             )
 
-        # 异常保护：局部失败不影响主流程
-        try:
-            # 赋值并准备后续使用
-            response = await self.client.post('/chat/completions', json=payload)
-            response.raise_for_status()
-            # 解析接口返回的 JSON 数据
-            # 将结果交回调用方
-            result = response.json()
-            
-            # 记录Token使用
-            # 从响应 usage 字段提取实际消耗
-            # 从数据中取出目标字段，供后续逻辑使用
-            if 'usage' in result:
-                # 赋值并准备后续使用
-                usage = result['usage']
-                self._record_token_usage(
-                    prompt_tokens=usage.get('prompt_tokens', 0),
-                    completion_tokens=usage.get('completion_tokens', 0),
-                    module=module
-                )
-            
-            return result
-            
-        except httpx.HTTPStatusError as e:
-            # 对模型不存在做可操作的中文提示，避免用户只能看到原始英文错误
-            response_text = e.response.text or ''
-            status_code = e.response.status_code
-            # 只保留状态码进 message（#108）。message 会经 ai_report['error'] 与
-            # /api/analysis/self-diagnosis 响应原样交给调用方，而上游错误体常回显
-            # API Key 片段、内部 trace id、请求片段；原始体只放 detail 属性。
-            # detail 不截断：它只在进程内供上层归类（错误码提取、semantic provider
-            # 关键词匹配），截断会把 JSON 报文切坏、把关键词切掉。
-            if 'model_not_found' in response_text or 'model does not exist' in response_text.lower():
-                message = f"LLM模型不存在：{self.model}。请在配置中改为 qwen-plus、qwen-max 或 qwen-turbo，并确认API Key已配置"
-            else:
-                message = f"API请求失败: HTTP {status_code}"
-            # 日志只记状态码，不落原始响应体（可能含密钥/敏感信息）
-            logger.error(f"LLM API请求失败: HTTP {status_code}")
-            # 在异常实例上附带状态码与原始细节，供上层（如 provider）归类后脱敏。
-            err = LLMAPIError(message)
-            err.status_code = status_code
-            err.detail = response_text
-            raise err
-        # 异常处理
-        except Exception as e:
-            logger.error(f"LLM请求异常: {e}", exc_info=True)
-            # 抛出异常中断流程
-            raise LLMError(f"请求失败: {e}")
+        # 429/5xx 与瞬时网络错误最多重试 self.max_retries 次；4xx 参数错误不重试。
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = await self.client.post('/chat/completions', json=payload)
+                response.raise_for_status()
+                result = response.json()
+
+                # SQLite 读写放到线程池，避免批处理时阻塞事件循环。
+                if 'usage' in result:
+                    usage = result['usage']
+                    await asyncio.to_thread(
+                        self._record_token_usage,
+                        prompt_tokens=usage.get('prompt_tokens', 0),
+                        completion_tokens=usage.get('completion_tokens', 0),
+                        module=module,
+                    )
+
+                return result
+
+            except httpx.HTTPStatusError as e:
+                status_code = e.response.status_code
+                if status_code in _RETRYABLE_STATUS_CODES and attempt < self.max_retries:
+                    delay = _retry_delay_seconds(e.response, attempt)
+                    logger.warning(
+                        "LLM API请求失败: HTTP %s，%.2fs 后重试(%s/%s)",
+                        status_code, delay, attempt + 1, self.max_retries,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                raise self._build_api_error(e) from e
+
+            except httpx.TransportError as e:
+                if attempt < self.max_retries:
+                    delay = _retry_delay_seconds(None, attempt)
+                    logger.warning(
+                        "LLM请求网络异常(%s)，%.2fs 后重试(%s/%s)",
+                        type(e).__name__, delay, attempt + 1, self.max_retries,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.error("LLM请求网络异常: %s", type(e).__name__)
+                raise LLMError(f"请求失败: {e}") from e
+
+            except Exception as e:
+                logger.error("LLM请求异常: %s", type(e).__name__, exc_info=True)
+                raise LLMError(f"请求失败: {e}") from e
+
+        raise LLMError("请求失败: 重试次数耗尽")
+
+    def _build_api_error(self, error: httpx.HTTPStatusError) -> LLMAPIError:
+        """把上游 HTTP 错误转换为对外脱敏的 ``LLMAPIError``。"""
+        response_text = error.response.text or ''
+        status_code = error.response.status_code
+        if 'model_not_found' in response_text or 'model does not exist' in response_text.lower():
+            message = (
+                f"LLM模型不存在：{self.model}。请在配置中改为 qwen-plus、qwen-max "
+                "或 qwen-turbo，并确认API Key已配置"
+            )
+        else:
+            message = f"API请求失败: HTTP {status_code}"
+        logger.error("LLM API请求失败: HTTP %s", status_code)
+        err = LLMAPIError(message)
+        err.status_code = status_code
+        err.detail = response_text
+        return err
     
     async def chat_completion_stream(self,
                                     messages: List[Dict[str, str]],
@@ -514,7 +602,7 @@ class LLMClient:
         # 同 chat_completion：enforce_daily_limit 在限额检查前 pop，不进请求体。
         enforce_daily_limit = kwargs.pop('enforce_daily_limit', True)
         if enforce_daily_limit:
-            self._check_token_limit(estimated_tokens)
+            await asyncio.to_thread(self._check_token_limit, estimated_tokens)
 
         # 内部专用 kwarg 不入 payload（与 chat_completion 对齐）
         kwargs.pop('module', None)
@@ -639,34 +727,33 @@ class LLMClient:
         Returns:
             回复列表
         """
-        batch_size = batch_size or config.get('llm.batch_size', 100)
-        results = []
-        
-        # 分批处理
-        # 每批内用 asyncio.gather 并发调用
-        for i in range(0, len(prompts), batch_size):
-            # 赋值并准备后续使用
-            batch = prompts[i:i + batch_size]
-            # 赋值并准备后续使用
+        batch_size = _coerce_batch_size(
+            batch_size if batch_size is not None else config.get(
+                'llm.batch_size', LLM_BATCH_SIZE_DEFAULT))
+        results: List[str] = [""] * len(prompts)
+        semaphore = asyncio.Semaphore(self.max_concurrency)
+
+        async def _run_one(index: int, prompt: str):
+            """在并发上限内执行一条提示词，失败时保留空串占位。"""
+            async with semaphore:
+                try:
+                    return index, await self.simple_chat(prompt, system, **kwargs)
+                except Exception as exc:  # noqa: BLE001 - 单条失败不能中断整批
+                    logger.error("批次%s处理失败: %s", index, exc)
+                    return index, ""
+
+        # 分批限制待调度任务数量；批次内仍由 semaphore 控制真实并发度。
+        for start in range(0, len(prompts), batch_size):
+            batch = prompts[start:start + batch_size]
             batch_results = await asyncio.gather(
-                *[self.simple_chat(p, system, **kwargs) for p in batch],
-                return_exceptions=True
+                *[
+                    _run_one(start + offset, prompt)
+                    for offset, prompt in enumerate(batch)
+                ]
             )
-            
-            # 处理异常
-            # 单条失败不影响整批，返回空串占位
-            # 将结果交回调用方
-            for j, result in enumerate(batch_results):
-                # 条件分支处理
-                if isinstance(result, Exception):
-                    logger.error(f"批次{i + j}处理失败: {result}")
-                    # 追加到列表
-                    results.append("")
-                # 分支判断
-                else:
-                    # 追加到列表
-                    results.append(result)
-        
+            for index, result in batch_results:
+                results[index] = result
+
         return results
     
     def get_daily_usage(self) -> Dict[str, int]:

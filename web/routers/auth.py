@@ -197,7 +197,11 @@ async def poll_login(request: QrPollRequest):
             qr = QRCodeLogin()
             cookie = qr._extract_cookie_from_response(data, set_cookie_headers)
             if not cookie or 'SESSDATA=' not in cookie:
-                logger.warning(f"[auth] code==0 但Cookie提取为空, url={data.get('url','')!r}, set_cookie={bool(set_cookie_headers)}")
+                logger.warning(
+                    "[auth] code==0 但Cookie提取为空, url_present=%s, set_cookie=%s",
+                    bool(data.get("url")),
+                    bool(set_cookie_headers),
+                )
                 return {"success": True, "status": "error",
                         "message": "登录成功但Cookie提取失败，请重新扫码", "user": None}
 

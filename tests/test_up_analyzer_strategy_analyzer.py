@@ -108,7 +108,10 @@ def test_init_uses_injected_client() -> None:
 
 def test_init_marks_unconfigured_when_client_creation_fails(monkeypatch) -> None:
     """自动创建客户端失败时应标记为未配置而非抛异常。"""
-    monkeypatch.setattr("modules.up_analyzer.strategy_analyzer.LLMClient", _UnconfiguredClient)
+    monkeypatch.setattr(
+        "modules.up_analyzer.strategy_analyzer.get_llm_client",
+        _UnconfiguredClient,
+    )
 
     analyzer = StrategyAnalyzer()
 
@@ -117,7 +120,10 @@ def test_init_marks_unconfigured_when_client_creation_fails(monkeypatch) -> None
 
 def test_init_succeeds_when_client_auto_configured(monkeypatch) -> None:
     """自动创建成功时应标记为已配置。"""
-    monkeypatch.setattr("modules.up_analyzer.strategy_analyzer.LLMClient", _AutoConfiguredClient)
+    monkeypatch.setattr(
+        "modules.up_analyzer.strategy_analyzer.get_llm_client",
+        _AutoConfiguredClient,
+    )
 
     analyzer = StrategyAnalyzer()
 

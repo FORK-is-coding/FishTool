@@ -1,0 +1,50 @@
+name: ci
+
+# 主分支 / PR 的通用质量门禁：
+# - 语法编译（compileall，覆盖 pytest 没导入到的模块）
+# - 异常处理规范（tools/check_exception_handling.py）
+# - 非桌面端测试（与 astrbot-release 使用同一套排除列表，CI 环境不装 Qt）
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "${{ matrix.python }}"
+          cache: pip
+      - name: Install engine deps (locked, without PySide6)
+        run: |
+          python integrations/astrbot/release_tools/build_plugin.py --out /tmp/probe
+          pip install -r /tmp/probe/engine_requirements.txt -r integrations/astrbot/tests/requirements-test.txt
+      - name: Compile sources
+        run: python -m compileall -q app.py core web modules llm bilibili integrations
+      - name: Exception policy
+        run: python tools/check_exception_handling.py
+      - name: Test (no desktop / Qt)
+        run: |
+          pytest -q -p no:cacheprovider \
+            --ignore-glob='tests/test_desktop_*' \
+            --ignore=tests/test_diagnosis_pdf_theme.py \
+            --ignore=tests/test_frontend_flex_gap_fallback.py \
+            --ignore=tests/test_frontend_intro.py \
+            --ignore=tests/test_frontend_qtwebengine_compat.py \
+            --ignore=tests/test_frontend_welcome_notice.py

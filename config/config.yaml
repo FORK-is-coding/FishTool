@@ -81,6 +81,8 @@ llm:
   api_key: ''
   batch_size: 100
   daily_token_limit: 2000000
+  max_concurrency: 8
+  max_retries: 2
   max_tokens: 2000
   model: deepseek-flash
   provider: openai

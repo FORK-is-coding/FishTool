@@ -40,7 +40,7 @@ B站运营工具箱 - 数据库模型
 
 数据库管理器（DatabaseManager）：
 - 使用 SQLite + SQLAlchemy ORM
-- StaticPool + check_same_thread=False 支持多线程访问
+- 文件库 NullPool / 内存库 StaticPool + check_same_thread=False 支持多线程访问
 - 提供建表、会话获取、备份、清库能力
 - 全局单例通过 init_database() 初始化
 

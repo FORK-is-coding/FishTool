@@ -149,23 +149,66 @@ document.querySelectorAll('.nav-item').forEach(item => {
 
 // ============ 工具函数 ============
 
+// 本机写请求 token：首次写请求前从 /api/local-token 获取并缓存。
+// 后端重启会换 token，遇到 403 local_token_required 时刷新一次再重试。
+let _localWriteToken = null;
+let _localWriteTokenPromise = null;
+
+async function fetchLocalWriteToken(force = false) {
+    if (force) _localWriteToken = null;
+    if (_localWriteToken) return _localWriteToken;
+    if (!_localWriteTokenPromise) {
+        _localWriteTokenPromise = (async () => {
+            try {
+                const response = await fetch(`${API_BASE}/local-token`, {
+                    headers: { 'Accept': 'application/json' }
+                });
+                if (!response.ok) return null;
+                const payload = await response.json();
+                _localWriteToken = (payload && payload.data && payload.data.token) || null;
+            } catch (error) {
+                console.warn('获取本机写请求 token 失败:', error);
+                _localWriteToken = null;
+            } finally {
+                _localWriteTokenPromise = null;
+            }
+            return _localWriteToken;
+        })();
+    }
+    return _localWriteTokenPromise;
+}
+
+// 与后端 web/main.py 的 _UNSAFE_METHODS 保持一致。
+function isUnsafeMethod(method) {
+    return ['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(method || 'GET').toUpperCase());
+}
+
 // 统一封装 fetch 请求：自动拼接 API_BASE、带 JSON 头；失败时可选提示。
-// showError=false 用于轮询类静默请求，避免高频失败打断用户操作。
-async function apiRequest(url, options = {}, showError = true) {
+// 写请求自动附带 X-Local-Token；showError=false 用于轮询类静默请求，避免高频失败打断用户操作。
+async function apiRequest(url, options = {}, showError = true, retried = false) {
     let responseStatus = 0;
+    let requestOptions = options;
+    if (isUnsafeMethod(options.method)) {
+        // 保留原语义：调用方传 headers 时整体覆盖默认头（含 Content-Type）。
+        const headers = Object.assign({}, options.headers || { 'Content-Type': 'application/json' });
+        if (!headers['X-Local-Token']) {
+            const token = await fetchLocalWriteToken();
+            if (token) headers['X-Local-Token'] = token;
+        }
+        requestOptions = Object.assign({}, options, { headers });
+    }
     try {
-        const response = await fetch(`${API_BASE}${url}`, {
-            headers: {
-                'Content-Type': 'application/json',
-                ...options.headers
-            },
-            ...options
-        });
+        const response = await fetch(`${API_BASE}${url}`, requestOptions);
         responseStatus = response.status;
         
         if (!response.ok) {
             // FastAPI 的 detail 可能是字符串，也可能是 {error_code, message} 结构。
             const payload = await response.json().catch(() => ({}));
+            if (response.status === 403 && payload && payload.detail === 'local_token_required' && !retried) {
+                // token 过期（服务重启）时刷新一次并重试原请求。
+                await fetchLocalWriteToken(true);
+                return apiRequest(url, options, showError, true);
+            }
             const detail = payload && payload.detail !== undefined ? payload.detail : payload;
             let message;
             if (typeof detail === 'string' && detail) {

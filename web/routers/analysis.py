@@ -60,7 +60,7 @@ from bilibili.rate_limiter import RateLimiter
 # 从 bilibili.cookie_pool 导入符号
 from bilibili.cookie_pool import get_cookie_pool
 # 从 llm.client 导入符号
-from llm.client import LLMClient
+from llm.client import get_llm_client
 # 从 modules.up_analyzer.data_fetcher 导入符号
 from modules.up_analyzer.data_fetcher import UPDataFetcher
 # 从 modules.up_analyzer.strategy_analyzer 导入符号
@@ -687,8 +687,8 @@ async def get_llm_status():
     用于前端控制"策略分析"按钮的可用状态。
     """
     try:
-        # 尝试实例化 LLMClient，成功即视为已配置
-        llm_client = LLMClient()
+        # 复用全局单例，避免状态探测反复创建未关闭的 HTTP 连接池
+        llm_client = get_llm_client()
         return {
             'success': True,
             'data': {

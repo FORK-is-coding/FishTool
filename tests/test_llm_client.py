@@ -147,6 +147,8 @@ class _FakeHTTPClient:
     def __init__(self) -> None:
         """初始化可配置的响应与调用记录。"""
         self.post_response = None
+        # 顺序响应队列：重试场景可依次返回 429/503 后再返回成功响应。
+        self.post_responses = []
         self.post_error = None
         self.stream_response = None
         self.stream_error = None
@@ -157,6 +159,11 @@ class _FakeHTTPClient:
     async def post(self, url, json=None, **kwargs):
         """记录请求并返回预置响应或抛预置异常。"""
         self.posts.append({"url": url, "json": json, "kwargs": kwargs})
+        if self.post_responses:
+            response = self.post_responses.pop(0)
+            if isinstance(response, BaseException):
+                raise response
+            return response
         if self.post_error is not None:
             raise self.post_error
         return self.post_response
@@ -225,10 +232,10 @@ class _Rec:
         self.request_count = request_count
 
 
-def _http_status_error(status_code: int, text: str) -> httpx.HTTPStatusError:
+def _http_status_error(status_code: int, text: str, headers=None) -> httpx.HTTPStatusError:
     """构造真实 httpx.HTTPStatusError，供 API 异常分支断言。"""
     request = httpx.Request("POST", "http://test.local/v1/chat/completions")
-    response = httpx.Response(status_code, text=text, request=request)
+    response = httpx.Response(status_code, text=text, headers=headers, request=request)
     return httpx.HTTPStatusError(f"HTTP {status_code}", request=request, response=response)
 
 
@@ -248,6 +255,8 @@ def llm_env(monkeypatch):
             "llm.max_tokens": 2000,
             "llm.batch_size": 2,
             "llm.daily_token_limit": 1000,
+            "llm.max_retries": 0,
+            "llm.max_concurrency": 2,
         },
         secrets={"llm_api_key": "sk-test"},
     )
@@ -579,7 +588,14 @@ def test_chat_completion_error_logs_only_status(llm_env):
     with pytest.raises(LLMAPIError):
         asyncio.run(client.chat_completion([{"role": "user", "content": "hi"}]))
 
-    messages = [str(args[0]) for level, args, _kwargs in llm_module.logger.calls]
+    messages = []
+    for _level, args, _kwargs in llm_module.logger.calls:
+        if not args:
+            continue
+        try:
+            messages.append(str(args[0]) % args[1:])
+        except (TypeError, ValueError):
+            messages.append(" ".join(str(item) for item in args))
     assert any("HTTP 500" in message for message in messages)
     assert all("sk-secret-in-body" not in message for message in messages)
 
@@ -592,6 +608,107 @@ def test_chat_completion_unexpected_error_wrapped(llm_env):
         asyncio.run(client.chat_completion([{"role": "user", "content": "hi"}]))
     assert type(excinfo.value) is LLMError
     assert "请求失败" in str(excinfo.value)
+
+
+def test_chat_completion_retries_429_and_honors_retry_after(llm_env, monkeypatch):
+    """429 应重试，并优先采用 Retry-After 的等待时间。"""
+    client = _make_client()
+    client.max_retries = 2
+    fake = client.client
+    fake.post_responses = [
+        _FakeResponse(
+            status_error=_http_status_error(
+                429,
+                "rate limited",
+                headers={"Retry-After": "1.25"},
+            )
+        ),
+        _FakeResponse(payload={"choices": [{"message": {"content": "ok"}}]}),
+    ]
+    sleeps = []
+
+    async def _fake_sleep(delay):
+        """记录等待时间，避免测试真的睡 1.25 秒。"""
+        sleeps.append(delay)
+
+    monkeypatch.setattr(llm_module.asyncio, "sleep", _fake_sleep)
+
+    result = asyncio.run(client.chat_completion([{"role": "user", "content": "hi"}]))
+
+    assert result["choices"][0]["message"]["content"] == "ok"
+    assert len(fake.posts) == 2
+    assert sleeps == [1.25]
+
+
+def test_chat_completion_retries_503_then_succeeds(llm_env, monkeypatch):
+    """503 作为临时服务端故障，应在退避后重试一次。"""
+    client = _make_client()
+    client.max_retries = 1
+    fake = client.client
+    fake.post_responses = [
+        _FakeResponse(status_error=_http_status_error(503, "temporarily unavailable")),
+        _FakeResponse(payload={"choices": [{"message": {"content": "recovered"}}]}),
+    ]
+    sleeps = []
+
+    async def _fake_sleep(delay):
+        """记录退避时长。"""
+        sleeps.append(delay)
+
+    monkeypatch.setattr(llm_module.asyncio, "sleep", _fake_sleep)
+
+    result = asyncio.run(client.chat_completion([{"role": "user", "content": "hi"}]))
+
+    assert result["choices"][0]["message"]["content"] == "recovered"
+    assert len(fake.posts) == 2
+    assert sleeps == [0.5]
+
+
+def test_chat_completion_does_not_retry_non_retryable_4xx(llm_env, monkeypatch):
+    """400 是调用参数问题，重试只会浪费请求并放大错误。"""
+    client = _make_client()
+    client.max_retries = 2
+    client.client.post_responses = [
+        _FakeResponse(status_error=_http_status_error(400, "invalid request")),
+    ]
+    sleeps = []
+
+    async def _fake_sleep(delay):
+        """若被调用则记录，用于断言未进入重试。"""
+        sleeps.append(delay)
+
+    monkeypatch.setattr(llm_module.asyncio, "sleep", _fake_sleep)
+
+    with pytest.raises(LLMAPIError) as excinfo:
+        asyncio.run(client.chat_completion([{"role": "user", "content": "hi"}]))
+
+    assert excinfo.value.status_code == 400
+    assert len(client.client.posts) == 1
+    assert sleeps == []
+
+
+def test_chat_completion_retries_transport_error(llm_env, monkeypatch):
+    """连接层瞬时错误也按指数退避重试。"""
+    client = _make_client()
+    client.max_retries = 1
+    request = httpx.Request("POST", "http://test.local/v1/chat/completions")
+    client.client.post_responses = [
+        httpx.ConnectError("network down", request=request),
+        _FakeResponse(payload={"choices": [{"message": {"content": "ok"}}]}),
+    ]
+    sleeps = []
+
+    async def _fake_sleep(delay):
+        """记录退避时长。"""
+        sleeps.append(delay)
+
+    monkeypatch.setattr(llm_module.asyncio, "sleep", _fake_sleep)
+
+    result = asyncio.run(client.chat_completion([{"role": "user", "content": "hi"}]))
+
+    assert result["choices"][0]["message"]["content"] == "ok"
+    assert len(client.client.posts) == 2
+    assert sleeps == [0.5]
 
 
 def test_chat_completion_blocks_when_token_limit_exceeded(llm_env):
@@ -883,6 +1000,32 @@ def test_batch_process_default_batch_size_from_config(llm_env):
 
     client.simple_chat = _fake_chat
     assert asyncio.run(client.batch_process(["x", "y", "z"])) == ["X", "Y", "Z"]
+
+
+def test_batch_process_limits_concurrency_and_preserves_order(llm_env):
+    """批处理并发不超过 max_concurrency，且结果按输入顺序返回。"""
+    client = _make_client()
+    client.max_concurrency = 2
+    active = 0
+    peak = 0
+
+    async def _fake_chat(prompt, system=None, **kwargs):
+        """模拟有耗时的请求并记录并发峰值。"""
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        try:
+            await asyncio.sleep(0.01)
+            return f"R:{prompt}"
+        finally:
+            active -= 1
+
+    client.simple_chat = _fake_chat
+    prompts = [f"p{i}" for i in range(6)]
+    results = asyncio.run(client.batch_process(prompts, batch_size=6))
+
+    assert results == [f"R:{prompt}" for prompt in prompts]
+    assert 1 <= peak <= 2
 
 
 # ---------------------------------------------------------------------------
