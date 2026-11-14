@@ -56,7 +56,6 @@ from core.exceptions import format_exception
 from core.error_policy import ErrorPriority, log_low_priority, report_exception
 from core.toast import emit_toast, register_toast_sink
 from core.monitor_service import ResidentCommentMonitor
-from llm.client import reset_llm_client
 # 排名服务由本层组装（modules 不反向 import web）；client 限定自己拥有、只关自己。
 from bilibili.api import BilibiliAPI
 from bilibili.cookie_pool import get_cookie_pool
@@ -71,10 +70,8 @@ from .routers import (
     hotspot, comment, config as config_router, logs, analysis,
     auth as auth_router, lottery, benchmark, comment_semantic, lottery_patrol,
 )
-# 本机同源校验（Host / Origin / X-Local-Token），用于配置接口防 DNS rebinding 读取
-from .local_guard import (
-    LOCAL_TOKEN_HEADER, check_local_write_request, get_local_guard, require_local_read,
-)
+# 本机同源校验（Host / Origin），用于配置接口防 DNS rebinding 读取
+from .local_guard import require_local_read
 
 # 统一使用 core.logger 的日志实例，避免重复配置
 logger = get_logger(__name__)
@@ -452,11 +449,6 @@ async def lifespan(app: FastAPI):
             except Exception as exc:  # noqa: BLE001 - 关闭失败不阻塞进程退出
                 logger.error("语义折叠服务关闭失败: %s", exc, exc_info=True)
         comment_semantic.set_semantic_service(None)
-        # 关闭共享 LLM 单例持有的 httpx 连接池；失败不阻塞进程退出。
-        try:
-            await reset_llm_client()
-        except Exception as exc:  # noqa: BLE001 - 关闭失败不阻塞进程退出
-            logger.error("LLM客户端关闭失败: %s", exc, exc_info=True)
         # 先摘掉 toast 桥，避免关闭阶段再向已断开的 WebSocket 广播。
         toast_unregister()
         logger.info("Web服务关闭中...")
@@ -550,32 +542,26 @@ async def no_cache_static_assets(request: Request, call_next):
     return response
 
 
-# 写请求统一防护
+# 跨站写请求拦截
 # CORS 白名单只阻止跨站页面「读取响应」，并不阻止请求被执行：任意网页都能用
 # fetch(..., {mode: 'no-cors'}) 发出不带 Content-Type 的 POST，而 FastAPI 仍会按 JSON
 # 解析请求体，于是可以跨站改写 LLM 配置、退出登录、增删监控目标等。
-# 这里对 /api/ 下的非安全方法统一做三层校验（与 require_local_write 同一套规则）：
-#   1. Origin 若存在必须同源（scheme/host/port，见 web/local_guard.py）；
-#   2. Host 必须在环回白名单内（防 DNS rebinding）；
-#   3. 必须携带 X-Local-Token。
-# 放在中间件而不是逐个路由挂依赖，是为了让新增写路由默认受保护，避免漏挂。
+# 浏览器跨站请求一定带 Origin 头；这里对 /api/ 下的非安全方法，只要 Origin 不是同源
+# （scheme/host/port，见 web/local_guard.py）就直接 403。无 Origin 的请求（同源 GET、CLI、
+# 桌面内嵌页、测试客户端）不受影响；需要 token 的写端点仍各自挂 require_local_write。
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
 @app.middleware("http")
-async def guard_api_writes(request: Request, call_next):
-    """统一拦截跨站 / 未授权的 /api 写请求。"""
-    if request.method in _UNSAFE_METHODS and request.url.path.startswith("/api/"):
-        error = check_local_write_request(request)
-        if error is not None:
-            logger.warning(
-                "已拦截写请求: %s %s reason=%s origin=%s",
-                request.method,
-                request.url.path,
-                error,
-                request.headers.get("origin"),
-            )
-            return JSONResponse(status_code=403, content={"detail": error})
+async def block_cross_site_writes(request: Request, call_next):
+    """拦截跨站写请求（Origin 必须与请求同源）。"""
+    if (
+        request.method in _UNSAFE_METHODS
+        and request.url.path.startswith("/api/")
+        and is_cross_site_origin(request.headers.get("origin"), request_port=request.url.port)
+    ):
+        logger.warning("已拦截跨站写请求: %s %s origin=%s", request.method, request.url.path, request.headers.get("origin"))
+        return JSONResponse(status_code=403, content={"detail": "cross_site_request_blocked"})
     return await call_next(request)
 
 
@@ -664,19 +650,6 @@ async def root(request: Request):
     # 将结果交回调用方
     """
     return templates.TemplateResponse(request=request, name="index.html")
-
-
-@app.get("/api/local-token", dependencies=[Depends(require_local_read)])
-async def issue_local_token():
-    """向同源页面 / CLI 下发本机写请求 token（不写日志、不进 URL）。
-
-    Returns:
-        dict: ``{success, data: {token, header}}``。
-    """
-    return {
-        "success": True,
-        "data": {"token": get_local_guard().issue_token(), "header": LOCAL_TOKEN_HEADER},
-    }
 
 
 @app.get("/api")

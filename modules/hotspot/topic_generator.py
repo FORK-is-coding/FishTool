@@ -1151,7 +1151,6 @@ async def demo_generate_topics():
     api = BilibiliAPI(cookie_pool=cookie_pool)
     
     # 初始化LLM（如果配置了）
-    llm_client = None
     try:
         llm_client = LLMClient()
         generator = TopicGenerator(api, llm_client)
@@ -1160,35 +1159,27 @@ async def demo_generate_topics():
         logger.warning("LLM未配置，将使用降级方案")
         generator = TopicGenerator(api, None)
     
-    try:
-        # 生成选题
-        result = await generator.generate_topics(
-            direction='游戏解说',
-            zone_name='游戏',
-            count=5,
-            use_llm=True
-        )
-
-        print(f"生成结果: {'使用LLM' if result.get('used_llm') else '降级方案'}")
+    # 生成选题
+    result = await generator.generate_topics(
+        direction='游戏解说',
+        zone_name='游戏',
+        count=5,
+        use_llm=True
+    )
+    
+    print(f"生成结果: {'使用LLM' if result.get('used_llm') else '降级方案'}")
+    # 输出信息到控制台
+    print(f"热门Tag: {', '.join(result['hot_tags'][:5])}")
+    # 输出信息到控制台
+    print(f"\n生成的选题:")
+    # 循环遍历处理
+    for i, topic in enumerate(result['topics'], 1):
         # 输出信息到控制台
-        print(f"热门Tag: {', '.join(result['hot_tags'][:5])}")
+        print(f"\n{i}. {topic['title']}")
         # 输出信息到控制台
-        print(f"\n生成的选题:")
-        # 循环遍历处理
-        for i, topic in enumerate(result['topics'], 1):
-            # 输出信息到控制台
-            print(f"\n{i}. {topic['title']}")
-            # 输出信息到控制台
-            print(f"   描述: {topic['description']}")
-            # 输出信息到控制台
-            print(f"   难度: {topic['difficulty']} | 关键词: {', '.join(topic['keywords'])}")
-    finally:
-        # 示例结束或中途异常时都释放 httpx 连接池。
-        if llm_client is not None:
-            try:
-                await llm_client.close()
-            except Exception as exc:  # noqa: BLE001 - 清理失败不应覆盖主流程结果
-                logger.warning("关闭LLM客户端失败: %s", exc)
+        print(f"   描述: {topic['description']}")
+        # 输出信息到控制台
+        print(f"   难度: {topic['difficulty']} | 关键词: {', '.join(topic['keywords'])}")
 
 
 # 边界/有效性检查

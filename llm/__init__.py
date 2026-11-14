@@ -9,11 +9,10 @@ LLM接口封装 - 模块初始化
 外部使用方式：
     from llm import LLMClient, get_llm_client
 """
-from .client import LLMClient, get_llm_client, is_llm_available, reset_llm_client
+from .client import LLMClient, get_llm_client, is_llm_available
 
 __all__ = [
     'LLMClient',
     'get_llm_client',
     'is_llm_available',
-    'reset_llm_client',
 ]

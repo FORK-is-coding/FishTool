@@ -8,8 +8,7 @@ Content-Type 的请求，FastAPI 仍按 JSON 解析请求体，从而跨站调�
 - 跨站 Origin 的写请求被中间件 403 拦截，且业务处理函数不执行；
 - 同源判定必须比较 scheme / host / port：任意本机端口的页面（5173 / 3000）算跨站（#57）；
 - 服务跑在自定义端口（如 ``start_web.bat 9000``）时，与请求同端口的页面算同源，HTTP 与 ``/ws`` 一致；
-- 无 Origin 的写请求（CLI）同样必须携带 ``X-Local-Token``，否则 403；
-- Host 不在白名单时写请求 403（防 DNS rebinding）；
+- 无 Origin 的请求（CLI、桌宠客户端、测试客户端）不受影响；
 - ``FISHTOOL_ALLOWED_HOSTS`` / ``FISHTOOL_ALLOWED_PORTS`` 覆盖与 local_guard 一致。
 """
 from __future__ import annotations
@@ -20,20 +19,9 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from web import local_guard as web_local_guard
 from web import main as web_main
 from web.local_guard import is_cross_site_origin
 from web.routers import config as config_module
-
-#: 测试用固定 token：每个用例都重置 LocalGuard 单例，保证跨用例不串。
-TEST_TOKEN = "test-local-token"
-AUTH = {"X-Local-Token": TEST_TOKEN}
-
-
-@pytest.fixture(autouse=True)
-def _fixed_local_token(monkeypatch):
-    """把进程内 LocalGuard 单例固定成已知 token，避免用例之间互相污染。"""
-    monkeypatch.setattr(web_local_guard, "_guard", web_local_guard.LocalGuard(token=TEST_TOKEN))
 
 
 @pytest.fixture()
@@ -84,8 +72,8 @@ def test_cross_site_post_without_content_type_is_blocked(client):
     ["http://127.0.0.1:8000", "http://localhost:8000", "http://localhost:8080", "http://[::1]:8000"],
 )
 def test_local_origin_is_allowed(client, origin):
-    """本机同源页面发起的写请求（携带 token）放行。"""
-    response = client.post("/api/config/reload", headers={"Origin": origin, **AUTH})
+    """本机同源页面发起的写请求放行。"""
+    response = client.post("/api/config/reload", headers={"Origin": origin})
     assert response.status_code == 200
     assert client.reload_calls == ["reload"]
 
@@ -102,7 +90,7 @@ def test_other_local_port_is_cross_site(client, origin):
 def test_allowed_ports_override_is_respected(client, monkeypatch):
     """显式配置 FISHTOOL_ALLOWED_PORTS 后，该端口的本机页面被视为同源。"""
     monkeypatch.setenv("FISHTOOL_ALLOWED_PORTS", "5173")
-    response = client.post("/api/config/reload", headers={"Origin": "http://127.0.0.1:5173", **AUTH})
+    response = client.post("/api/config/reload", headers={"Origin": "http://127.0.0.1:5173"})
     assert response.status_code == 200
     assert client.reload_calls == ["reload"]
 
@@ -112,52 +100,15 @@ def test_custom_server_port_same_origin_write_is_allowed(monkeypatch):
     monkeypatch.delenv("FISHTOOL_ALLOWED_HOSTS", raising=False)
     monkeypatch.delenv("FISHTOOL_ALLOWED_PORTS", raising=False)
     custom = TestClient(web_main.app, base_url="http://localhost:9000")
-    response = custom.post("/api/config/reload", headers={"Origin": "http://localhost:9000", **AUTH})
-    assert response.status_code == 200
+    response = custom.post("/api/config/reload", headers={"Origin": "http://localhost:9000"})
+    assert response.status_code != 403
 
 
-def test_request_without_origin_and_token_is_rejected(client):
-    """无 Origin 的写请求（CLI）也必须带 token，否则 403 且不进入业务处理。"""
+def test_request_without_origin_is_allowed(client):
+    """无 Origin 的写请求（CLI、桌面内嵌页、测试客户端）不受中间件影响。"""
     response = client.post("/api/config/reload")
-    assert response.status_code == 403
-    assert response.json() == {"detail": "local_token_required"}
-    assert client.reload_calls == []
-
-
-def test_request_without_origin_with_token_is_allowed(client):
-    """CLI / 桌面客户端带上 token 后，无 Origin 的写请求照常放行。"""
-    response = client.post("/api/config/reload", headers=AUTH)
     assert response.status_code == 200
     assert client.reload_calls == ["reload"]
-
-
-def test_same_origin_write_without_token_is_rejected(client):
-    """同源页面也不能绕过 token：Origin 合法但缺 token 仍然 403。"""
-    response = client.post("/api/config/reload", headers={"Origin": "http://127.0.0.1:8000"})
-    assert response.status_code == 403
-    assert response.json() == {"detail": "local_token_required"}
-    assert client.reload_calls == []
-
-
-def test_write_with_non_local_host_is_rejected(client):
-    """Host 不在白名单（DNS rebinding 场景）时，即使带 token 也拒绝。"""
-    response = client.post(
-        "/api/config/reload",
-        headers={**AUTH, "Host": "evil.example"},
-    )
-    assert response.status_code == 403
-    assert response.json() == {"detail": "local_host_required"}
-    assert client.reload_calls == []
-
-
-def test_local_token_endpoint_issues_token(client):
-    """同源页面可通过 /api/local-token 获取写请求 token。"""
-    response = client.get("/api/local-token")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["success"] is True
-    assert body["data"]["token"] == TEST_TOKEN
-    assert body["data"]["header"] == "X-Local-Token"
 
 
 def test_cross_site_get_is_not_blocked_by_write_guard(client):
@@ -169,7 +120,7 @@ def test_cross_site_get_is_not_blocked_by_write_guard(client):
 def test_allowed_hosts_override_is_respected(client, monkeypatch):
     """显式配置 FISHTOOL_ALLOWED_HOSTS 后，局域网来源可放行，与 local_guard 规则一致。"""
     monkeypatch.setenv("FISHTOOL_ALLOWED_HOSTS", "127.0.0.1,192.168.1.10")
-    response = client.post("/api/config/reload", headers={"Origin": "http://192.168.1.10:8000", **AUTH})
+    response = client.post("/api/config/reload", headers={"Origin": "http://192.168.1.10:8000"})
     assert response.status_code == 200
 
 

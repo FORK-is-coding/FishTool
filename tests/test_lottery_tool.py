@@ -145,11 +145,8 @@ def test_lottery_button_endpoints_return_non_404(monkeypatch: pytest.MonkeyPatch
         无；任一按钮接口为 404 时测试失败。
     """
     from fastapi.testclient import TestClient
-    from web.local_guard import get_local_guard
     from web.main import app
     from web.routers import lottery
-
-    auth = {"X-Local-Token": get_local_guard().issue_token()}
 
     class FakeLotteryService:
         """隔离 B 站网络请求，仅验证 Web 路由接线。"""
@@ -187,13 +184,13 @@ def test_lottery_button_endpoints_return_non_404(monkeypatch: pytest.MonkeyPatch
         "estimated_seconds": 0, "result": {}, "started_monotonic": 0,
     }
 
-    with TestClient(app, base_url="http://127.0.0.1:8000") as client:
+    with TestClient(app) as client:
         checks = [
-            ("内容预览", client.post("/api/lottery/preview", json={"target": "BV1xx411c7mD"}, headers=auth), 200),
-            ("真人筛选", client.post("/api/lottery/filter/tasks", json={"target": "BV1xx411c7mD"}, headers=auth), 202),
-            ("单UID快筛", client.post("/api/lottery/quick-filter", json={"uid": 42}, headers=auth), 200),
-            ("中奖名单校验", client.post("/api/lottery/verify-winners", json={"winners": [{"uid": 42}]}, headers=auth), 200),
-            ("随机抽奖", client.post("/api/lottery/draw/tasks", json={"target": "BV1xx411c7mD"}, headers=auth), 202),
+            ("内容预览", client.post("/api/lottery/preview", json={"target": "BV1xx411c7mD"}), 200),
+            ("真人筛选", client.post("/api/lottery/filter/tasks", json={"target": "BV1xx411c7mD"}), 202),
+            ("单UID快筛", client.post("/api/lottery/quick-filter", json={"uid": 42}), 200),
+            ("中奖名单校验", client.post("/api/lottery/verify-winners", json={"winners": [{"uid": 42}]}), 200),
+            ("随机抽奖", client.post("/api/lottery/draw/tasks", json={"target": "BV1xx411c7mD"}), 202),
             ("任务轮询", client.get("/api/lottery/tasks/route-proof"), 200),
         ]
 
@@ -345,17 +342,12 @@ def test_lottery_routes_are_mounted() -> None:
 def test_verify_winners_without_draw_returns_product_message(monkeypatch: pytest.MonkeyPatch) -> None:
     """服务端没有中奖名单时必须返回前端可直接展示的产品提示。"""
     from fastapi.testclient import TestClient
-    from web.local_guard import get_local_guard
     from web.main import app
     from web.routers import lottery
 
     monkeypatch.setattr(lottery, "_latest_winners", [])
-    with TestClient(app, base_url="http://127.0.0.1:8000") as client:
-        response = client.post(
-            "/api/lottery/verify-winners",
-            json={},
-            headers={"X-Local-Token": get_local_guard().issue_token()},
-        )
+    with TestClient(app) as client:
+        response = client.post("/api/lottery/verify-winners", json={})
 
     assert response.status_code == 400
     assert response.json()["detail"] == "请先进行抽奖！"

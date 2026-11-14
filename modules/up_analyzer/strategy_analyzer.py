@@ -45,7 +45,7 @@ from core.logger import get_logger
 from core.exceptions import (
     LLMError, LLMNotConfiguredError, LLMOutputTruncatedError, TokenLimitExceededError,
 )
-from llm.client import LLMClient, configured_max_tokens, get_llm_client, raise_if_truncated
+from llm.client import LLMClient, configured_max_tokens, raise_if_truncated
 
 logger = get_logger(__name__)
 
@@ -68,7 +68,7 @@ class StrategyAnalyzer:
             self.has_llm = True
         else:
             try:
-                self.llm_client = get_llm_client()
+                self.llm_client = LLMClient()
                 self.has_llm = True
                 logger.info("[策略分析] LLM已配置")
             except LLMNotConfiguredError:

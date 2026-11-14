@@ -171,7 +171,7 @@ def client(monkeypatch):
     monkeypatch.setattr(analysis_module, "SelfAnalyzer", _FakeSelfAnalyzer)
     monkeypatch.setattr(analysis_module, "ReportGenerator", _FakeReportGenerator)
     monkeypatch.setattr(analysis_module, "AIDiagnosisReporter", _FakeAIReporter)
-    monkeypatch.setattr(analysis_module, "get_llm_client", lambda: _FakeLLMClient())
+    monkeypatch.setattr(analysis_module, "LLMClient", _FakeLLMClient)
     monkeypatch.setattr(analysis_module, "_analysis_tasks", {})
     monkeypatch.setattr(analysis_module, "_run_analysis_task", _noop_async)
 

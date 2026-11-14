@@ -1317,15 +1317,8 @@ def test_web_main_config_manager_follows_put(runtime_env, monkeypatch):
     # 真实 lifespan；conftest 已隔离 DB 与常驻监控，这里让运行时单例指向临时目录实例
     monkeypatch.setattr(web_main, "runtime_config", runtime, raising=False)
     # 走真实 app：显式用本机 Host，与浏览器 / 桌面端访问一致（/api/config 可能挂本机 Host 校验）
-    from web.local_guard import get_local_guard
-
     with TestClient(web_main.app, base_url="http://127.0.0.1:8000") as client:
-        # 全局写中间件要求 X-Local-Token（与前端 apiRequest 行为一致）。
-        response = client.put(
-            "/api/config/",
-            json={"key": "monitor.check_interval", "value": 77},
-            headers={"X-Local-Token": get_local_guard().issue_token()},
-        )
+        response = client.put("/api/config/", json={"key": "monitor.check_interval", "value": 77})
         assert response.status_code == 200
         assert web_main.config_manager.get("monitor.check_interval") == 77
         monitor = web_main.monitor_service

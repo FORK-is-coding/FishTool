@@ -512,8 +512,6 @@ class ConfigManager:
                 "max_tokens": 2000,        # 单次请求最大token数
                 "temperature": 0.7,        # 温度参数：控制输出的随机性（0-1）
                 "batch_size": 100,         # 批量处理评论的数量
-                "max_concurrency": 8,      # 批量调用时的最大并发数
-                "max_retries": 2,          # 429/5xx/网络瞬断的最大重试次数
                 # 每日 token 用量上限（所有 AI 功能共用，0 表示不限制）
                 "daily_token_limit": LLM_DAILY_TOKEN_LIMIT_DEFAULT,
                 # 新安装直接带迁移标记，避免再走一次旧默认值迁移

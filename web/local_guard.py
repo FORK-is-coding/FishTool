@@ -7,11 +7,9 @@
    放在请求头 ``X-Local-Token``，**不进 URL、不进日志**；
 2. **同源校验**：Host 默认只允许环回地址；带 Origin 时必须是同源（scheme + host + port
    三者都匹配），任意本机端口的页面不算同源；
-3. **写请求 CSRF 防护**：``web/main.py`` 的全局中间件统一校验所有 ``/api/`` 下的
-   POST/PUT/PATCH/DELETE；缺 token / 跨站一律 403。需要单独声明的路由仍可复用
-   ``require_local_write``，但不再依赖每个写端点逐个挂载。
+3. **写请求 CSRF 依赖**：写端点挂 ``require_local_write``，缺 token / 跨站一律 403。
 
-其它模块可复用同一套依赖，不复制第二套鉴权系统。
+其它模块（如 02 watch 写端点）可复用同一依赖，不复制第二套鉴权系统。
 生产网络部署、多账号权限另立需求，不在此处假装实现。
 """
 from __future__ import annotations
@@ -292,29 +290,6 @@ async def require_local_write(
     if not guard.verify_token(x_local_token):
         # 无 Origin 的 CLI 请求同样必须带 token
         raise HTTPException(status_code=403, detail='local_token_required')
-
-
-def check_local_write_request(request: Request) -> Optional[str]:
-    """中间件用的写请求校验（Host + Origin + token），不抛异常。
-
-    供 ``web.main`` 的全局写拦截中间件调用：所有 ``/api/`` 下的
-    POST/PUT/PATCH/DELETE 都走同一套规则，新增路由不会因为忘记挂依赖而裸奔。
-
-    Args:
-        request: FastAPI 请求对象。
-
-    Returns:
-        Optional[str]: 校验失败时返回稳定的错误 detail（与 ``require_local_write``
-        的 detail 一致），通过时返回 None。
-    """
-    guard = get_local_guard()
-    if is_cross_site_origin(request.headers.get('origin'), request_port=request.url.port):
-        return 'cross_site_request_blocked'
-    if not guard.is_local_host(request.headers.get('host')):
-        return 'local_host_required'
-    if not guard.verify_token(request.headers.get(LOCAL_TOKEN_HEADER)):
-        return 'local_token_required'
-    return None
 
 
 async def require_local_read(request: Request) -> None:
