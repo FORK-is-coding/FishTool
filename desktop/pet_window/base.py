@@ -41,6 +41,7 @@ class PetWindowBase:
     STATE_DRAGGING = 1  # 拖拽
     STATE_CLICKED = 2  # 点击
     STATE_NOTIFY = 3  # 通知
+    STATE_FLYING = 4  # 投掷飞行
 
     def __init__(self, ws_port: int = 8000):
         """初始化桌宠窗口
@@ -80,7 +81,8 @@ class PetWindowBase:
             self.STATE_IDLE: None,  # 待机图
             self.STATE_DRAGGING: None,  # 拖拽图
             self.STATE_CLICKED: None,  # 点击图
-            self.STATE_NOTIFY: None  # 通知图
+            self.STATE_NOTIFY: None,  # 通知图
+            self.STATE_FLYING: None  # 飞行图（投掷中）
         }
         
         self.init_ui()
@@ -204,11 +206,14 @@ class PetWindowBase:
         - 橙色：拖拽中
         - 浅蓝：点击
         - 粉色：通知状态
+        - 淡紫：投掷飞行（未放 assets/飞行.png 时用它兜底）
         """
         # 从项目资源目录读取素材；加载失败时保留同尺寸占位图。
         asset_paths = {
             self.STATE_IDLE: next((root / "待机.png" for root in PET_ASSET_DIRS if (root / "待机.png").is_file()), PET_ASSET_DIRS[-1] / "待机.png"),
             self.STATE_DRAGGING: next((root / "拖拽.png" for root in PET_ASSET_DIRS if (root / "拖拽.png").is_file()), PET_ASSET_DIRS[-1] / "拖拽.png"),
+            # 飞行素材尚未提供：缺失时自动回落到淡紫占位圆，放上 assets/飞行.png 即生效。
+            self.STATE_FLYING: next((root / "飞行.png" for root in PET_ASSET_DIRS if (root / "飞行.png").is_file()), PET_ASSET_DIRS[-1] / "飞行.png"),
         }
         colors = {
             self.STATE_IDLE: QColor(100, 181, 246),
@@ -223,7 +228,8 @@ class PetWindowBase:
             self.STATE_IDLE: QColor(100, 181, 246),  # 蓝色 - 待机
             self.STATE_DRAGGING: QColor(255, 183, 77),  # 橙色 - 拖拽
             self.STATE_CLICKED: QColor(129, 212, 250),  # 浅蓝 - 点击
-            self.STATE_NOTIFY: QColor(251, 114, 153)  # 粉色 - 通知
+            self.STATE_NOTIFY: QColor(251, 114, 153),  # 粉色 - 通知
+            self.STATE_FLYING: QColor(176, 158, 232)  # 淡紫 - 投掷飞行
         }
         
         # 为每个状态绘制圆形占位图

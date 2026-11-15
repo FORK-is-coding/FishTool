@@ -12,8 +12,9 @@
 
 二、PetWindow 桌宠窗口
 - 无边框 + 置顶 + 透明背景悬浮窗
-- 四种状态：待机/拖拽/点击/通知（对应不同颜色占位图）
+- 五种状态：待机/拖拽/点击/通知/投掷飞行（对应不同颜色占位图）
 - 拖拽移动：鼠标按下记录偏移，移动实时更新位置
+- 投掷惯性：快速拖动后松手按释放速度滑行，只在单屏内反弹并逐渐减速
 # 用新值覆盖旧值，保持数据一致
 - 通知气泡：收到 alert 消息显示 5 秒后自动隐藏
 # 将内容呈现到界面上
@@ -72,10 +73,11 @@ from .ws_mixin import WsMixin
 from .notify_mixin import NotifyMixin
 from .menu_mixin import MenuMixin
 from .drag_mixin import DragMixin
+from .inertia_mixin import InertiaMixin
 from .lifecycle_mixin import LifecycleMixin
 
 
-class PetWindow(PetWindowBase, WsMixin, NotifyMixin, MenuMixin, DragMixin, LifecycleMixin, QWidget):
+class PetWindow(PetWindowBase, WsMixin, NotifyMixin, MenuMixin, DragMixin, LifecycleMixin, InertiaMixin, QWidget):
     """桌宠悬浮窗
     
     无边框置顶透明窗口，支持拖拽与消息通知展示。
@@ -86,6 +88,7 @@ class PetWindow(PetWindowBase, WsMixin, NotifyMixin, MenuMixin, DragMixin, Lifec
     - STATE_DRAGGING: 拖拽中（橙色）
     - STATE_CLICKED: 点击（浅蓝）
     - STATE_NOTIFY: 通知（粉色）
+    - STATE_FLYING: 投掷飞行（淡紫占位，可换 assets/飞行.png）
     """
     pass
 

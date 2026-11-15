@@ -36,6 +36,10 @@ class LifecycleMixin:
         logger.info("[桌宠] 窗口关闭")
         self.hide_menu()
         self._menu_hide_timer.stop()
+        # 投掷飞行的计时器必须在关窗前停掉，否则窗口销毁后仍会收到 tick。
+        inertia_stop = getattr(self, "_inertia_stop", None)
+        if inertia_stop is not None:
+            inertia_stop(save_position=False)
         if hasattr(self, "_notification_timer"):
             self._notification_timer.stop()
         QApplication.instance().removeEventFilter(self)
