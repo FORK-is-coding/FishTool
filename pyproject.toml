@@ -1,12 +1,6 @@
-# FishTool 依赖清单（uv 管理，锁文件为 uv.lock）。
-# 运行依赖与 requirements.txt 保持同一组锁定版本，二者必须同步修改：
-# requirements.txt 仍是 AstrBot 插件打包（build_plugin.py）与 CI 的依赖源头。
-# 注意：aiohttp 3.9.1 / pydantic-core 2.14.5 没有 Python 3.13 的 Windows wheel，
-# 因此上界锁在 <3.13（与 QUICKSTART.md「Python 3.11 或 3.12」一致）。
-
 [project]
-name = "fishtool"
-version = "0.1.0"
+name = "FishTool"
+version = "0.2.4"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     # 网络请求
@@ -47,8 +41,6 @@ dependencies = [
     "pydantic-core==2.14.5",
 ]
 
-# 测试依赖：uv sync 默认一并安装（uv run pytest 可直接用）。
-# 版本下限与 integrations/astrbot/tests/requirements-test.txt 保持一致。
 [dependency-groups]
 dev = [
     "pytest>=8",
@@ -56,5 +48,4 @@ dev = [
 ]
 
 [tool.uv]
-# uv 缓存（C 盘）与本项目（D 盘）不在同一磁盘，硬链接不可用；固定 copy 避免 sync 每次告警。
 link-mode = "copy"
