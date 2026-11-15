@@ -19,7 +19,8 @@ rem    1. If FishTool already answers /health on the port (e.g. the
 rem       desktop app is running), just open the browser.
 rem    2. Look for Python 3.11/3.12 in this order: .venv, venv, python
 rem       on PATH, py -3.12, py -3.11. Prefer one with the project deps
-rem       installed; otherwise offer to run pip install -r requirements.txt.
+rem       installed; otherwise offer to install deps via "uv sync --frozen"
+rem       when uv is on PATH, or fall back to pip install -r requirements.txt.
 rem    3. Poll /health in the background and open http://localhost:PORT
 rem       once the server is ready.
 rem    4. Run "python app.py web" in the foreground (127.0.0.1 only).
@@ -97,17 +98,22 @@ goto :run
 :install_deps
 echo [提示] 找到了 Python，但还没装项目依赖：
 %PY_NODEPS% -c "import sys; print('       ' + sys.executable)"
+rem Prefer uv when available: the project ships pyproject.toml + uv.lock, so
+rem "uv sync --frozen" rebuilds the exact locked env in .venv (no pip needed).
+where uv >nul 2>&1
+if not errorlevel 1 goto :uv_install
 if "%FISHTOOL_NONINTERACTIVE%"=="1" (
-    echo [错误] 请先运行：pip install -r requirements.txt
+    echo [错误] 请先运行：uv sync（推荐）或 pip install -r requirements.txt
     set "RC=1"
     goto :end
 )
 choice /c YN /m "是否现在安装依赖（pip install -r requirements.txt）"
 if errorlevel 2 (
-    echo [提示] 已取消。手动安装：pip install -r requirements.txt
+    echo [提示] 已取消。手动安装：uv sync 或 pip install -r requirements.txt
     set "RC=1"
     goto :end
 )
+:pip_install
 %PY_NODEPS% -m pip install -r requirements.txt
 if errorlevel 1 (
     echo [错误] 依赖安装失败，请查看上面的 pip 输出。
@@ -122,6 +128,28 @@ if errorlevel 1 (
     echo        python -m venv .venv  然后  .venv\Scripts\python -m pip install -r requirements.txt
 )
 set "PY=%PY_NODEPS%"
+goto :run
+
+:uv_install
+if "%FISHTOOL_NONINTERACTIVE%"=="1" goto :uv_sync
+choice /c YN /m "检测到 uv，是否用锁文件安装依赖（uv sync --frozen，推荐）"
+if errorlevel 2 (
+    echo [提示] 已取消。手动安装：uv sync 或 pip install -r requirements.txt
+    set "RC=1"
+    goto :end
+)
+:uv_sync
+uv sync --frozen
+if errorlevel 1 (
+    echo [错误] uv sync 失败。若提示锁文件与 pyproject.toml 不同步，请先运行：uv lock
+    set "RC=1"
+    goto :end
+)
+if exist "%CD%\.venv\Scripts\python.exe" (
+    set "PY=%CD%\.venv\Scripts\python.exe"
+) else (
+    set "PY=%PY_NODEPS%"
+)
 
 rem ---------- start ----------
 :run

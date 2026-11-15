@@ -38,7 +38,7 @@ FishTool的目标是成为开源、免费、共创、普惠、为所有视频创
 2. 下载本项目：页面右上角 **Code → Download ZIP** 解压，或者 `git clone`。
 3. 双击项目根目录的 **`start_web.bat`**。
 
-第一次运行会问你是否安装依赖，按 `Y` 回车。装好后浏览器会自动打开 http://localhost:8000 。之后再双击就直接启动。
+第一次运行会问你是否安装依赖，按 `Y` 回车（装有 [uv](https://docs.astral.sh/uv/) 时优先用锁文件 `uv sync` 安装，否则用 pip）。装好后浏览器会自动打开 http://localhost:8000 。之后再双击就直接启动。
 
 - 黑色窗口就是服务本身，用的时候别关；关掉窗口或按 `Ctrl+C` 就停止。
 - 已经开着桌面版（exe软件）时双击它，会直接打开网页。
@@ -46,7 +46,17 @@ FishTool的目标是成为开源、免费、共创、普惠、为所有视频创
 
 ### 其他启动方式
 
-先在项目目录运行一次 `pip install -r requirements.txt`，然后：
+先在项目目录安装一次依赖，然后：
+
+```bash
+# 推荐：用 uv 按锁文件创建 .venv 并安装（自动含测试依赖）
+uv sync
+
+# 或用 pip（装有 Python 3.11/3.12 即可）
+pip install -r requirements.txt
+```
+
+之后用 `uv run python app.py ...` 或直接 `.venv\Scripts\python app.py ...`（uv 会自动选用项目 `.venv`）：
 
 | 命令 | 效果 |
 | --- | --- |
@@ -178,6 +188,10 @@ AI 的 Token 用量可以在「配置」页的「AI大模型用量统计」里�
 ## 打包成 exe
 
 ```bash
+# 推荐：uv sync 之后用项目环境打包
+uv run pyinstaller --clean --noconfirm build.spec
+
+# 或者，在已装好 pyinstaller 的 pip 环境里
 pyinstaller --clean --noconfirm build.spec
 ```
 

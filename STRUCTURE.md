@@ -4,7 +4,8 @@
 FishTool/
 ├── app.py                       # 唯一启动入口（默认桌面版；app.py web 为纯 Web）
 ├── start_web.bat                # Windows 一键启动 Web 版并打开浏览器
-├── requirements.txt             # 依赖列表
+├── requirements.txt             # 依赖列表（AstrBot 插件打包 / CI 的依赖源头）
+├── pyproject.toml / uv.lock     # uv 项目定义与依赖锁文件（本地开发环境）
 ├── build.spec                   # PyInstaller 打包配置
 ├── README.md / QUICKSTART.md    # 项目说明与上手步骤
 ├── STRUCTURE.md                 # 本文件

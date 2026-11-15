@@ -1,0 +1,52 @@
+[project]
+name = "FishTool"
+version = "0.2.4"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    # 网络请求
+    "aiohttp==3.9.1",
+    # 加密
+    "cryptography==41.0.7",
+    "PyYAML==6.0.1",
+    # 网络请求
+    "requests==2.31.0",
+    # SQLAlchemy
+    "SQLAlchemy==2.0.23",
+    # 桌面客户端：PySide6（Qt 6.12，WebEngine 内核 Chromium 140）。
+    # 必须写元包 PySide6：6.12 起 WebEngine 拆成独立 wheel PySide6_WebEngine，
+    # 只装 PySide6-Essentials / PySide6-Addons 会缺 QtWebEngineCore（桌面端 QWebEngineView 必需，红线勿删）。
+    # 不要与 PyQt5 装在同一环境：PyInstaller 会因收集到两个 Qt 绑定而中止打包。
+    "PySide6==6.12.0",
+    "websocket-client==1.6.4",
+    # Web框架
+    "fastapi==0.108.0",
+    # fastapi 0.108.0 要求 starlette>=0.29.0,<0.33.0；单独锁住，避免环境里残留的新版 starlette 被沿用
+    "starlette==0.32.0.post1",
+    # ASGI服务器
+    "uvicorn[standard]==0.25.0",
+    # 模板渲染（web/main.py Jinja2Templates 必需）
+    "jinja2==3.1.2",
+    # 网络请求（LLM OpenAI兼容调用）
+    "httpx==0.25.2",
+    # HTML解析
+    "beautifulsoup4==4.12.2",
+    # 二维码生成
+    "qrcode[pil]==7.4.2",
+    # PDF导出
+    "markdown2==2.4.12",
+    "pdfkit==1.0.0",
+    # 静态类型检查
+    "pydantic==2.5.2",
+    # pydantic 2.5.2 硬性要求 pydantic-core==2.14.5，二者必须同步改；版本不一致时 import pydantic 直接抛 SystemError
+    "pydantic-core==2.14.5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pyinstaller>=6.10,<7",
+    "psutil>=5.9",
+]
+
+[tool.uv]
+link-mode = "copy"
