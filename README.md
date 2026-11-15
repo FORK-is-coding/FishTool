@@ -188,6 +188,10 @@ AI 的 Token 用量可以在「配置」页的「AI大模型用量统计」里�
 ## 打包成 exe
 
 ```bash
+# 推荐：uv sync 之后用项目环境打包
+uv run pyinstaller --clean --noconfirm build.spec
+
+# 或者，在已装好 pyinstaller 的 pip 环境里
 pyinstaller --clean --noconfirm build.spec
 ```
 
