@@ -6,6 +6,15 @@
 确保已安装 Python 3.11 或 3.12（3.9 及以下无法运行源码；`requirements.txt` 锁定的 aiohttp / pydantic 版本没有 Python 3.13 的 Windows 安装包）
 
 ### 2. 安装依赖
+
+推荐用 [uv](https://docs.astral.sh/uv/)（按 `uv.lock` 锁文件安装，自动创建 `.venv`，含测试依赖）：
+
+```bash
+uv sync
+```
+
+或用 pip：
+
 ```bash
 pip install -r requirements.txt
 ```
@@ -23,7 +32,7 @@ python app.py
 **Windows 一键启动**：双击项目根目录的 `start_web.bat`。脚本会：
 
 - 依次查找 `.venv`、`venv`、PATH 上的 `python`、`py -3.12`、`py -3.11`，优先用已装好依赖的 Python 3.11/3.12；
-  只找到没装依赖的，会询问是否执行 `pip install -r requirements.txt`；
+  只找到没装依赖的，会询问是否安装：装有 uv 时执行 `uv sync --frozen`（按锁文件安装），否则执行 `pip install -r requirements.txt`；
 - 启动 Web 服务，`/health` 就绪后自动用默认浏览器打开 http://localhost:8000；
 - 端口上已经有 FishTool 在运行（例如开着桌面版）时，直接打开浏览器，不重复启动；
 - 端口被其他程序占用时直接提示，可换端口：在命令行运行 `start_web.bat 9000`。

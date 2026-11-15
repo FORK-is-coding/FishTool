@@ -1,0 +1,60 @@
+# FishTool 依赖清单（uv 管理，锁文件为 uv.lock）。
+# 运行依赖与 requirements.txt 保持同一组锁定版本，二者必须同步修改：
+# requirements.txt 仍是 AstrBot 插件打包（build_plugin.py）与 CI 的依赖源头。
+# 注意：aiohttp 3.9.1 / pydantic-core 2.14.5 没有 Python 3.13 的 Windows wheel，
+# 因此上界锁在 <3.13（与 QUICKSTART.md「Python 3.11 或 3.12」一致）。
+
+[project]
+name = "fishtool"
+version = "0.1.0"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    # 网络请求
+    "aiohttp==3.9.1",
+    # 加密
+    "cryptography==41.0.7",
+    "PyYAML==6.0.1",
+    # 网络请求
+    "requests==2.31.0",
+    # SQLAlchemy
+    "SQLAlchemy==2.0.23",
+    # 桌面客户端：PySide6（Qt 6.12，WebEngine 内核 Chromium 140）。
+    # 必须写元包 PySide6：6.12 起 WebEngine 拆成独立 wheel PySide6_WebEngine，
+    # 只装 PySide6-Essentials / PySide6-Addons 会缺 QtWebEngineCore（桌面端 QWebEngineView 必需，红线勿删）。
+    # 不要与 PyQt5 装在同一环境：PyInstaller 会因收集到两个 Qt 绑定而中止打包。
+    "PySide6==6.12.0",
+    "websocket-client==1.6.4",
+    # Web框架
+    "fastapi==0.108.0",
+    # fastapi 0.108.0 要求 starlette>=0.29.0,<0.33.0；单独锁住，避免环境里残留的新版 starlette 被沿用
+    "starlette==0.32.0.post1",
+    # ASGI服务器
+    "uvicorn[standard]==0.25.0",
+    # 模板渲染（web/main.py Jinja2Templates 必需）
+    "jinja2==3.1.2",
+    # 网络请求（LLM OpenAI兼容调用）
+    "httpx==0.25.2",
+    # HTML解析
+    "beautifulsoup4==4.12.2",
+    # 二维码生成
+    "qrcode[pil]==7.4.2",
+    # PDF导出
+    "markdown2==2.4.12",
+    "pdfkit==1.0.0",
+    # 静态类型检查
+    "pydantic==2.5.2",
+    # pydantic 2.5.2 硬性要求 pydantic-core==2.14.5，二者必须同步改；版本不一致时 import pydantic 直接抛 SystemError
+    "pydantic-core==2.14.5",
+]
+
+# 测试依赖：uv sync 默认一并安装（uv run pytest 可直接用）。
+# 版本下限与 integrations/astrbot/tests/requirements-test.txt 保持一致。
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "psutil>=5.9",
+]
+
+[tool.uv]
+# uv 缓存（C 盘）与本项目（D 盘）不在同一磁盘，硬链接不可用；固定 copy 避免 sync 每次告警。
+link-mode = "copy"
