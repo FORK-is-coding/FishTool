@@ -129,7 +129,7 @@
     color: var(--ink);
     border: 0;
     border-radius: var(--modal-radius);
-    background: #fff url("/static/tex/grain.svg");
+    background: var(--bg-secondary) url("/static/tex/grain.svg");
     box-shadow: 0 12px 40px rgba(0, 0, 0, .22);
     animation: app-modal-in 220ms var(--ease);
 }
@@ -249,7 +249,7 @@
     color: var(--ink);
     border: 0;
     border-radius: var(--r-card);
-    background: #fff url("/static/tex/grain.svg");
+    background: var(--bg-secondary) url("/static/tex/grain.svg");
     box-shadow: 0 6px 22px rgba(0, 0, 0, .14), 0 0 0 1px var(--paper-3);
     animation: app-toast-in 180ms ease-out;
     transition: opacity 180ms ease, transform 180ms ease;

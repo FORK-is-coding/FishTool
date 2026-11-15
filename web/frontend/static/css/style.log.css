@@ -5,7 +5,7 @@
     border: 0;
     padding: 20px 22px;
     border-radius: var(--r-card);
-    background-color: #fff;
+    background-color: var(--bg-secondary);
     box-shadow: var(--shadow-card);
     font: 500 12px/1.6 var(--f-mono);
     max-height: 600px;

@@ -9,7 +9,7 @@
     margin: 0 calc(var(--gutter) * -1);
     padding: 0 var(--gutter);
     overflow: hidden;
-    background: #fff;
+    background: var(--bg-secondary);
 }
 
 .hero-rings {
@@ -22,6 +22,11 @@
     background: url("/static/tex/rings.svg") center / contain no-repeat;
 }
 
+/* 暗色主题：测绘环换白线版本，避免深底上完全看不见。 */
+[data-theme="dark"] .hero-rings {
+    background-image: url("/static/tex/rings-dark.svg");
+}
+
 /* 空心大字：斜纹填充（background-clip:text + 斜纹） */
 .hero-hollow {
     position: absolute;
@@ -31,8 +36,8 @@
     color: transparent;
     font: 800 220px/1 var(--f-wide);
     letter-spacing: -.06em;
-    -webkit-text-stroke: 1px rgba(25, 25, 25, .10);
-    background: repeating-linear-gradient(-45deg, rgba(25, 25, 25, .14) 0 1px, transparent 1px 5px);
+    -webkit-text-stroke: 1px var(--hollow-stroke, rgba(25, 25, 25, .10));
+    background: repeating-linear-gradient(-45deg, var(--hollow-stripe, rgba(25, 25, 25, .14)) 0 1px, transparent 1px 5px);
     -webkit-background-clip: text;
     background-clip: text;
     pointer-events: none;
@@ -50,6 +55,11 @@
     pointer-events: none;
     background: url("/static/tex/wave-dots.svg") 0 0 / 480px 96px repeat-x;
     -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 35%, #000 80%, transparent);
+}
+
+/* 暗色主题：网点波形换白点版本。 */
+[data-theme="dark"] .hero-tape {
+    background-image: url("/static/tex/wave-dots-dark.svg");
 }
 
 .hero-meta {
@@ -110,7 +120,7 @@
     letter-spacing: -.035em;
 }
 
-/* 铭牌：深灰底 + 斜向排线 + 左侧黄 / 青绿短竖条，不用大块纯黄 */
+/* 铭牌：深灰底 + 斜向排线 + 左侧黄 / 青绿短竖条，不用大块纯黄（暗色下 --btn 反转为浅底，文字用令牌） */
 .hero-plate {
     position: relative;
     display: inline-flex;
@@ -118,7 +128,7 @@
     height: 34px;
     margin-top: 22px;
     padding: 0 20px 0 22px;
-    color: #eee;
+    color: var(--btn-primary-ink, #eee);
     border-radius: var(--r-btn);
     background: var(--btn) url("/static/tex/btn-hatch.svg") right center / auto 100% no-repeat;
     font: 600 13px/1 var(--f-body);
@@ -228,7 +238,7 @@
     margin: 0 auto;
     padding: 8px;
     border-radius: 2px;
-    background: #fff;
+    background: var(--bg-secondary);
     box-shadow: inset 0 0 0 1px var(--rule);
 }
 
@@ -255,7 +265,7 @@
     z-index: 3;
     width: 280px;
     margin-top: 0;
-    background-color: #fff;
+    background-color: var(--bg-secondary);
     box-shadow: var(--shadow-card);
 }
 
@@ -267,7 +277,12 @@
     padding: 88px var(--gutter) 72px;
     overflow: hidden;
     text-align: left;
-    background: #fff url("/static/tex/rings.svg") right -180px top -300px / 720px 720px no-repeat;
+    background: var(--bg-secondary) url("/static/tex/rings.svg") right -180px top -300px / 720px 720px no-repeat;
+}
+
+/* 暗色主题：旧版欢迎头图的测绘环与网点波形换暗色版本。 */
+[data-theme="dark"] .welcome-header {
+    background-image: url("/static/tex/rings-dark.svg");
 }
 
 /* 网点波形带 */
@@ -283,6 +298,10 @@
     background: url("/static/tex/wave-dots.svg") 0 0 / 360px 72px repeat-x;
     -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 35%, #000 80%, transparent);
     opacity: .7;
+}
+
+[data-theme="dark"] .welcome-header::before {
+    background-image: url("/static/tex/wave-dots-dark.svg");
 }
 
 .welcome-header::after {

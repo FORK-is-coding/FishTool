@@ -207,7 +207,7 @@
 }
 
 .semantic-chip-warn {
-    background-color: #fdecea;
+    background-color: var(--danger-soft, #fdecea);
     color: var(--danger, #c0392b);
 }
 

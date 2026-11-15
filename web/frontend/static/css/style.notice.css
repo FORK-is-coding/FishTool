@@ -8,7 +8,7 @@
     padding: 34px 40px 30px;
     overflow-x: hidden;
     overflow-y: auto;
-    background-color: #fff;
+    background-color: var(--bg-secondary);
     background-image:
         url("/static/tex/card-code.svg"),
         linear-gradient(180deg, rgba(255, 255, 255, .93) 0, rgba(255, 255, 255, .93) 56%, rgba(255, 255, 255, .76) 100%),
@@ -17,6 +17,15 @@
     background-size: 52px 9px, 100% 100%, 104px 104px, 12px 12px;
     background-repeat: no-repeat, no-repeat, repeat, repeat;
     background-position: left 40px bottom 46px, 0 0, left -1px bottom -1px, left bottom;
+}
+
+/* 暗色主题：面板纹理与压白渐变整体换暗色版本。 */
+[data-theme="dark"] .app-modal.welcome-notice-modal {
+    background-image:
+        url("/static/tex/card-code-dark.svg"),
+        linear-gradient(180deg, rgba(30, 31, 34, .94) 0, rgba(30, 31, 34, .94) 56%, rgba(30, 31, 34, .78) 100%),
+        url("/static/tex/card-block-dark.svg"),
+        url("/static/tex/card-field-dark.svg");
 }
 
 /* 内容压在空心大字之上 */
@@ -35,8 +44,8 @@
     color: transparent;
     font: 800 64px/1 var(--f-wide);
     letter-spacing: -.06em;
-    -webkit-text-stroke: 1px rgba(25, 25, 25, .06);
-    background: repeating-linear-gradient(-45deg, rgba(25, 25, 25, .06) 0 1px, transparent 1px 5px);
+    -webkit-text-stroke: 1px var(--hollow-stroke, rgba(25, 25, 25, .06));
+    background: repeating-linear-gradient(-45deg, var(--hollow-stripe, rgba(25, 25, 25, .06)) 0 1px, transparent 1px 5px);
     -webkit-background-clip: text;
     background-clip: text;
     pointer-events: none;

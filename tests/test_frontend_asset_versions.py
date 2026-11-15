@@ -13,6 +13,7 @@
 - ``-flexgap20261105``：给语义预算模式补 flex gap 兜底，``style.flexgap.css`` 追加；
 - ``-fix20261107``：文件最后一次修改晚于其 ``?v=`` 最后一次修改的脚本（含之前版本号 PR 漏追加的，#92）。
 - ``-commentmode20261109``：抽奖视频评论采集方式（常规 / 楼中楼）改过的脚本与样式表，必须是这两个文件的最后一段后缀。
+- ``-dark20261115``：暗色主题 PR（灯泡按钮、暗色变量化与图表联动）改过的资源；在它之前的历史后缀全部保留。
 """
 from pathlib import Path
 import re
@@ -75,8 +76,24 @@ BUMPED_COMMENTMODE = {
     "css": ("style.lottery.css",),
 }
 
+# 暗色主题 PR：灯泡按钮 + 全站暗色变量化（14 个样式表）与三份图表脚本的联动改动，
+# 统一追加 -dark20261115（只追加，不改历史后缀）。
+# style.flexgap.css / style.responsive.css / style.help.css / style.intro.css 本轮未改，不追加。
+BUMPED_DARK = {
+    "js": ("app.comment.js", "app.hotspot.js", "app.up.js"),
+    "css": (
+        "style.base.css", "style.pages.css", "style.comment.css", "style.comment.semantic.css",
+        "style.config.css", "style.hotspot.css", "style.lottery.css", "style.lottery.patrol.css",
+        "style.modal.css", "style.log.css", "style.logviewer.css", "style.resident.css", "style.notice.css",
+        "style.up.css",
+    ),
+}
+
 # AI 伪人巡检：只新增独立资源，不修改任何已有 JS/CSS 的 ?v=（避免触发历史后缀链）。
 NEW_PATROL = {"js": ("app.lottery.patrol.js",), "css": ("style.lottery.patrol.css",)}
+
+# 暗色主题：只新增独立脚本与静态纹理，不涉及既有资源的重命名。
+NEW_DARK = {"js": ("app.theme.js",)}
 
 
 def _versions(kind: str) -> dict:
@@ -108,6 +125,7 @@ def test_assets_changed_in_ui_redesign_end_with_ui_suffix() -> None:
         set(BUMPED_V029["js"]) | set(BUMPED_V029["css"]) | set(BUMPED_SEMANTIC["js"]) | set(BUMPED_V030["js"])
         | set(BUMPED_FLEXGAP_1105["css"]) | set(BUMPED_FIX_1107["js"])
         | set(BUMPED_COMMENTMODE["js"]) | set(BUMPED_COMMENTMODE["css"])
+        | set(BUMPED_DARK["js"]) | set(BUMPED_DARK["css"])
     )
     for kind, names in BUMPED_UI_1101.items():
         versions = _versions(kind)
@@ -120,7 +138,8 @@ def test_assets_changed_in_ui_redesign_end_with_ui_suffix() -> None:
 
 def test_assets_changed_in_v029_end_with_v029_suffix() -> None:
     """桌面端 UI 对齐 + v0.2.9 PR 改过的脚本与样式表都带 -v029ui20261101；没被 v0.3.0 改过的仍以它结尾。"""
-    later = set(BUMPED_V030["js"]) | set(BUMPED_FLEXGAP_1105["css"]) | set(BUMPED_FIX_1107["js"])
+    later = (set(BUMPED_V030["js"]) | set(BUMPED_FLEXGAP_1105["css"]) | set(BUMPED_FIX_1107["js"])
+             | set(BUMPED_DARK["js"]) | set(BUMPED_DARK["css"]))
     for kind, names in BUMPED_V029.items():
         versions = _versions(kind)
         for name in names:
@@ -151,7 +170,8 @@ def test_assets_changed_in_v031_end_with_v031_suffix() -> None:
 
 
 def test_flexgap_fallback_patch_ends_with_its_suffix() -> None:
-    """flex gap 兜底补漏 PR 改过的样式表以 -flexgap20261105 结尾（只追加，不改历史后缀）。"""
+    """flex gap 兜底补漏 PR 改过的样式表以 -flexgap20261105 结尾（只追加，不改历史后缀）。
+    style.flexgap.css 本身未被暗色主题轮改动，不追加 -dark20261115。"""
     versions = _versions("css")
     for name in BUMPED_FLEXGAP_1105["css"]:
         assert name in versions, f"index.html 未引用 {name}"
@@ -162,10 +182,13 @@ def test_flexgap_fallback_patch_ends_with_its_suffix() -> None:
 def test_semantic_fold_assets_carry_bumped_version() -> None:
     """语义折叠 PR：app.comment.js 追加 -semantic20261102；新增脚本/样式表各引用一次且带 ?v=。"""
     js_versions = _versions("js")
+    later = set(BUMPED_FIX_1107["js"]) | set(BUMPED_DARK["js"])
     for name in BUMPED_SEMANTIC["js"]:
         assert name in js_versions, f"index.html 未引用 {name}"
-        assert js_versions[name].endswith("-semantic20261102-budget20261104"), \
-            f"{name} 版本号未更新: {js_versions[name]}"
+        assert "-semantic20261102" in js_versions[name], f"{name} 版本号未更新: {js_versions[name]}"
+        if name not in later:
+            assert js_versions[name].endswith("-semantic20261102-budget20261104"), \
+                f"{name} 版本号未更新: {js_versions[name]}"
     # 新增的独立脚本 / 样式表：必须被引用且带独立 ?v=（老缓存失效）。
     assert js_versions.get("app.comment.semantic.js"), "index.html 未引用 app.comment.semantic.js"
     css_versions = _versions("css")
@@ -176,7 +199,7 @@ def test_semantic_budget_assets_carry_bumped_version() -> None:
     """预算模式 / 停止报告 / 预估时间一轮：三个语义资源统一追加 -budget20261104；没被后续轮次改过的仍以它结尾。"""
     js_versions = _versions("js")
     css_versions = _versions("css")
-    later = set(BUMPED_FIX_1107["js"])
+    later = set(BUMPED_FIX_1107["js"]) | set(BUMPED_DARK["js"]) | set(BUMPED_DARK["css"])
     for name in BUMPED_BUDGET["js"]:
         assert name in js_versions, f"index.html 未引用 {name}"
         assert "-budget20261104" in js_versions[name], f"{name} 版本号未更新: {js_versions[name]}"
@@ -185,14 +208,16 @@ def test_semantic_budget_assets_carry_bumped_version() -> None:
                 f"{name} 版本号未更新: {js_versions[name]}"
     for name in BUMPED_BUDGET["css"]:
         assert name in css_versions, f"index.html 未引用 {name}"
-        assert css_versions[name].endswith("-budget20261104"), \
-            f"{name} 版本号未更新: {css_versions[name]}"
+        assert "-budget20261104" in css_versions[name], f"{name} 版本号未更新: {css_versions[name]}"
+        if name not in later:
+            assert css_versions[name].endswith("-budget20261104"), \
+                f"{name} 版本号未更新: {css_versions[name]}"
 
 
 def test_assets_changed_after_last_bump_end_with_1107_suffix() -> None:
     """#92：文件改动晚于其 ?v= 的脚本追加 -fix20261107（只追加，不改历史后缀）。"""
     versions = _versions("js")
-    later = set(BUMPED_COMMENTMODE["js"])
+    later = set(BUMPED_COMMENTMODE["js"]) | set(BUMPED_DARK["js"])
     for name in BUMPED_FIX_1107["js"]:
         assert name in versions, f"index.html 未引用 {name}"
         assert "-fix20261107" in versions[name], f"{name} 版本号未更新: {versions[name]}"
@@ -205,18 +230,44 @@ def test_assets_changed_after_last_bump_end_with_1107_suffix() -> None:
 
 def test_lottery_comment_mode_assets_end_with_their_suffix() -> None:
     """抽奖评论采集方式 PR 改过的脚本与样式表以 -commentmode20261109 结尾（只追加，不改历史后缀）。"""
+    later = set(BUMPED_DARK["js"]) | set(BUMPED_DARK["css"])
     for kind, names in BUMPED_COMMENTMODE.items():
         versions = _versions(kind)
         for name in names:
             assert name in versions, f"index.html 未引用 {name}"
-            assert versions[name].endswith("-commentmode20261109"), f"{name} 版本号未更新: {versions[name]}"
+            if name not in later:
+                assert versions[name].endswith("-commentmode20261109"), f"{name} 版本号未更新: {versions[name]}"
     # 历史后缀保留
     assert "-fix20261107" in _versions("js")["app.lottery.js"]
     assert "-ui20261101" in _versions("css")["style.lottery.css"]
 
 
+def test_dark_theme_assets_end_with_their_suffix() -> None:
+    """暗色主题 PR 改过的资源以 -dark20261115 结尾（只追加，不改历史后缀）。"""
+    for kind, names in BUMPED_DARK.items():
+        versions = _versions(kind)
+        for name in names:
+            assert name in versions, f"index.html 未引用 {name}"
+            assert versions[name].endswith("-dark20261115"), f"{name} 版本号未更新: {versions[name]}"
+    # 历史后缀保留抽查：各资源仍含本轮之前的历史链
+    css_versions = _versions("css")
+    js_versions = _versions("js")
+    assert "-ui20261101" in css_versions["style.base.css"]
+    assert "-commentmode20261109" in css_versions["style.lottery.css"]
+    assert "-budget20261104" in css_versions["style.comment.semantic.css"]
+    assert "-semantic20261102-budget20261104" in js_versions["app.comment.js"]
+    assert "-fix20261107" in js_versions["app.hotspot.js"]
+
+
+def test_dark_theme_new_assets_have_version() -> None:
+    """暗色主题新增脚本 app.theme.js 必须被引用一次且带 dark 前缀的 ?v=。"""
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    for name in NEW_DARK["js"]:
+        match = re.search(rf"/static/js/{re.escape(name)}\?v=([\w-]+)", html)
+        assert match and match.group(1).startswith("dark"), name
+
+
 def test_patrol_assets_have_version() -> None:
-    """AI 伪人巡检新增资源必须被引用一次且带 patrol 前缀的 ?v=。"""
     html = INDEX_HTML.read_text(encoding="utf-8")
     for kind, names in (("js", NEW_PATROL["js"]), ("css", NEW_PATROL["css"])):
         for name in names:
@@ -230,8 +281,10 @@ def test_each_asset_is_referenced_once() -> None:
     groups = (
         ("js", BUMPED_SCRIPTS + BUMPED_1030["js"] + BUMPED_UI_1101["js"] + BUMPED_V029["js"]
             + BUMPED_SEMANTIC["js"] + BUMPED_V030["js"] + BUMPED_V031["js"] + BUMPED_FIX_1107["js"]
-            + ("app.comment.semantic.js",) + NEW_PATROL["js"]),
+            + BUMPED_DARK["js"]
+            + ("app.comment.semantic.js",) + NEW_PATROL["js"] + NEW_DARK["js"]),
         ("css", BUMPED_1030["css"] + BUMPED_UI_1101["css"] + BUMPED_V029["css"]
+            + BUMPED_DARK["css"]
             + ("style.comment.semantic.css",) + NEW_PATROL["css"]),
     )
     for kind, names in groups:

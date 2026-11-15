@@ -11,27 +11,39 @@
     <!-- 内嵌空图标，避免浏览器默认请求 /favicon.ico 产生无关 404 console 错误。 -->
     <link rel="icon" href="data:,">
     <!-- 版本参数用于让 8000 端口在修复后主动获取最新前端资源，避免浏览器继续使用旧缓存。 -->
-    <link rel="stylesheet" href="/static/css/style.lottery.css?v=split-20260824-ui20261101-commentmode20261109">
-<link rel="stylesheet" href="/static/css/style.lottery.patrol.css?v=patrol20261110">
-<link rel="stylesheet" href="/static/css/style.resident.css?v=split-20260824-ui20261101">
-<link rel="stylesheet" href="/static/css/style.base.css?v=split-20260824-ui20261101-v029ui20261101">
-<link rel="stylesheet" href="/static/css/style.pages.css?v=ui-20261026-ui20261101">
-<link rel="stylesheet" href="/static/css/style.log.css?v=progress-20261026-ui20261101">
-<link rel="stylesheet" href="/static/css/style.config.css?v=split-20260824-ui20261101">
-<link rel="stylesheet" href="/static/css/style.comment.css?v=progress-20261026-ui20261101">
-<link rel="stylesheet" href="/static/css/style.comment.semantic.css?v=semantic-20261102-budget20261104">
-<link rel="stylesheet" href="/static/css/style.up.css?v=split-20260824-ui20261101">
-<link rel="stylesheet" href="/static/css/style.modal.css?v=split-20261026-toast-fix20261030-ui20261101-v029ui20261101">
+    <link rel="stylesheet" href="/static/css/style.lottery.css?v=split-20260824-ui20261101-commentmode20261109-dark20261115">
+<link rel="stylesheet" href="/static/css/style.lottery.patrol.css?v=patrol20261110-dark20261115">
+<link rel="stylesheet" href="/static/css/style.resident.css?v=split-20260824-ui20261101-dark20261115">
+<link rel="stylesheet" href="/static/css/style.base.css?v=split-20260824-ui20261101-v029ui20261101-dark20261115">
+<link rel="stylesheet" href="/static/css/style.pages.css?v=ui-20261026-ui20261101-dark20261115">
+<link rel="stylesheet" href="/static/css/style.log.css?v=progress-20261026-ui20261101-dark20261115">
+<link rel="stylesheet" href="/static/css/style.config.css?v=split-20260824-ui20261101-dark20261115">
+<link rel="stylesheet" href="/static/css/style.comment.css?v=progress-20261026-ui20261101-dark20261115">
+<link rel="stylesheet" href="/static/css/style.comment.semantic.css?v=semantic-20261102-budget20261104-dark20261115">
+<link rel="stylesheet" href="/static/css/style.up.css?v=split-20260824-ui20261101-dark20261115">
+<link rel="stylesheet" href="/static/css/style.modal.css?v=split-20261026-toast-fix20261030-ui20261101-v029ui20261101-dark20261115">
 <link rel="stylesheet" href="/static/css/style.responsive.css?v=split-20260824-ui20261101">
-<link rel="stylesheet" href="/static/css/style.logviewer.css?v=split-20260824-ui20261101">
+<link rel="stylesheet" href="/static/css/style.logviewer.css?v=split-20260824-ui20261101-dark20261115">
 <link rel="stylesheet" href="/static/css/style.help.css?v=split-20260824-ui20261101">
-<link rel="stylesheet" href="/static/css/style.hotspot.css?v=spacing3-20261026-fix20261030-ui20261101">
+<link rel="stylesheet" href="/static/css/style.hotspot.css?v=spacing3-20261026-fix20261030-ui20261101-dark20261115">
 <!-- 欢迎页启动公告弹窗的样式；不写 flex gap，放在 flex gap 兜底之前。 -->
-<link rel="stylesheet" href="/static/css/style.notice.css?v=notice20261101">
+<link rel="stylesheet" href="/static/css/style.notice.css?v=notice20261101-dark20261115">
 <!-- 首次启动开场动画与欢迎页重播按钮的样式；不写 flex gap，放在 flex gap 兜底之前。 -->
 <link rel="stylesheet" href="/static/css/style.intro.css?v=ui20261101">
 <!-- 桌面端 Chromium 83 的 flex gap 兜底：只在 <html class="no-flex-gap"> 下生效，必须最后加载。 -->
 <link rel="stylesheet" href="/static/css/style.flexgap.css?v=flexgap-20261030-ui20261101-v029ui20261101-flexgap20261105">
+<!-- 主题首帧恢复：必须在 head 同步执行，从 localStorage 读主题并给 <html> 打 data-theme，
+     避免 CSS 加载后先闪一下浅色；读取失败（隐私模式等）时保持默认浅色。
+     放在开场首屏判断脚本之前：后者依约必须是 head 的最后一个脚本。 -->
+<script>
+(function restoreThemeEarly() {
+    try {
+        if (window.localStorage.getItem('fishtool.theme') === 'dark') {
+            document.documentElement.setAttribute('data-theme', 'dark');
+        }
+    } catch (error) { /* localStorage 不可用时保持默认浅色 */ }
+})();
+</script>
 <!-- 开场首屏判断：必须在 head 同步执行，决定是否先遮住主界面；不依赖 app.core.js。 -->
 <script src="/static/js/intro-gate.js?v=ui20261101"></script>
 </head>
@@ -42,6 +54,7 @@
         <svg width="0" height="0" aria-hidden="true" focusable="false">
             <defs>
                 <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/></symbol>
+                <symbol id="i-bulb" viewBox="0 0 24 24"><path d="M12 3a6.5 6.5 0 0 1 4 11.6c-.8.6-1.2 1.3-1.4 2.4h-5.2c-.2-1.1-.6-1.8-1.4-2.4A6.5 6.5 0 0 1 12 3Z"/><path d="M9.8 19.5h4.4M10.5 22h3"/></symbol>
                 <symbol id="i-hot" viewBox="0 0 24 24"><path d="M12 3c1 4 5 5.5 5 10a5 5 0 0 1-10 0c0-2.5 1.5-4 2.5-5 .3 2 1.3 3 2.5 3-1-3 0-6 0-8Z"/></symbol>
                 <symbol id="i-comment" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></symbol>
                 <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></symbol>
@@ -131,6 +144,10 @@
                 <span class="tb-fill" aria-hidden="true"></span>
                 <span class="tb-page"><b id="tb-index">00</b> / 08</span>
                 <span class="tb-clock" id="topbar-clock">--:--:--</span>
+                <!-- 主题切换：右上角灯泡按钮，点击在浅色 / 暗色之间切换，选择持久化在 localStorage。 -->
+                <button type="button" class="tb-theme-toggle" id="theme-toggle-btn" aria-label="切换暗色模式" aria-pressed="false" title="切换暗色模式">
+                    <svg aria-hidden="true"><use href="#i-bulb"/></svg>
+                </button>
             </header>
             <!-- 欢迎页：默认激活。主视觉（测绘环 + 空心大字 + 网点波形带）右侧承载 B站登录态，下接指标行、快速开始与「更多」。 -->
             <div id="welcome-page" class="page active">
@@ -1123,12 +1140,12 @@
     <script src="/static/js/app.core.js?v=progress-20261026-fix20261027-fix20261030-ui20261101"></script>
 <!-- 开场动画控制器：three.js 与 LOGO 数据只在播放完整版时按需加载。 -->
 <script src="/static/js/app.intro.js?v=ui20261101-v029ui20261101-v030-v031" data-three="/static/vendor/three.min.js?v=r160" data-logo="/static/intro/logo-mark.js?v=ui20261101"></script>
-<script src="/static/js/app.hotspot.js?v=progress-20261026-fix20261027-fix20261030-ui20261101-fix20261107"></script>
+<script src="/static/js/app.hotspot.js?v=progress-20261026-fix20261027-fix20261030-ui20261101-fix20261107-dark20261115"></script>
 <!-- 第三批 g：事件工作台 / 机会列表 / 证据回看 / 最小反馈（新增脚本，不改既有结构）。 -->
 <script src="/static/js/app.events.js?v=batch3h-20261003-fix20261027-fix20261107"></script>
-<script src="/static/js/app.comment.js?v=progress-20261026-ui20261101-semantic20261102-budget20261104"></script>
+<script src="/static/js/app.comment.js?v=progress-20261026-ui20261101-semantic20261102-budget20261104-dark20261115"></script>
 <script src="/static/js/app.config.js?v=split-20260824-fix20261030-fix20261107"></script>
-<script src="/static/js/app.up.js?v=report5-20261026-fix20261027-ui20261101"></script>
+<script src="/static/js/app.up.js?v=report5-20261026-fix20261027-ui20261101-dark20261115"></script>
 <script src="/static/js/app.auth.js?v=split-20260824-fix20261027-fix20261030-ui20261101-v029ui20261101"></script>
 <script src="/static/js/app.lottery.js?v=welcomefix-20261026-fix20261027-fix20261030-v029ui20261101-fix20261107-commentmode20261109"></script>
 <script src="/static/js/app.ui.js?v=split-20261026-toast-fix20261030-v029ui20261101"></script>
@@ -1138,6 +1155,8 @@
 <script src="/static/js/app.lottery.patrol.js?v=patrol20261110-ui20261110"></script>
 <!-- 欢迎页启动公告：依赖 app.ui.js 的 mountAppModal，必须在它之后加载。 -->
 <script src="/static/js/app.notice.js?v=notice20261101-v030"></script>
+<!-- 主题切换：灯泡按钮的交互与图表联动；不依赖业务脚本，放在业务脚本之后即可。 -->
+<script src="/static/js/app.theme.js?v=dark20261115"></script>
 
     <!-- 单视频跟踪（watch）区块的配套 JS：本批唯一新增脚本，内联在 index.html 内，
          不改动 static/ 下任何既有脚本，也不改动上方任何既有结构。

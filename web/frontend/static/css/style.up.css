@@ -29,11 +29,11 @@
     gap: 22px;
 }
 
-/* UP主头像：圆形裁剪，白圈 + 细灰外环，加载失败时显示占位底。 */
+/* UP主头像：圆形裁剪，卡色圈 + 细灰外环，加载失败时显示占位底。 */
 .up-avatar {
     width: 72px;
     height: 72px;
-    border: 3px solid #fff;
+    border: 3px solid var(--bg-secondary);
     border-radius: 50%;
     object-fit: cover;
     background: var(--paper-2) url("/static/tex/grain.svg");
@@ -307,7 +307,7 @@
 .diagnosis-dashboard .diagnosis-detail-card,
 .diagnosis-dashboard .diagnosis-detail-card:hover {
     border: 0;
-    background-color: #fff;
+    background-color: var(--bg-secondary);
     box-shadow: var(--shadow-card);
 }
 
@@ -385,7 +385,7 @@
 .diagnosis-dashboard .ai-research-card:hover,
 .diagnosis-dashboard .account-tag-cloud-card:hover {
     border: 0;
-    background-color: #fff;
+    background-color: var(--bg-secondary);
     box-shadow: var(--shadow-card);
 }
 
@@ -452,6 +452,11 @@
     box-shadow: inset 0 0 0 1px var(--paper-3);
 }
 
+/* 暗色主题：词云底网点纹理换暗色版本。 */
+[data-theme="dark"] .account-tag-cloud-card {
+    background-image: url("/static/tex/card-field-dark.svg");
+}
+
 /* 词云单字：悬停放大 8%，五色调轮换（墨色、绿、品红、蓝、灰），不用黄色。 */
 .tag-cloud-word {
     display: inline-block;
@@ -463,7 +468,7 @@
 .tag-cloud-word:hover { transform: scale(1.08); }
 .tag-cloud-word.tone-0 { color: var(--ink); }
 .tag-cloud-word.tone-1 { color: var(--ok); }
-.tag-cloud-word.tone-2 { color: #c2187f; }
+.tag-cloud-word.tone-2 { color: var(--tone-magenta, #c2187f); }
 .tag-cloud-word.tone-3 { color: var(--info); }
 .tag-cloud-word.tone-4 { color: var(--ink-3); }
 
@@ -509,7 +514,7 @@
     margin-top: 14px;
     border-collapse: collapse;
     font-size: 13px;
-    background: #fff;
+    background: var(--bg-secondary);
     border-radius: var(--r-card);
     box-shadow: var(--shadow-card);
 }
