@@ -2,9 +2,10 @@
 
 只保留这一个启动脚本：
 
-    python app.py                 # 桌面版（默认）：主窗口 + 桌宠，同时启动 8000 端口
-    python app.py desktop         # 显式启动桌面版
-    python app.py web             # 仅启动 Web 服务，浏览器访问 http://localhost:8000
+    python app.py                 # 桌面版（默认）：TUI 核心前端 + 桌宠，同时启动 8000 端口
+    python app.py desktop         # 显式启动桌面版（TUI）
+    python app.py desktop --classic  # 桌面版加载正式 WebUI（回退入口）
+    python app.py web             # 仅启动 Web 服务，浏览器访问 http://localhost:8000/tui
     python app.py web --port 9000 # 指定 Web 端口（桌面内部也支持 --port）
     python app.py init            # 只初始化配置/数据库/目录，不启动界面
 
@@ -174,11 +175,12 @@ def run_web(host: str, port: int, reload: bool) -> int:
     return 0
 
 
-def run_desktop(port: int) -> int:
+def run_desktop(port: int, tui: bool = True) -> int:
     """启动桌面版主窗口与桌宠；Web 服务由 MainWindow 自动拉起。
 
     Args:
         port: 桌面内嵌 Web 服务端口，同时在浏览器可访问。
+        tui: True 时主窗口加载 TUI 核心前端；False 时加载正式 WebUI。
 
     Returns:
         int: Qt 事件循环退出码。
@@ -215,7 +217,7 @@ def run_desktop(port: int) -> int:
         logger.info("===== 桌面应用启动 =====")
         logger.info("[启动] WebEngine 图形接口: %s", graphics_api)
         logger.info("[启动] 创建主窗口（内嵌 Web 服务端口 %s）", port)
-        main_window = MainWindow(web_port=port)
+        main_window = MainWindow(web_port=port, tui_preview=tui)
         main_window.show()
 
         # 桌宠连接同一个端口的 WebSocket。
@@ -242,17 +244,23 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
-            "  python app.py                 # 桌面版 + http://localhost:8000\n"
-            "  python app.py desktop         # 显式桌面版\n"
-            "  python app.py web             # 仅 Web 版\n"
+            "  python app.py                 # 桌面版（TUI）+ http://localhost:8000\n"
+            "  python app.py desktop         # 显式桌面版（TUI）\n"
+            "  python app.py desktop --classic  # 桌面版加载正式 WebUI\n"
+            "  python app.py web             # 仅 Web 版（TUI 在 /tui）\n"
             "  python app.py web --port 9000 # Web 版换端口\n"
             "  python app.py init            # 仅初始化\n"
         ),
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    desktop_parser = subparsers.add_parser("desktop", help="启动桌面版（默认）")
+    desktop_parser = subparsers.add_parser("desktop", help="启动桌面版（默认 TUI）")
     desktop_parser.add_argument("--port", type=int, default=8000, help="内嵌 Web 端口（默认 8000）")
+    desktop_parser.add_argument(
+        "--classic",
+        action="store_true",
+        help="加载正式 WebUI；默认加载 TUI 核心前端",
+    )
 
     web_parser = subparsers.add_parser("web", help="仅启动 Web 服务")
     # 默认只监听回环地址；局域网访问需显式 --host 0.0.0.0 并配置 FISHTOOL_ALLOWED_HOSTS。
@@ -298,7 +306,10 @@ def main(argv: list[str] | None = None) -> int:
         return run_web(host=args.host, port=args.port, reload=args.reload)
 
     if command == "desktop":
-        return run_desktop(port=getattr(args, "port", 8000))
+        return run_desktop(
+            port=getattr(args, "port", 8000),
+            tui=not getattr(args, "classic", False),
+        )
 
     parser.print_help()
     return 2

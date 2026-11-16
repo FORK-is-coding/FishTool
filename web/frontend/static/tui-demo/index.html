@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<!--
+    FishTool // TTY —— 真实核心前端（首页 / 热点 / 评论 / 配置 / 拆解 / 自诊 / 抽奖 / 日志）
+    ------------------------------------------------------------------
+    数据：真实读取 /api，实时日志与预警走 /ws；所有页面都不展示示意数据。
+    美术：纯白无纹理底（#ffffff）+ 黑/白/灰面板 + 小面积亮黄 / 灰色只读模块 / 亮纸可交互模块；
+          信号黄与状态色只做强调，去掉大面积纯黑；背景纯白，模块用黑白灰分层。
+    键鼠：所有操作均可用键盘完成；鼠标指针被替换为低对比字符单元格光标，
+          状态栏 PTR 显示列,行。C / F6 可开关极淡的 CRT 扫描线。
+    兼容：Chromium 83。flex 间距用 margin，不用 flex gap；不写 :is() / :where()。
+-->
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FishTool // TTY</title>
+    <link rel="icon" href="data:,">
+    <!-- 桌面无边框窗口桥；浏览器里没有 qt.webChannelTransport，不会连接。 -->
+    <script src="/static/js/qwebchannel.js"></script>
+    <link rel="stylesheet" href="/static/tui-demo/tui.css">
+</head>
+<body>
+    <div class="app" id="app">
+        <!-- 顶部标题条：深色终端标题栏；左下 168px 三色段是原前端唯一保留的彩色记号。 -->
+        <header class="titlebar">
+            <span class="brand"><span class="brand-mark" aria-hidden="true">▚</span> FISHTOOL <span class="brand-sep">//</span> <b id="crumb">WELCOME</b></span>
+            <span class="title-meta">TTY-01</span>
+            <span class="title-meta">BUILD 0.3.1</span>
+            <span class="title-fill" aria-hidden="true"></span>
+            <span class="title-demo">CORE · LIVE</span>
+            <span class="title-time" id="clock">--:--:--</span>
+            <span class="win-controls" role="group" aria-label="窗口控制">
+                <button class="win-btn" type="button" data-win="min" title="最小化" aria-label="最小化">—</button>
+                <button class="win-btn" type="button" data-win="max" title="最大化" aria-label="最大化">□</button>
+                <button class="win-btn win-close" type="button" data-win="close" title="关闭到托盘" aria-label="关闭到托盘">×</button>
+            </span>
+            <i class="tri-rule" aria-hidden="true"></i>
+        </header>
+
+        <!-- 顶部标签栏：10 个页面，roving tabindex，左右键循环切换。 -->
+        <nav class="tabs" id="tabs" role="tablist" aria-label="主导航">
+            <span class="tabs-label" aria-hidden="true">NAV</span>
+            <button class="tab active" type="button" role="tab" id="tab-welcome" data-page="welcome" aria-controls="page-welcome" aria-selected="true" tabindex="0"><span class="tab-no">00</span><span class="tab-name">首页</span></button>
+            <button class="tab" type="button" role="tab" id="tab-hotspot" data-page="hotspot" aria-controls="page-hotspot" aria-selected="false" tabindex="-1"><span class="tab-no">01</span><span class="tab-name">热点</span></button>
+            <button class="tab" type="button" role="tab" id="tab-watch" data-page="watch" aria-controls="page-watch" aria-selected="false" tabindex="-1"><span class="tab-no">02</span><span class="tab-name">评论</span></button>
+            <button class="tab" type="button" role="tab" id="tab-config" data-page="config" aria-controls="page-config" aria-selected="false" tabindex="-1"><span class="tab-no">03</span><span class="tab-name">配置</span></button>
+            <button class="tab" type="button" role="tab" id="tab-bench" data-page="bench" aria-controls="page-bench" aria-selected="false" tabindex="-1"><span class="tab-no">04</span><span class="tab-name">拆解</span></button>
+            <button class="tab" type="button" role="tab" id="tab-diag" data-page="diag" aria-controls="page-diag" aria-selected="false" tabindex="-1"><span class="tab-no">05</span><span class="tab-name">自诊</span></button>
+            <button class="tab" type="button" role="tab" id="tab-draw" data-page="draw" aria-controls="page-draw" aria-selected="false" tabindex="-1"><span class="tab-no">06</span><span class="tab-name">抽奖</span></button>
+            <button class="tab" type="button" role="tab" id="tab-patrol" data-page="patrol" aria-controls="page-patrol" aria-selected="false" tabindex="-1"><span class="tab-no">07</span><span class="tab-name">伪人</span></button>
+            <button class="tab" type="button" role="tab" id="tab-logs" data-page="logs" aria-controls="page-logs" aria-selected="false" tabindex="-1"><span class="tab-no">08</span><span class="tab-name">日志</span></button>
+            <button class="tab" type="button" role="tab" id="tab-help" data-page="help" aria-controls="page-help" aria-selected="false" tabindex="-1"><span class="tab-no">09</span><span class="tab-name">帮助</span></button>
+            <span class="tabs-fill" aria-hidden="true"></span>
+            <span class="tabs-hint">0-9 JUMP · ←→ CYCLE</span>
+        </nav>
+
+        <main class="content" id="content" tabindex="-1">
+            <!-- ============ 00 / WELCOME ============ -->
+            <section class="page active live" id="page-welcome" role="tabpanel" aria-labelledby="tab-welcome">
+                <header class="page-head">
+                    <span class="ph-code">[ 00 ]</span>
+                    <h1 class="ph-title">欢迎 <span class="ph-en">WELCOME</span></h1>
+                    <i class="ph-rule" aria-hidden="true"></i>
+                    <span class="ph-meta">OPERATOR · READY</span>
+                </header>
+                <div class="live-page" id="welcome-live"></div>
+            </section>
+
+<!-- ============ 01 / HOTSPOT ============ -->
+            <section class="page live" id="page-hotspot" role="tabpanel" aria-labelledby="tab-hotspot" hidden>
+                <header class="page-head">
+                    <span class="ph-code">[ 01 ]</span>
+                    <h1 class="ph-title">热点发现 <span class="ph-en">SIGNALS</span></h1>
+                    <i class="ph-rule" aria-hidden="true"></i>
+                    <span class="ph-meta">LIVE · 真实数据</span>
+                </header>
+                <div class="live-page" id="hotspot-live"></div>
+            </section>
+
+<!-- ============ 02 / WATCH ============ -->
+            <section class="page live" id="page-watch" role="tabpanel" aria-labelledby="tab-watch" hidden>
+                <header class="page-head">
+                    <span class="ph-code">[ 02 ]</span>
+                    <h1 class="ph-title">评论监控 <span class="ph-en">WATCH</span></h1>
+                    <i class="ph-rule" aria-hidden="true"></i>
+                    <span class="ph-meta">LIVE · 真实数据</span>
+                </header>
+                <div class="live-page" id="watch-live"></div>
+            </section>
+
+<!-- ============ 03 / CONFIG ============ -->
+            <section class="page live" id="page-config" role="tabpanel" aria-labelledby="tab-config" hidden>
+                <header class="page-head">
+                    <span class="ph-code">[ 03 ]</span>
+                    <h1 class="ph-title">配置 <span class="ph-en">CONFIG</span></h1>
+                    <i class="ph-rule" aria-hidden="true"></i>
+                    <span class="ph-meta">LIVE · 本机配置</span>
+                </header>
+                <div class="live-page" id="config-live"></div>
+            </section>
+
+<!-- ============ 04 / BENCH ============ -->
+            <section class="page live" id="page-bench" role="tabpanel" aria-labelledby="tab-bench" hidden>
+                <header class="page-head">
+                    <span class="ph-code">[ 04 ]</span>
+                    <h1 class="ph-title">头部 UP 拆解 <span class="ph-en">BENCH</span></h1>
+                    <i class="ph-rule" aria-hidden="true"></i>
+                    <span class="ph-meta">LIVE · ANALYSIS</span>
+                </header>
+                <div class="live-page" id="bench-live"></div>
+            </section>
+
+<!-- ============ 05 / DIAG ============ -->
+            <section class="page live" id="page-diag" role="tabpanel" aria-labelledby="tab-diag" hidden>
+                <header class="page-head">
+                    <span class="ph-code">[ 05 ]</span>
+                    <h1 class="ph-title">账号自诊 <span class="ph-en">DIAG</span></h1>
+                    <i class="ph-rule" aria-hidden="true"></i>
+                    <span class="ph-meta">LIVE · DIAGNOSIS</span>
+                </header>
+                <div class="live-page" id="diag-live"></div>
+            </section>
+
+<!-- ============ 06 / DRAW ============ -->
+            <section class="page live" id="page-draw" role="tabpanel" aria-labelledby="tab-draw" hidden>
+                <header class="page-head">
+                    <span class="ph-code">[ 06 ]</span>
+                    <h1 class="ph-title">抽奖工具 <span class="ph-en">DRAW</span></h1>
+                    <i class="ph-rule" aria-hidden="true"></i>
+                    <span class="ph-meta">LIVE · LOTTERY</span>
+                </header>
+                <div class="live-page" id="draw-live"></div>
+            </section>
+
+<!-- ============ 07 / PATROL ============ -->
+            <section class="page live" id="page-patrol" role="tabpanel" aria-labelledby="tab-patrol" hidden>
+                <header class="page-head">
+                    <span class="ph-code">[ 07 ]</span>
+                    <h1 class="ph-title">寻找伪人 <span class="ph-en">PATROL</span></h1>
+                    <i class="ph-rule" aria-hidden="true"></i>
+                    <span class="ph-meta">AI · CONSENT · LEDGER</span>
+                </header>
+                <div class="live-page" id="patrol-live"></div>
+            </section>
+
+<!-- ============ 08 / LOGS ============ -->
+            <section class="page" id="page-logs" role="tabpanel" aria-labelledby="tab-logs" hidden>
+                <header class="page-head">
+                    <span class="ph-code">[ 08 ]</span>
+                    <h1 class="ph-title">日志 <span class="ph-en">LOGS</span></h1>
+                    <i class="ph-rule" aria-hidden="true"></i>
+                    <span class="ph-meta">TAIL -F · AUTO 5s</span>
+                </header>
+                <p class="page-sub">应用、爬虫与风控日志。支持级别过滤与关键字检索，自动刷新间隔 5 秒。</p>
+
+                <div class="toolbar">
+                    <div class="filters" id="log-filters" role="group" aria-label="日志级别">
+                        <button class="fbtn active" type="button" data-level="all" aria-pressed="true" data-label="全部级别">ALL</button>
+                        <button class="fbtn" type="button" data-level="info" aria-pressed="false" data-label="INFO 级别">INFO</button>
+                        <button class="fbtn" type="button" data-level="warn" aria-pressed="false" data-label="WARN 级别">WARN</button>
+                        <button class="fbtn" type="button" data-level="error" aria-pressed="false" data-label="ERROR 级别">ERROR</button>
+                        <button class="fbtn" type="button" data-level="debug" aria-pressed="false" data-label="DEBUG 级别">DEBUG</button>
+                    </div>
+                    <label class="field field-search" for="log-search">
+                        <span class="field-label" aria-hidden="true">/</span>
+                        <input id="log-search" type="search" placeholder="filter: 429、monitor、risk" aria-label="日志关键字过滤">
+                    </label>
+                    <button class="btn" type="button" data-act="refresh" data-label="刷新日志">REFRESH</button>
+                    <button class="btn" type="button" data-live-act="logs_export" data-label="导出问题日志">EXPORT</button>
+                </div>
+
+                <section class="pane pane-logs">
+                    <header class="pane-head">
+                        <span class="pane-tag">APP.LOG</span>
+                        <span class="pane-title">实时日志</span>
+                        <span class="pane-meta">LIVE</span>
+                    </header>
+                    <div class="pane-body logs logs-tall" id="log-list"><p class="live-loading">TAILING /api/logs ...</p></div>
+                    <div class="log-pager" id="log-pager"></div>
+                    <div class="log-empty" id="log-empty" hidden>NO MATCH · 没有符合当前过滤条件的日志</div>
+                    <footer class="pane-foot">
+                        <span>SHOWN <b id="log-count">0</b> / <b id="log-total">0</b></span>
+                        <span>LEVEL <b id="log-level">ALL</b></span>
+                        <span class="pane-foot-r">AUTO REFRESH 5s · LIVE</span>
+                    </footer>
+                </section>
+            </section>
+
+            <!-- ============ 09 / HELP ============ -->
+            <section class="page" id="page-help" role="tabpanel" aria-labelledby="tab-help" hidden>
+                <header class="page-head">
+                    <span class="ph-code">[ 09 ]</span>
+                    <h1 class="ph-title">帮助 <span class="ph-en">HELP</span></h1>
+                    <i class="ph-rule" aria-hidden="true"></i>
+                    <span class="ph-meta">KEYBOARD FIRST</span>
+                </header>
+                <p class="page-sub">全键盘可操作；方向键按屏幕方向移动焦点（↑↓优先同列、←→优先同行），Ctrl+←/→ 切页。复选框聚焦时整条标签高亮，Space / Enter 切换。</p>
+
+                <div class="split">
+                    <section class="pane">
+                        <header class="pane-head">
+                            <span class="pane-tag">KEYMAP</span>
+                            <span class="pane-title">键位</span>
+                            <span class="pane-meta">GLOBAL</span>
+                        </header>
+                        <div class="pane-body">
+                            <div class="kv"><span class="k">TAB / SHIFT+TAB</span><i class="dots" aria-hidden="true"></i><span class="v">下 / 上一个焦点</span></div>
+                            <div class="kv"><span class="k">↑ ↓ ← →</span><i class="dots" aria-hidden="true"></i><span class="v">按屏幕方向移动焦点</span></div>
+                            <div class="kv"><span class="k">CTRL ← →</span><i class="dots" aria-hidden="true"></i><span class="v">上 / 下一个页面</span></div>
+                            <div class="kv"><span class="k">0 — 9</span><i class="dots" aria-hidden="true"></i><span class="v">直接跳转页面</span></div>
+                            <div class="kv"><span class="k">j k / PGUP PGDN</span><i class="dots" aria-hidden="true"></i><span class="v">上 / 下一屏 · 日志分页</span></div>
+                            <div class="kv"><span class="k">ENTER / SPACE</span><i class="dots" aria-hidden="true"></i><span class="v">激活；下拉/输入框进入；复选框切换</span></div>
+                            <div class="kv"><span class="k">: / /</span><i class="dots" aria-hidden="true"></i><span class="v">聚焦命令行</span></div>
+                            <div class="kv"><span class="k">? / F1</span><i class="dots" aria-hidden="true"></i><span class="v">打开本帮助</span></div>
+                            <div class="kv"><span class="k">C / F6</span><i class="dots" aria-hidden="true"></i><span class="v">CRT 扫描线开关</span></div>
+                            <div class="kv"><span class="k">ESC</span><i class="dots" aria-hidden="true"></i><span class="v">关闭浮层 / 退出输入</span></div>
+                        </div>
+                    </section>
+
+                    <section class="pane">
+                        <header class="pane-head">
+                            <span class="pane-tag">COMMAND</span>
+                            <span class="pane-title">命令</span>
+                            <span class="pane-meta">COMMAND LINE</span>
+                        </header>
+                        <div class="pane-body">
+                            <div class="kv"><span class="k">help</span><i class="dots" aria-hidden="true"></i><span class="v">打开帮助浮层</span></div>
+                            <div class="kv"><span class="k">goto &lt;00-09&gt;</span><i class="dots" aria-hidden="true"></i><span class="v">跳转页面</span></div>
+                            <div class="kv"><span class="k">scan</span><i class="dots" aria-hidden="true"></i><span class="v">当前页采集 / 刷新</span></div>
+                            <div class="kv"><span class="k">login</span><i class="dots" aria-hidden="true"></i><span class="v">B站扫码登录</span></div>
+                            <div class="kv"><span class="k">logout</span><i class="dots" aria-hidden="true"></i><span class="v">退出 B站登录态</span></div>
+                            <div class="kv"><span class="k">crt on | off</span><i class="dots" aria-hidden="true"></i><span class="v">CRT 扫描线</span></div>
+                            <div class="kv"><span class="k">logs / config</span><i class="dots" aria-hidden="true"></i><span class="v">快捷跳转</span></div>
+                            <div class="kv"><span class="k">whoami</span><i class="dots" aria-hidden="true"></i><span class="v">当前会话身份</span></div>
+                            <div class="kv"><span class="k">clear</span><i class="dots" aria-hidden="true"></i><span class="v">恢复状态栏默认提示</span></div>
+                            <div class="kv"><span class="k">quit</span><i class="dots" aria-hidden="true"></i><span class="v">桌面端关闭到托盘</span></div>
+                        </div>
+                    </section>
+                </div>
+
+                <div class="split">
+                    <section class="pane">
+                        <header class="pane-head">
+                            <span class="pane-tag">FILES</span>
+                            <span class="pane-title">前端文件</span>
+                            <span class="pane-meta">CORE</span>
+                        </header>
+                        <div class="pane-body">
+                            <div class="kv"><span class="k">index.html</span><i class="dots" aria-hidden="true"></i><span class="v">页面结构</span></div>
+                            <div class="kv"><span class="k">tui.css</span><i class="dots" aria-hidden="true"></i><span class="v">令牌 / 布局 / 窗口控件</span></div>
+                            <div class="kv"><span class="k">tui.js</span><i class="dots" aria-hidden="true"></i><span class="v">键盘 / 指针 / 命令</span></div>
+                            <div class="kv"><span class="k">tui.live.js</span><i class="dots" aria-hidden="true"></i><span class="v">真实 API / WS / 渲染</span></div>
+                            <div class="kv"><span class="k">qwebchannel.js</span><i class="dots" aria-hidden="true"></i><span class="v">桌面窗口桥</span></div>
+                        </div>
+                    </section>
+
+                    <section class="pane">
+                        <header class="pane-head">
+                            <span class="pane-tag">ENV</span>
+                            <span class="pane-title">运行环境</span>
+                            <span class="pane-meta">LIVE</span>
+                        </header>
+                        <div class="pane-body">
+                            <div class="kv"><span class="k">TTY</span><i class="dots" aria-hidden="true"></i><span class="v">01 · local</span></div>
+                            <div class="kv"><span class="k">BUILD</span><i class="dots" aria-hidden="true"></i><span class="v">0.3.1 · core</span></div>
+                            <div class="kv"><span class="k">TARGET</span><i class="dots" aria-hidden="true"></i><span class="v">Chromium 83</span></div>
+                            <div class="kv"><span class="k">MODE</span><i class="dots" aria-hidden="true"></i><span class="v">live API + WS</span></div>
+                        </div>
+                    </section>
+                </div>
+
+                <section class="pane">
+                    <header class="pane-head">
+                        <span class="pane-tag">CREDITS</span>
+                        <span class="pane-title">关于</span>
+                        <span class="pane-meta">CORE BUILD</span>
+                    </header>
+                    <div class="pane-body">
+                        <div class="kv"><span class="k">design</span><i class="dots" aria-hidden="true"></i><span class="v">FishTool white archive / TTY</span></div>
+                        <div class="kv"><span class="k">font</span><i class="dots" aria-hidden="true"></i><span class="v">JetBrains Mono · 本地 OFL</span></div>
+                        <div class="kv"><span class="k">runtime</span><i class="dots" aria-hidden="true"></i><span class="v">HTML / CSS / vanilla JS</span></div>
+                        <div class="kv"><span class="k">network</span><i class="dots" aria-hidden="true"></i><span class="v">same-origin API</span></div>
+                    </div>
+                </section>
+            </section>
+        </main>
+
+        <!-- 命令行：始终可见；: 聚焦，Enter 执行，↑↓ 历史，Esc 退出。 -->
+        <div class="cmdbar">
+            <label class="cmd-label" for="cmd"><span class="cmd-colon">:</span></label>
+            <input id="cmd" type="text" autocomplete="off" spellcheck="false" placeholder="help · goto 01 · scan · crt off" aria-label="命令行">
+            <span class="cmd-hint" aria-hidden="true">ENTER RUN · ESC EXIT</span>
+        </div>
+
+        <!-- 状态栏：左侧状态、中部提示/反馈、右侧焦点、CRT 与字符坐标。 -->
+        <div class="statusbar">
+            <span class="st-state"><i class="led" aria-hidden="true"></i>READY</span>
+            <span class="st-msg" id="status-msg" aria-live="polite">TAB FOCUS · ↑↓←→ MOVE · CTRL←→ PAGE · j/k SCROLL · : CMD · ? HELP</span>
+            <span class="st-focus" id="status-focus">FOCUS —</span>
+            <span class="st-crt" id="status-crt">CRT OFF</span>
+            <span class="st-ptr" id="status-ptr" aria-hidden="true">PTR ---,---</span>
+        </div>
+
+        <!-- 功能键条：全部可点击，也可用 F1…F10 触发。 -->
+        <footer class="fnbar">
+            <button class="fn-btn" type="button" data-act="help"><b>F1</b>HELP</button>
+            <button class="fn-btn" type="button" data-act="scan"><b>F2</b>SCAN</button>
+            <button class="fn-btn" type="button" data-goto="logs"><b>F3</b>LOGS</button>
+            <button class="fn-btn" type="button" data-goto="config"><b>F4</b>CONFIG</button>
+            <button class="fn-btn" type="button" data-act="refresh"><b>F5</b>REFRESH</button>
+            <button class="fn-btn" type="button" data-act="crt"><b>F6</b>CRT</button>
+            <span class="fn-fill" aria-hidden="true"></span>
+            <span class="fn-note">FISHTOOL // TTY · LIVE API</span>
+            <button class="fn-btn" type="button" data-act="quit"><b>F10</b>QUIT</button>
+        </footer>
+    </div>
+
+    <!-- 字符光标：跟随鼠标的 1 单元格低对比指示器；PTR 坐标在状态栏。 -->
+    <div class="cell-ptr" id="cell-ptr" aria-hidden="true"><span>+</span></div>
+
+    <!-- Windows 走原生 WM_NCHITTEST；其它平台用这些透明边缘触发 startSystemResize。 -->
+    <div class="win-resize win-resize-n" data-resize="n" aria-hidden="true"></div>
+    <div class="win-resize win-resize-s" data-resize="s" aria-hidden="true"></div>
+    <div class="win-resize win-resize-e" data-resize="e" aria-hidden="true"></div>
+    <div class="win-resize win-resize-w" data-resize="w" aria-hidden="true"></div>
+    <div class="win-resize win-resize-ne" data-resize="ne" aria-hidden="true"></div>
+    <div class="win-resize win-resize-nw" data-resize="nw" aria-hidden="true"></div>
+    <div class="win-resize win-resize-se" data-resize="se" aria-hidden="true"></div>
+    <div class="win-resize win-resize-sw" data-resize="sw" aria-hidden="true"></div>
+
+    <!-- CRT 扫描线：默认关闭，C / F6 开启。 -->
+    <div class="crt" id="crt" aria-hidden="true"></div>
+
+    <!-- 帮助浮层：仅一个关闭按钮，Tab 被锁定在浮层内。 -->
+    <div class="mask" id="help-mask" hidden>
+        <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="help-title">
+            <header class="dialog-head">
+                <span class="pane-tag">HELP</span>
+                <h2 id="help-title">键位与命令</h2>
+                <button class="dialog-close" id="help-close" type="button">[ESC] CLOSE</button>
+            </header>
+            <div class="dialog-body">
+                <div class="dialog-col">
+                    <p class="dialog-label">KEYMAP</p>
+                    <div class="kv"><span class="k">TAB / SHIFT+TAB</span><i class="dots" aria-hidden="true"></i><span class="v">焦点移动</span></div>
+                    <div class="kv"><span class="k">↑ ↓ ← →</span><i class="dots" aria-hidden="true"></i><span class="v">按屏幕方向移动</span></div>
+                    <div class="kv"><span class="k">CTRL ← →</span><i class="dots" aria-hidden="true"></i><span class="v">切页</span></div>
+                    <div class="kv"><span class="k">0 — 9</span><i class="dots" aria-hidden="true"></i><span class="v">跳转</span></div>
+                    <div class="kv"><span class="k">j k / PGUP PGDN</span><i class="dots" aria-hidden="true"></i><span class="v">上/下一屏</span></div>
+                    <div class="kv"><span class="k">ENTER / SPACE</span><i class="dots" aria-hidden="true"></i><span class="v">激活 / 打开下拉 / 编辑输入框</span></div>
+                    <div class="kv"><span class="k">: / /</span><i class="dots" aria-hidden="true"></i><span class="v">命令行</span></div>
+                    <div class="kv"><span class="k">? / F1</span><i class="dots" aria-hidden="true"></i><span class="v">帮助</span></div>
+                    <div class="kv"><span class="k">C / F6</span><i class="dots" aria-hidden="true"></i><span class="v">CRT</span></div>
+                    <div class="kv"><span class="k">ESC</span><i class="dots" aria-hidden="true"></i><span class="v">关闭 / 退出</span></div>
+                </div>
+                <div class="dialog-col">
+                    <p class="dialog-label">COMMAND</p>
+                    <div class="kv"><span class="k">help</span><i class="dots" aria-hidden="true"></i><span class="v">本页说明</span></div>
+                    <div class="kv"><span class="k">goto 01</span><i class="dots" aria-hidden="true"></i><span class="v">跳转页面</span></div>
+                    <div class="kv"><span class="k">scan</span><i class="dots" aria-hidden="true"></i><span class="v">当前页采集</span></div>
+                    <div class="kv"><span class="k">login</span><i class="dots" aria-hidden="true"></i><span class="v">扫码登录</span></div>
+                    <div class="kv"><span class="k">logout</span><i class="dots" aria-hidden="true"></i><span class="v">退出登录</span></div>
+                    <div class="kv"><span class="k">crt off</span><i class="dots" aria-hidden="true"></i><span class="v">关闭扫描线</span></div>
+                    <div class="kv"><span class="k">logs</span><i class="dots" aria-hidden="true"></i><span class="v">打开日志</span></div>
+                    <div class="kv"><span class="k">whoami</span><i class="dots" aria-hidden="true"></i><span class="v">会话身份</span></div>
+                    <div class="kv"><span class="k">clear</span><i class="dots" aria-hidden="true"></i><span class="v">清空提示</span></div>
+                    <div class="kv"><span class="k">quit</span><i class="dots" aria-hidden="true"></i><span class="v">桌面关闭到托盘</span></div>
+                </div>
+            </div>
+            <footer class="dialog-foot">
+                <span>TAB 锁定在浮层内 · ESC 关闭</span>
+                <span>FISHTOOL // TTY</span>
+            </footer>
+        </div>
+    </div>
+
+    <!-- B站扫码登录：真实调用 /api/auth/qrcode 与 /api/auth/poll。 -->
+    <div class="mask" id="login-mask" hidden>
+        <div class="dialog auth-dialog" role="dialog" aria-modal="true" aria-labelledby="login-title">
+            <header class="dialog-head">
+                <span class="pane-tag">AUTH</span>
+                <h2 id="login-title">B站扫码登录</h2>
+                <button class="dialog-close" id="login-close" type="button">[ESC] CLOSE</button>
+            </header>
+            <div class="dialog-body auth-body">
+                <div class="auth-qr-wrap">
+                    <img id="login-qr" class="auth-qr" alt="B站登录二维码">
+                </div>
+                <div class="auth-copy">
+                    <p id="login-status" class="live-note">正在获取二维码...</p>
+                    <p class="live-note">用 B站 App 扫码确认。登录成功后 Cookie 会加密保存在本机，不会发送到外部服务。</p>
+                    <div class="live-actions">
+                        <button class="btn btn-primary" id="login-refresh" type="button">REFRESH QR</button>
+                        <button class="btn" id="login-cancel" type="button">CANCEL</button>
+                    </div>
+                </div>
+            </div>
+            <footer class="dialog-foot">
+                <span>扫码在 B站官方接口完成 · 本机加密保存</span>
+                <span>FISHTOOL // AUTH</span>
+            </footer>
+        </div>
+    </div>
+
+    <!-- 用隐藏的等宽字符串测量 1 字符宽度，供字符光标定位。 -->
+    <span class="char-ruler" id="char-ruler" aria-hidden="true">MMMMMMMMMM</span>
+
+    <script src="/static/tui-demo/tui.live.js"></script>
+    <script src="/static/tui-demo/tui.js"></script>
+</body>
+</html>

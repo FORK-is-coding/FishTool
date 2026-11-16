@@ -119,7 +119,7 @@ def test_main_seeds_before_dispatch(monkeypatch):
     """所有子命令进入前都会先补齐配置（桌面版的 Web 服务在同进程内启动）。"""
     order = []
     monkeypatch.setattr(entry, "seed_bundled_config", lambda: order.append("seed") or [])
-    monkeypatch.setattr(entry, "run_desktop", lambda port: order.append("desktop") or 0)
+    monkeypatch.setattr(entry, "run_desktop", lambda port, tui=True: order.append("desktop") or 0)
 
     assert entry.main([]) == 0
     assert order == ["seed", "desktop"]

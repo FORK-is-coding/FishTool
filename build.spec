@@ -28,6 +28,7 @@ hiddenimports = [
     'PySide6.QtWidgets',
     'PySide6.QtWebEngineCore',
     'PySide6.QtWebEngineWidgets',
+    'PySide6.QtWebChannel',
     'PySide6.QtPrintSupport',
     # app.py 用 QQuickWindow.setGraphicsApi 把 WebEngine 合成改为 OpenGL（见 desktop/webengine_profile.py）。
     'PySide6.QtQuick',

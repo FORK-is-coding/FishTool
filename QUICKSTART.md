@@ -27,6 +27,11 @@ python app.py
 运行后会自动打开桌面主窗口与桌宠，同时在后台启动 Web 服务；浏览器访问
 `http://localhost:8000` 也可以使用同一套界面。
 
+桌面版默认加载 TUI 核心前端：无边框窗口、页面标题栏可拖动/最大化/关闭到托盘；
+方向键按屏幕空间移动焦点，所有页面用内部 SCREEN 分屏而不是纵向滚动条；日志按视口高度分页。
+需要完整正式 WebUI 时，使用 `python app.py desktop --classic`，或从托盘菜单返回正式界面。
+TUI 固定入口：`http://localhost:8000/tui`；正式界面：`http://localhost:8000/`。
+
 ### 4. 仅使用 Web 版（不打开桌面窗口）
 
 **Windows 一键启动**：双击项目根目录的 `start_web.bat`。脚本会：
