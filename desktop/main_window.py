@@ -1,15 +1,16 @@
 """
-主窗口 - 内嵌WebUI的桌面应用主窗口
-使用QWebEngineView加载本地Web服务
+主窗口 - 内嵌 WebUI / TUI 核心前端的桌面应用主窗口
+使用 QWebEngineView 加载本地 Web 服务
 
 本模块是桌面客户端的核心窗口，采用"桌面壳 + WebUI"架构：
 - QWebEngineView 内嵌加载本地 FastAPI Web 服务页面
+- 默认 TUI 核心前端；托盘菜单或 desktop --classic 切回正式 WebUI
 - Web 服务启动策略按环境区分：
   - 源码环境：subprocess 子进程通过统一入口 app.py web 启动
   - 冻结环境（PyInstaller）：进程内线程启动 uvicorn，
     不依赖源码文件（V7 修复）
 - 系统托盘：支持最小化到托盘、托盘菜单、双击恢复
-- 启动流程：加载动画 → 轮询 /health → 加载 WebUI
+- 启动流程：加载动画 → 轮询 /health → 加载 TUI 或正式 WebUI
 
 关键流程（start_web_service）：
 1. 检查端口是否已被占用（check_web_service）
@@ -40,7 +41,7 @@ from PySide6.QtWidgets import (
     QSystemTrayIcon, QMenu, QFileDialog
 )
 # 从 PySide6.QtCore 导入符号
-from PySide6.QtCore import QUrl, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QUrl, Qt, QTimer, Signal
 # 从 PySide6.QtGui 导入符号（Qt6 中 QAction 在 QtGui）
 from PySide6.QtGui import QAction, QIcon, QDesktopServices
 # WebEngine：页面 / profile / 脚本 / 设置在 QtWebEngineCore，只有 QWebEngineView 在 QtWebEngineWidgets
@@ -48,6 +49,7 @@ from PySide6.QtWebEngineCore import (
     QWebEnginePage, QWebEngineProfile, QWebEngineScript, QWebEngineSettings
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebChannel import QWebChannel
 # 导入模块
 import logging
 # 导入模块
@@ -67,11 +69,36 @@ from desktop.icon_utils import load_app_icon
 from desktop.report_export import save_html_as_pdf
 from desktop.ui_theme import LOADING_HTML, menu_style, show_message
 from desktop.webengine_profile import create_persistent_profile
+from desktop.window_bridge import WindowBridge, install_windows_hit_test
 
 logger = get_logger(__name__)
 
 #: 前端通过 console 消息把打印 HTML 分片交给桌面壳（保持浏览器端无副作用）。
 SAVE_PDF_CHUNK_PREFIX = "FISHTOOL_SAVE_PDF_CHUNK:"
+
+#: 新 TUI 核心前端；真实 API/WS 驱动，拆解/自诊/抽奖暂为 NEXT 占位。
+TUI_PREVIEW_PATH = "/tui"
+APP_WINDOW_TITLE = "B站运营工具箱"
+TUI_PREVIEW_WINDOW_TITLE = "B站运营工具箱 — TUI"
+
+
+def build_desktop_page_url(web_url: str, tui_preview: bool, cache_buster: int) -> str:
+    """构造桌面壳要加载的页面 URL（纯函数，便于脱离 Qt 测试）。
+
+    正式界面加载根路径，TUI 核心前端加载 ``/tui``；
+    末尾带一个时间戳查询参数，绕过旧 WebEngine 缓存索引。
+
+    Args:
+        web_url: Web 服务根地址，例如 ``http://localhost:8000``。
+        tui_preview: True 时加载 TUI 核心前端。
+        cache_buster: 毫秒时间戳。
+
+    Returns:
+        str: 完整页面 URL。
+    """
+    base = web_url.rstrip("/")
+    path = TUI_PREVIEW_PATH if tui_preview else "/"
+    return f"{base}{path}?desktop_start={cache_buster}"
 
 
 def _default_download_path(suggested_name: str, downloads_dir: Optional[Path] = None) -> str:
@@ -201,7 +228,7 @@ class _ExternalLinkPage(QWebEnginePage):
 
 
 class MainWindow(QMainWindow):
-    """主窗口 - 内嵌WebUI
+    """主窗口 - 内嵌 WebUI / TUI 核心前端
     
     负责窗口创建、Web服务启动编排、托盘管理与资源清理。
     
@@ -225,19 +252,26 @@ class MainWindow(QMainWindow):
     # 信号定义
     web_ready = Signal()  # Web服务就绪信号
     
-    def __init__(self, web_port: int = 8000):
+    def __init__(self, web_port: int = 8000, tui_preview: bool = True):
         """初始化主窗口
-        
+
         Args:
             web_port: Web服务端口
+            tui_preview: True 时加载 TUI 核心前端；False 时加载正式 WebUI。
         """
         # 调用父类QMainWindow的构造函数
         super().__init__()
-        
+
         # 保存Web服务端口号配置
         self.web_port = web_port
         # 构造Web服务完整URL地址
         self.web_url = f"http://localhost:{web_port}"
+        # 当前桌面壳显示的是 TUI 核心前端还是正式 WebUI；托盘菜单可运行时切换。
+        self._tui_preview = bool(tui_preview)
+        # 无边框只用于 TUI：正式 WebUI 保留系统标题栏，行为不变。
+        if self._tui_preview:
+            self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self._native_hit_test_filter = None
         # 初始化Web服务进程引用（用于源码环境子进程模式）
         self.web_process: Optional[subprocess.Popen] = None
         # Web 子进程 stdout/stderr 落盘句柄与路径。
@@ -284,6 +318,37 @@ class MainWindow(QMainWindow):
         self.resize(width, height)
         self.move(x, y)
 
+    def _window_title(self) -> str:
+        """当前窗口标题：TUI 与正式界面明确区分。"""
+        return TUI_PREVIEW_WINDOW_TITLE if self._tui_preview else APP_WINDOW_TITLE
+
+    def _apply_window_chrome(self) -> None:
+        """按当前模式切换系统标题栏：TUI 无边框，正式界面恢复原生边框。"""
+        # 单元测试的轻量宿主没有 QWidget 窗口 API；真实 MainWindow 一定有。
+        if not hasattr(self, "windowFlags"):
+            return
+        frameless = bool(self._tui_preview)
+        current = bool(self.windowFlags() & Qt.FramelessWindowHint)
+        if current == frameless:
+            return
+        geometry = self.geometry()
+        was_maximized = self.isMaximized()
+        self.setWindowFlag(Qt.FramelessWindowHint, frameless)
+        self.setGeometry(geometry)
+        self.show()
+        if was_maximized:
+            self.showMaximized()
+        self.raise_()
+        self.activateWindow()
+
+    def changeEvent(self, event):  # noqa: N802 - Qt 命名
+        """窗口最大化/还原时把状态推给 TUI 标题栏。"""
+        super().changeEvent(event)
+        if event.type() == QEvent.WindowStateChange:
+            bridge = getattr(self, "_window_bridge", None)
+            if bridge is not None:
+                bridge.notifyMaximized()
+
     def init_ui(self):
         """初始化UI界面
         # 设置初始值/默认状态，避免后续空引用
@@ -296,6 +361,8 @@ class MainWindow(QMainWindow):
         # 启动尺寸与网页版式保持 8:5 比例；最小尺寸避免内容区被压入窄屏布局。
         # 两者都按当前屏幕可用区域收缩，窗口居中且不会压到任务栏下面。
         self._apply_initial_geometry()
+        # 标题与当前模式一致：TUI 不冒充正式界面。
+        self.setWindowTitle(self._window_title())
         
         # 中央窗口
         central_widget = QWidget()
@@ -331,6 +398,19 @@ class MainWindow(QMainWindow):
         desktop_flag.setWorldId(QWebEngineScript.MainWorld)
         desktop_flag.setRunsOnSubFrames(False)
         page.scripts().insert(desktop_flag)
+
+        # 无边框 TUI 的窗口按钮 / 拖动 / 缩放桥：QWebChannel 只在桌面壳里注入，
+        # 浏览器预览不会创建 window.fishtoolDesktop，也不会出现窗口按钮。
+        self._window_bridge = WindowBridge(self)
+        self._web_channel = QWebChannel(page)
+        self._web_channel.registerObject("windowBridge", self._window_bridge)
+        page.setWebChannel(self._web_channel)
+        # Windows 用原生 WM_NCHITTEST 做标题栏拖动 / 边缘缩放；其它平台由页面回退。
+        self._native_hit_test_filter = install_windows_hit_test(self)
+        if self._native_hit_test_filter is not None:
+            app = QApplication.instance()
+            if app is not None:
+                app.aboutToQuit.connect(self._remove_native_hit_test_filter)
 
         # frozen 客户端的 WebEngine 缓存位于用户目录，会跨 exe 版本保留旧 app.js。
         # 桌面壳禁用 HTTP 缓存，确保每次启动都读取当前 exe 内置的 JS/CSS；
@@ -370,6 +450,16 @@ class MainWindow(QMainWindow):
         
         logger.info("[主窗口] UI初始化完成")
     
+    def _remove_native_hit_test_filter(self) -> None:
+        """退出前从 QApplication 摘掉原生命中过滤器，避免窗口销毁后收到消息。"""
+        event_filter = getattr(self, "_native_hit_test_filter", None)
+        if event_filter is None:
+            return
+        app = QApplication.instance()
+        if app is not None:
+            app.removeNativeEventFilter(event_filter)
+        self._native_hit_test_filter = None
+
     def setup_tray(self):
         """设置系统托盘图标和菜单
         # 写入配置/属性，影响后续行为
@@ -388,6 +478,16 @@ class MainWindow(QMainWindow):
         tray_menu = QMenu()
         # 托盘菜单与面板一致：白底、细描边、选中项左侧黄色短条。
         tray_menu.setStyleSheet(menu_style())
+
+        # TUI 核心前端：默认加载；这里提供托盘切换入口。
+        # Web 服务就绪前禁用，避免打开一个必然失败的静态页。
+        self.tui_action = QAction("打开 TUI", self)
+        self.tui_action.setEnabled(False)
+        self.tui_action.triggered.connect(self.toggle_tui_preview)
+        tray_menu.addAction(self.tui_action)
+        tray_menu.addSeparator()
+        self.web_ready.connect(self._enable_tui_action)
+        self._update_tui_action()
         
         # "显示主窗口"菜单项
         # 将内容呈现到界面上
@@ -433,6 +533,24 @@ class MainWindow(QMainWindow):
         
         logger.info("[主窗口] 系统托盘已设置")
     
+    def _update_tui_action(self) -> None:
+        """按当前模式刷新托盘里的 TUI 切换文案（动作尚未创建时安全跳过）。"""
+        action = getattr(self, "tui_action", None)
+        if action is None:
+            return
+        action.setText("返回正式界面" if self._tui_preview else "打开 TUI")
+
+    def _enable_tui_action(self) -> None:
+        """Web 服务就绪后启用托盘切换；只由 ``web_ready`` 信号调用。"""
+        action = getattr(self, "tui_action", None)
+        if action is not None:
+            action.setEnabled(True)
+        self._update_tui_action()
+
+    def toggle_tui_preview(self) -> None:
+        """托盘菜单：在 TUI 核心前端与正式 WebUI 之间切换。"""
+        self.load_web_ui(tui_preview=not self._tui_preview)
+
     def on_tray_activated(self, reason):
         """托盘图标激活事件处理
         # 对数据进行加工/分发
@@ -476,9 +594,9 @@ class MainWindow(QMainWindow):
                 # Web 服务已就绪，直接加载界面
                 # 从存储/网络读入数据
                 logger.info("[主窗口] Web服务已在运行")
-                # 加载 Web 界面
-                # 从存储/网络读入数据
-                self.load_web_ui()
+                # 此时 Qt 事件循环可能还没开始，直接 setUrl 会被初始加载页覆盖；
+                # 推迟到事件循环开始后一拍，确保窗口已经 show() 后再导航。
+                QTimer.singleShot(200, self.load_web_ui)
                 return
             
             # 检测是否为冻结环境（PyInstaller打包）
@@ -759,17 +877,32 @@ class MainWindow(QMainWindow):
         # 双保险：DocumentCreation 脚本之外，页面加载完成后再标记一次桌面环境。
         self.web_view.page().runJavaScript("window.__FISHTOOL_DESKTOP__ = true;")
 
-    def load_web_ui(self):
-        """加载 WebUI 页面。
+    def load_web_ui(self, tui_preview: Optional[bool] = None):
+        """加载当前桌面壳页面（正式 WebUI 或 TUI 核心前端）。
 
         该方法必须保持为 MainWindow 的独立方法，供启动完成回调和
         已运行服务分支共同调用；此前误缩进到页面回调中会导致 frozen
         exe 启动时出现 ``MainWindow has no attribute load_web_ui``。
+
+        Args:
+            tui_preview: 是否加载 TUI 核心前端；省略时沿用当前模式。
         """
-        logger.info("[主窗口] 加载WebUI: %s", self.web_url)
+        if tui_preview is not None:
+            self._tui_preview = bool(tui_preview)
+        apply_chrome = getattr(self, "_apply_window_chrome", None)
+        if callable(apply_chrome):
+            apply_chrome()
+        self.setWindowTitle(self._window_title())
+        self._update_tui_action()
+        page_kind = "TUI" if self._tui_preview else "WebUI"
         # 每次桌面启动使用独立查询参数，规避旧 WebEngine 缓存索引残留；
         # 静态 JS/CSS 由 NoCache profile 强制从当前进程内服务重新读取。
-        desktop_url = QUrl(f"{self.web_url}/?desktop_start={int(time.time() * 1000)}")
+        desktop_url = QUrl(build_desktop_page_url(
+            self.web_url,
+            self._tui_preview,
+            int(time.time() * 1000),
+        ))
+        logger.info("[主窗口] 加载%s: %s", page_kind, desktop_url.toString())
         self.web_view.setUrl(desktop_url)
         # 服务就绪后通知外部观察者，保持原有 Qt 信号契约。
         self.web_ready.emit()

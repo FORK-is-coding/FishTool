@@ -47,10 +47,11 @@ FishTool/
 │   ├── main.py                 # FastAPI 应用与 /ws 推送
 │   ├── local_guard.py          # 本机 token 校验
 │   ├── routers/                # 各业务路由（评论、热点、抽奖、自诊、日志…）
-│   └── frontend/               # 前端资源（templates/ + static/）
+│   └── frontend/               # 前端资源（templates/ + static/；static/tui-demo 为 TUI）
 │
 ├── desktop/                     # 桌面壳（PySide6 + QtWebEngine）
-│   ├── main_window.py          # 主窗口
+│   ├── main_window.py          # 主窗口（默认 TUI / --classic 正式 WebUI）
+│   ├── window_bridge.py        # TUI 无边框窗口桥 + Windows 命中测试
 │   ├── pet_window/             # 桌宠悬浮窗
 │   └── ...                     # 主题、图标、WebEngine profile、报告导出
 │

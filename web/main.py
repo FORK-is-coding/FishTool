@@ -24,7 +24,7 @@ FastAPI后端，提供RESTful API接口
 """
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.exception_handlers import http_exception_handler
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 # 从 fastapi.staticfiles 导入符号
 from fastapi.staticfiles import StaticFiles
 # 从 fastapi.templating 导入符号
@@ -646,10 +646,26 @@ app.include_router(auth_router.router, prefix="/api/auth", tags=["登录态"])
 async def root(request: Request):
     """根路径 - 渲染前端页面
 
-    访问 http://localhost:8000/ 时返回前端入口页面
+    访问 http://localhost:8000/ 时返回正式前端入口页面
     # 将结果交回调用方
     """
     return templates.TemplateResponse(request=request, name="index.html")
+
+
+@app.get("/tui")
+async def tui_frontend():
+    """TUI 核心前端入口（真实 API/WS 驱动，不使用模板渲染）。
+
+    静态资源仍走 /static；页面中的脚本和样式使用绝对路径，因此可以从 /tui 直接打开。
+    """
+    page = static_dir / "tui-demo" / "index.html"
+    if not page.is_file():
+        raise HTTPException(status_code=404, detail="TUI frontend not found")
+    return FileResponse(
+        page,
+        media_type="text/html",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 @app.get("/api")

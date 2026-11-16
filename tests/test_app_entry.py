@@ -5,12 +5,12 @@ import app as entry
 
 
 def test_default_runs_desktop_on_8000(monkeypatch):
-    """不带子命令时默认启动桌面版，端口 8000。"""
+    """不带子命令时默认启动桌面版，端口 8000，TUI 核心前端。"""
     calls = []
-    monkeypatch.setattr(entry, "run_desktop", lambda port: calls.append(port) or 0)
+    monkeypatch.setattr(entry, "run_desktop", lambda port, tui=True: calls.append((port, tui)) or 0)
 
     assert entry.main([]) == 0
-    assert calls == [8000]
+    assert calls == [(8000, True)]
 
 
 def test_web_subcommand_dispatches_options(monkeypatch):
@@ -41,10 +41,20 @@ def test_web_init_only_does_not_start_server(monkeypatch):
 def test_desktop_port_option(monkeypatch):
     """app.py desktop --port 将端口传给桌面启动函数。"""
     calls = []
-    monkeypatch.setattr(entry, "run_desktop", lambda port: calls.append(port) or 0)
+    monkeypatch.setattr(entry, "run_desktop", lambda port, tui=True: calls.append((port, tui)) or 0)
 
     assert entry.main(["desktop", "--port", "9001"]) == 0
-    assert calls == [9001]
+    assert calls == [(9001, True)]
+
+
+def test_desktop_classic_option(monkeypatch):
+    """app.py desktop --classic 回退正式 WebUI。"""
+    calls = []
+    monkeypatch.setattr(entry, "run_desktop", lambda port, tui=True: calls.append((port, tui)) or 0)
+
+    assert entry.main(["desktop", "--classic"]) == 0
+    assert calls == [(8000, False)]
+    assert entry.build_parser().parse_args(["desktop"]).classic is False
 
 
 def test_web_host_defaults_to_loopback():

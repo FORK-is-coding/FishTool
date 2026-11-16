@@ -60,7 +60,8 @@ pip install -r requirements.txt
 
 | 命令 | 效果 |
 | --- | --- |
-| `python app.py` | 桌面版：主窗口 + 桌宠 + 系统托盘，同时浏览器也能打开 http://localhost:8000 |
+| `python app.py` | 桌面版：默认 TUI 核心前端 + 桌宠 + 系统托盘，同时浏览器也能打开 http://localhost:8000 |
+| `python app.py desktop --classic` | 桌面版加载完整正式 WebUI（TUI 回退） |
 | `python app.py web` | 只启动网页版，适合 macOS / Linux 或不想要桌面窗口时 |
 | `python app.py web --port 9000` | 换端口 |
 | `python app.py web --host 0.0.0.0` | 让局域网其他设备访问，同时要设置环境变量 `FISHTOOL_ALLOWED_HOSTS`，例如 `localhost,127.0.0.1,192.168.1.10` |
@@ -74,6 +75,20 @@ pip install -r requirements.txt
 ![配置](./assets/readme/config.png)
 
 更细的操作步骤见 [QUICKSTART.md](./QUICKSTART.md)。
+
+
+### TUI 终端前端
+
+桌面版默认加载全新的 TUI 核心前端，固定 `/tui` 也可在浏览器打开：
+
+- 无边框窗口，页面标题栏即窗口标题栏；支持拖动、双击最大化/还原、原生边缘缩放、关闭到托盘。
+- 首页 / 热点 / 评论 / 配置 / 拆解 / 自诊 / 抽奖 / 寻找伪人 / 日志全部读取真实 API / WS。
+- 所有内容页使用内部 SCREEN 分屏（PageUp/PageDown、j/k、◀ ▶），日志按视口高度分页，不依赖纵向滚动条。
+- 顶部标签 `0–9` 直达；方向键按屏幕空间移动焦点；下拉/输入框/复选框有统一的 TUI 编辑与焦点反馈。
+- 需要完整正式 WebUI 时使用 `--classic`，或在托盘菜单返回正式界面；`/` 仍是完整正式界面。
+
+详细说明见 [web/frontend/static/tui-demo/README.md](./web/frontend/static/tui-demo/README.md)。
+
 
 ## 功能
 
