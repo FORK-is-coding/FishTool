@@ -45,6 +45,12 @@ FishTool的目标是成为开源、免费、共创、普惠、为所有视频创
 - 8000 端口被别的程序占用时，可以在命令行里运行 `start_web.bat 9000` 换个端口。
 
 ### 其他启动方式
+### Docker 部署
+```bash
+docker compose up -d --build
+```
+访问 `http://localhost:8000`，数据保存在 `fishtool-data`、`fishtool-config` 卷中。默认只接受来自 `localhost` / `127.0.0.1` 的管理请求；需要其他域名或端口时，在 `.env` 中设置 `FISHTOOL_ALLOWED_HOSTS` 和 `FISHTOOL_ALLOWED_PORTS`。
+
 
 先在项目目录安装一次依赖，然后：
 

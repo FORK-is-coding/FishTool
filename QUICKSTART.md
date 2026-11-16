@@ -146,6 +146,12 @@ A:
 A: 
 - 不需要手动获取：在"欢迎"页点击"扫码登录"，扫码成功后 Cookie 自动加密保存
 
+### Docker 部署
+```bash
+docker compose up -d --build
+```
+访问 `http://localhost:8000`，数据保存在 `fishtool-data`、`fishtool-config` 卷中；其他域名或端口需设置 `FISHTOOL_ALLOWED_HOSTS` 与 `FISHTOOL_ALLOWED_PORTS`。
+
 ## 命令行参数
 
 ```bash
