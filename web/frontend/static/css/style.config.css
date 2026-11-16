@@ -115,7 +115,7 @@
     padding: 22px 24px 20px;
     border: 0;
     border-radius: var(--r-card);
-    background-color: #fff;
+    background-color: var(--bg-secondary);
     box-shadow: var(--shadow-card);
 }
 

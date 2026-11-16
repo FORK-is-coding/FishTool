@@ -71,6 +71,96 @@
     --shadow: 0 0 4px rgba(0, 0, 0, .14);
     --shadow-hover: 0 6px 22px rgba(0, 0, 0, .10);
     --glow-color: rgba(25, 25, 25, .10);
+    /* 组件局部令牌（默认浅色值，暗色块里覆盖）：
+       field-bg 表单/复选框底；cta 侧栏深色按钮；btn-primary 主按钮文字与悬停底。 */
+    --field-bg: #ffffff;
+    --cta-ink: #ffffff;
+    --cta-bg: #191919;
+    --cta-bg-hover: #383838;
+    --cta-rule: rgba(255, 255, 255, .3);
+    --btn-primary-ink: #eeeeee;
+    --btn-primary-ink-hover: #ffffff;
+    --btn-hover: #2a2a2a;
+    --danger-contrast-ink: #ffffff;
+    --nav-label-ink: #eeeeee;
+    --nav-label-no: #b3b3b3;
+    --round-btn-bg: #fafafa;
+    --round-btn-ring: #ffffff;
+    /* 空心大字：浅色下淡墨描边/斜纹 */
+    --hollow-stroke: rgba(25, 25, 25, .08);
+    --hollow-stripe: rgba(25, 25, 25, .10);
+    /* 危险色软底（警示 chip 等）：浅色下浅红 */
+    --danger-soft: #fdecea;
+    /* 词云品红调：浅色下深品红 */
+    --tone-magenta: #c2187f;
+}
+
+/* ===== 暗色主题：只覆盖颜色类令牌，几何 / 字体 / 缓动令牌沿用 :root =====
+   由 index.html <head> 内联脚本按 localStorage 提前给 <html> 打 data-theme="dark"。
+   灰阶与浅色版同构（纸面↔炭面、墨色↔浅墨），三色段与状态色微调亮度保证暗底可读；
+   本文件下方仍写死的 #fff / #191919 等白色卡片、深色面板再逐条覆盖。 */
+[data-theme="dark"] {
+    color-scheme: dark;
+    --paper: #17181a;
+    --paper-2: #1e1f22;
+    --paper-3: #2a2b2f;
+    --rule: #3a3b40;
+    --rule-2: #4c4d53;
+    --ink: #e8e8e6;
+    --ink-2: #cfcfcb;
+    --ink-3: #9a9a96;
+    --ink-4: #6e6e6a;
+    --btn: #d8d8d4;
+    --dark: #101113;
+    --dark-2: #1a1b1e;
+    --dark-rule: #3a3b40;
+    --ok: #4cc696;
+    --warn: #ffb84d;
+    --danger: #ff6f64;
+    --info: #7c9aff;
+    --primary-color: #d8d8d4;
+    --secondary-color: #cfcfcb;
+    --accent-color: #fffa00;
+    --bg-primary: #17181a;
+    --bg-secondary: #1e1f22;
+    --bg-tertiary: #26272b;
+    --bg-elevated: #242529;
+    --text-primary: #e8e8e6;
+    --text-secondary: #9a9a96;
+    --text-muted: #6e6e6a;
+    --border-color: #3a3b40;
+    --success-color: #4cc696;
+    --warning-color: #ffb84d;
+    --danger-color: #ff6f64;
+    --primary-soft: rgba(216, 216, 212, .10);
+    --primary-border-hover: #9a9a96;
+    --shadow-card: 0 0 4px rgba(0, 0, 0, .5);
+    --shadow: 0 0 4px rgba(0, 0, 0, .5);
+    --shadow-hover: 0 6px 22px rgba(0, 0, 0, .45);
+    --glow-color: rgba(232, 232, 230, .08);
+    --topbar-bg: rgba(23, 24, 26, .94);
+    /* 组件局部令牌暗色覆盖：主按钮反转成浅底深字；侧栏 CTA 反转成浅底；
+       表单底换深灰；深色面板（日志/常驻监控）仍是深底，相关规则不跟着反转。 */
+    --field-bg: #26272b;
+    --cta-ink: #191919;
+    --cta-bg: #d8d8d4;
+    --cta-bg-hover: #eeeeec;
+    --cta-rule: rgba(25, 25, 25, .3);
+    --btn-primary-ink: #191919;
+    --btn-primary-ink-hover: #101113;
+    --btn-hover: #eeeeec;
+    --danger-contrast-ink: #191919;
+    --nav-label-ink: #191919;
+    --nav-label-no: #6e6e6a;
+    --round-btn-bg: #242529;
+    --round-btn-ring: #17181a;
+    /* 空心大字：暗色下淡白描边/斜纹 */
+    --hollow-stroke: rgba(232, 232, 230, .09);
+    --hollow-stripe: rgba(232, 232, 230, .11);
+    /* 危险色软底：暗色下暗红 */
+    --danger-soft: rgba(224, 54, 44, .18);
+    /* 词云品红调：暗色下亮品红 */
+    --tone-magenta: #ff6fc6;
 }
 
 /* 注册 CSS 变量 --x / --y：app.ui.js 的 bindGlowCards 写入光标坐标，供卡片光晕定位并支持过渡。 */
@@ -177,7 +267,7 @@ h3 {
     flex-direction: column;
     align-items: center;
     width: var(--side);
-    background: #fff;
+    background: var(--bg-secondary);
     box-shadow: 1px 0 0 var(--paper-3);
 }
 
@@ -320,7 +410,7 @@ h3 {
     z-index: 5;
     padding: 7px 12px 7px 10px;
     white-space: nowrap;
-    color: #eee;
+    color: var(--nav-label-ink, #eee);
     background: var(--btn);
     border-radius: 2px;
     box-shadow: var(--shadow-card);
@@ -343,9 +433,10 @@ h3 {
     background: var(--signal);
 }
 
+/* 悬停标签里的页码：浅色下浅灰，与标签深底对比；暗色下 --btn 变浅底，文字要反转。 */
 .nav-label b {
     margin-left: 10px;
-    color: var(--ink-4);
+    color: var(--nav-label-no, #b3b3b3);
     font: 500 10px/1 var(--f-mono);
 }
 
@@ -395,7 +486,7 @@ h3 {
     background: var(--danger);
 }
 
-/* 侧栏主操作：#191919 + 细斜纹 + 白色 30% 分隔线 + 4px 圆角。 */
+/* 侧栏主操作：#191919 + 细斜纹 + 白色 30% 分隔线 + 4px 圆角（暗色下反转为浅底深字）。 */
 .side-cta {
     position: relative;
     display: block;
@@ -404,11 +495,11 @@ h3 {
     margin-bottom: 10px;
     padding: 10px 0 9px;
     overflow: hidden;
-    color: #fff;
+    color: var(--cta-ink, #fff);
     text-align: center;
     text-decoration: none;
     border-radius: 4px;
-    background: #191919 url("/static/tex/hatch-dark.svg");
+    background: var(--cta-bg, #191919) url("/static/tex/hatch-dark.svg");
     font: 600 10px/1.3 var(--f-body);
     transition: background-color .2s;
 }
@@ -426,11 +517,11 @@ h3 {
     width: 24px;
     height: 2px;
     margin: 9px auto 8px;
-    background: rgba(255, 255, 255, .3);
+    background: var(--cta-rule, rgba(255, 255, 255, .3));
 }
 
 .side-cta:hover {
-    background-color: #383838;
+    background-color: var(--cta-bg-hover, #383838);
 }
 
 .side-ver {
@@ -472,7 +563,7 @@ h3 {
     height: 36px;
     padding: 0 var(--gutter);
     color: var(--ink-3);
-    background: rgba(250, 250, 250, .94);
+    background: var(--topbar-bg, rgba(250, 250, 250, .94));
     font: 500 11px/1 var(--f-mono);
     letter-spacing: .06em;
 }
@@ -495,6 +586,51 @@ h3 {
 
 .tb-clock {
     color: var(--ink-2);
+}
+
+/* 主题切换灯泡按钮：顶栏右侧的方形小钮，与细条的等宽字号对齐。
+   默认灯泡「熄灭」（描边线性图标），暗色主题下点亮（signal 黄填充）。 */
+.tb-theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    margin-left: 14px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--ink-3);
+    cursor: pointer;
+}
+
+.tb-theme-toggle svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.tb-theme-toggle:hover {
+    color: var(--ink);
+}
+
+.tb-theme-toggle:focus {
+    outline: none;
+    box-shadow: inset 0 0 0 1px var(--rule-2);
+}
+
+/* 暗色主题下灯泡点亮：黄色灯丝 + 底部光线。 */
+[data-theme="dark"] .tb-theme-toggle {
+    color: var(--signal);
+}
+
+[data-theme="dark"] .tb-theme-toggle svg {
+    fill: currentColor;
+    fill-opacity: .25;
 }
 
 /* ---------------- 页面容器：默认隐藏，激活页显示并逐块上浮入场 ---------------- */
@@ -565,8 +701,8 @@ h3 {
     color: transparent;
     font: 800 132px/1 var(--f-wide);
     letter-spacing: -.06em;
-    -webkit-text-stroke: 1px rgba(25, 25, 25, .08);
-    background: repeating-linear-gradient(-45deg, rgba(25, 25, 25, .10) 0 1px, transparent 1px 5px);
+    -webkit-text-stroke: 1px var(--hollow-stroke, rgba(25, 25, 25, .08));
+    background: repeating-linear-gradient(-45deg, var(--hollow-stripe, rgba(25, 25, 25, .10)) 0 1px, transparent 1px 5px);
     -webkit-background-clip: text;
     background-clip: text;
     pointer-events: none;
@@ -803,11 +939,11 @@ h3 {
     transform: none;
 }
 
-/* 主按钮 */
+/* 主按钮（暗色下 --btn 为浅底，文字色跟着反转） */
 .btn-primary {
     min-width: 120px;
     padding: 8px 24px 8px 28px;
-    color: #eee;
+    color: var(--btn-primary-ink, #eee);
     background: var(--btn) url("/static/tex/btn-hatch.svg") right center / auto 100% no-repeat;
     box-shadow: none;
 }
@@ -824,8 +960,8 @@ h3 {
 }
 
 .btn-primary:hover {
-    color: #fff;
-    background-color: #2a2a2a;
+    color: var(--btn-primary-ink-hover, #fff);
+    background-color: var(--btn-hover, #2a2a2a);
     box-shadow: none;
 }
 
@@ -835,14 +971,14 @@ h3 {
 
 .btn-primary:disabled,
 .btn-primary.is-disabled {
-    color: #b3b3b3;
-    background-color: #5a5a5a;
+    color: var(--ink-3);
+    background-color: var(--paper-3);
 }
 
 .btn-primary:disabled::after,
 .btn-primary.is-disabled::after {
     width: 6px;
-    background: #8a8a8a;
+    background: var(--ink-4);
 }
 
 /* 次按钮：.btn-secondary 与 .btn-line 同一外观；.btn-line 悬停转危险色（用于“清除登录态”这类操作）。 */
@@ -868,19 +1004,20 @@ h3 {
 /* 危险按钮：浅底 + 危险色细框，悬停实底，不做大面积红块。 */
 .btn-danger {
     color: var(--danger);
-    background: #fff;
+    background: var(--bg-secondary);
     box-shadow: inset 0 0 0 1px rgba(224, 54, 44, .45);
 }
 
 .btn-danger:hover {
-    color: #fff;
+    color: var(--danger-contrast-ink, #fff);
     background: var(--danger);
     box-shadow: none;
 }
 
-/* 深色面板上的按钮：主按钮改浅底深字，避免黑上叠黑。 */
+/* 深色面板上的按钮：主按钮改浅底深字，避免黑上叠黑。
+   这些深色面板在暗色主题下仍是深底，浅底按钮保持不变。 */
 .btn-on-dark {
-    color: var(--ink);
+    color: #191919;
     background-color: #fafafa;
     background-image: none;
 }
@@ -899,7 +1036,7 @@ h3 {
 }
 
 .btn-on-dark:hover {
-    color: var(--ink);
+    color: #191919;
     background-color: #fff;
 }
 
@@ -944,8 +1081,8 @@ h3 {
     color: var(--ink-2);
     border: 0;
     border-radius: 50%;
-    background: #fafafa url("/static/tex/grain.svg");
-    box-shadow: var(--shadow-round), inset 0 0 0 2.6px var(--paper-3), inset 0 0 0 4.6px #fff;
+    background: var(--round-btn-bg, #fafafa) url("/static/tex/grain.svg");
+    box-shadow: var(--shadow-round), inset 0 0 0 2.6px var(--paper-3), inset 0 0 0 4.6px var(--round-btn-ring, #fff);
     cursor: pointer;
     transition: color .2s, box-shadow .2s;
 }
@@ -957,7 +1094,7 @@ h3 {
 
 .round-btn:hover {
     color: var(--ink);
-    box-shadow: var(--shadow-round), inset 0 0 0 2.6px var(--ink-4), inset 0 0 0 4.6px #fff;
+    box-shadow: var(--shadow-round), inset 0 0 0 2.6px var(--ink-4), inset 0 0 0 4.6px var(--round-btn-ring, #fff);
 }
 
 .round-btn:disabled {
@@ -997,7 +1134,7 @@ h3 {
     color: var(--ink);
     border: 0;
     border-radius: var(--r-btn);
-    background-color: #fff;
+    background-color: var(--field-bg, #fff);
     box-shadow: inset 0 0 0 1px var(--rule);
     font: 14px var(--f-body);
     outline: none;
@@ -1076,7 +1213,7 @@ input[type="checkbox"] {
     vertical-align: -3px;
     border: 0;
     border-radius: 2px;
-    background: #fff no-repeat center / 10px 10px;
+    background: var(--field-bg, #fff) no-repeat center / 10px 10px;
     box-shadow: inset 0 0 0 1px var(--rule-2);
     cursor: pointer;
     transition: background-color .15s, box-shadow .15s;
@@ -1144,7 +1281,7 @@ input[type="checkbox"]:disabled {
     height: 16px;
     margin-right: 10px;
     border-radius: 2px;
-    background: #fff;
+    background: var(--field-bg, #fff);
     box-shadow: inset 0 0 0 1px var(--rule-2);
     transition: background-color .15s, box-shadow .15s;
 }
@@ -1456,14 +1593,14 @@ code {
     margin-top: 24px;
 }
 
-/* ---------------- 页脚：#252726 + 左侧 3px 黄竖条 ---------------- */
+/* ---------------- 页脚：#252726 + 左侧 3px 黄竖条（暗色下沿用深底） ---------------- */
 .app-foot {
     position: relative;
     z-index: 1;
     display: flex;
     align-items: center;
     padding: 26px var(--gutter);
-    color: #8a8a8a;
+    color: var(--ink-3);
     background: var(--dark-2);
     font: 500 11px/1 var(--f-mono);
     letter-spacing: .06em;
@@ -1506,7 +1643,7 @@ code {
 .ai-research-card,
 .account-tag-cloud-card {
     --tex-fade: linear-gradient(180deg, rgba(255, 255, 255, .7) 0, rgba(255, 255, 255, .7) 34%, rgba(255, 255, 255, .35) 66%, rgba(255, 255, 255, 0) 92%);
-    background-color: #fff;
+    background-color: var(--bg-secondary);
     background-image: var(--tex-fade), url("/static/tex/card-block.svg"), url("/static/tex/card-field.svg");
     background-size: 100% 100%, 104px 104px, 12px 12px;
     background-repeat: no-repeat, repeat, repeat;
@@ -1539,6 +1676,40 @@ code {
 
 .hotspot-lifecycle-card {
     background-position: left 24px bottom 18px, 0 0, left -1px bottom -1px, left bottom;
+}
+
+/* 暗色主题：白卡底纹整套换成暗色版本 —— 底色用 --bg-secondary，纹理换成
+   低亮度白线版本（card-*-dark.svg），白色渐隐层改为暗色渐隐，条码角标降透明度。 */
+[data-theme="dark"] .card,
+[data-theme="dark"] .section,
+[data-theme="dark"] .sheet,
+[data-theme="dark"] .stat-cell,
+[data-theme="dark"] .metric-item,
+[data-theme="dark"] .hotspot-lifecycle-card,
+[data-theme="dark"] .chart-panel,
+[data-theme="dark"] .voice-item,
+[data-theme="dark"] .logs-area,
+[data-theme="dark"] .hero-side,
+[data-theme="dark"] .diagnosis-detail-card,
+[data-theme="dark"] .ai-research-card,
+[data-theme="dark"] .account-tag-cloud-card {
+    --tex-fade: linear-gradient(180deg, rgba(30, 31, 34, .9) 0, rgba(30, 31, 34, .9) 34%, rgba(30, 31, 34, .5) 66%, rgba(30, 31, 34, 0) 92%);
+    background-color: var(--bg-secondary);
+    background-image: var(--tex-fade), url("/static/tex/card-block-dark.svg"), url("/static/tex/card-field-dark.svg");
+}
+
+[data-theme="dark"] .card,
+[data-theme="dark"] .section,
+[data-theme="dark"] .sheet,
+[data-theme="dark"] .stat-cell,
+[data-theme="dark"] .metric-item,
+[data-theme="dark"] .hotspot-lifecycle-card {
+    background-image: url("/static/tex/card-code-dark.svg"), var(--tex-fade), url("/static/tex/card-block-dark.svg"), url("/static/tex/card-field-dark.svg");
+}
+
+[data-theme="dark"] .stat-cell.is-accent,
+[data-theme="dark"] .card.guide-step {
+    background-image: var(--tex-fade), url("/static/tex/card-block-dark.svg"), url("/static/tex/card-field-dark.svg");
 }
 
 /* 强调指标卡右下已有排线短条；配置页步骤卡正文贴近右下角。这两类不叠条码 */

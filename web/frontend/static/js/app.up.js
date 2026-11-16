@@ -693,6 +693,16 @@ function renderSelfDiagnosisResult(uid, result) {
     renderDiagnosisCharts(videos, engagement, benchmark);
 }
 
+// 暗色主题联动：CSS 变量随 data-theme 切换后，用最近一次自诊结果（diagnosisState）重渲染诊断仪表盘。
+// 图表与词云色板都来自设计令牌，重渲染即换色；不重新请求接口，也不影响冻结排名容器（#ranking-result 独立）。
+// 监听器注册做容错：node vm 测试桩的 document 可能没有 addEventListener。
+if (typeof document.addEventListener === 'function') {
+    document.addEventListener('fishtool:themechange', () => {
+        if (!diagnosisState?.result) return;
+        renderSelfDiagnosisResult(diagnosisState.uid, diagnosisState.result);
+    });
+}
+
 // 判断当前页面是否由桌面壳加载（由 QWebEngineScript 在文档创建阶段注入）。
 function isDesktopShell() {
     return window.__FISHTOOL_DESKTOP__ === true;

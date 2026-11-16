@@ -60,7 +60,7 @@
     padding:22px 24px 20px;
     border:0;
     border-radius:var(--r-card);
-    background-color:#fff;
+    background-color: var(--bg-secondary);
     box-shadow:var(--shadow-card);
     transition:box-shadow .25s, transform .3s var(--ease);
 }
@@ -219,7 +219,7 @@
     flex-direction:column;
     width:min(420px, 92vw);
     height:100%;
-    background:#fff;
+    background: var(--bg-secondary);
     box-shadow:-8px 0 30px rgba(0, 0, 0, .15);
     transform:translateX(104%);
     visibility:hidden;
@@ -318,7 +318,7 @@
     margin: 12px 0;
     padding: 16px 18px 14px;
     border-radius: var(--r-card);
-    background: #fff;
+    background: var(--bg-secondary);
     box-shadow: var(--shadow-card);
 }
 .event-topic-card::before, .event-opportunity-card::before {
@@ -343,10 +343,10 @@
     min-width:0;
     border:0;
     color:var(--ink-2);
-    background:#fff;
+    background: var(--bg-secondary);
     box-shadow:inset 0 0 0 1px var(--rule);
 }
-.event-tag-chip:hover { color:var(--ink); background:#fff; box-shadow:inset 0 0 0 1px var(--ink-2); }
+.event-tag-chip:hover { color:var(--ink); background: var(--bg-secondary); box-shadow:inset 0 0 0 1px var(--ink-2); }
 /* 归属方式：浅灰底板，选项为方角细线框 */
 .event-attribution {
     margin:12px 0;
@@ -374,7 +374,7 @@
     cursor:pointer;
     border:0;
     border-radius:2px;
-    background:#fff;
+    background: var(--bg-secondary);
     box-shadow:inset 0 0 0 1px var(--rule);
     transition:color .2s, box-shadow .2s;
 }
@@ -391,7 +391,7 @@
     margin:0;
     border:0;
     border-radius:50%;
-    background:#fff;
+    background: var(--bg-secondary);
     box-shadow:inset 0 0 0 1px var(--rule-2);
     cursor:pointer;
     transition:box-shadow .15s, background .15s;
@@ -418,7 +418,7 @@
 .event-trace-list { margin:6px 0; padding-left:18px; color:var(--ink-3); font:500 11px/1.7 var(--f-mono); }
 /* 双通道：两张白卡并排，卡间留缝 */
 .event-dual-channel { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin-top:12px; }
-.event-channel { padding:12px 14px; border-radius:var(--r-card); background:#fff; box-shadow:var(--shadow-card); }
+.event-channel { padding:12px 14px; border-radius:var(--r-card); background: var(--bg-secondary); box-shadow:var(--shadow-card); }
 .event-channel h4 { margin-bottom:4px; color:var(--ink); font-size:13px; }
 .event-assessment { margin-top:12px; padding:12px 14px; border-radius:var(--r-card); background:var(--paper-2); }
 .event-assessment-history { margin-top:8px; }

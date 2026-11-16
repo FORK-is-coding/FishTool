@@ -87,7 +87,7 @@
     padding: 20px 22px 18px;
     border: 0;
     border-radius: var(--r-card);
-    background-color: #fff;
+    background-color: var(--bg-secondary);
     box-shadow: var(--shadow-card);
 }
 
@@ -134,7 +134,7 @@
     padding: 18px 20px 12px;
     border: 0;
     border-radius: var(--r-card);
-    background-color: #fff;
+    background-color: var(--bg-secondary);
     box-shadow: var(--shadow-card);
 }
 
@@ -207,6 +207,11 @@
     background: var(--paper) url("/static/tex/card-field.svg") left bottom / 12px 12px;
 }
 
+/* 暗色主题：空态底与网点纹理换暗色版本。 */
+[data-theme="dark"] .chart-empty {
+    background-image: url("/static/tex/card-field-dark.svg");
+}
+
 /* 空态联动：面板标记 is-empty 时隐藏图表本体。 */
 .chart-panel.is-empty .dashboard-chart {
     visibility: hidden;
@@ -256,7 +261,7 @@
     padding: 16px 22px;
     border: 0;
     border-radius: var(--r-card);
-    background-color: #fff;
+    background-color: var(--bg-secondary);
     box-shadow: var(--shadow-card);
     transition: transform .25s var(--ease), box-shadow .25s;
 }
@@ -352,7 +357,7 @@
     text-align: center;
     font-size: 13px;
     border-radius: var(--r-card);
-    background: #fff;
+    background: var(--bg-secondary);
     box-shadow: var(--shadow-card);
 }
 

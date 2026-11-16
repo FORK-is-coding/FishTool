@@ -439,40 +439,72 @@ async function loadHotspotTimeline(bvid, titleRow) {
         }
         // 只取最近 12 个点，时间按快照顺序升序排列。
         const recent = points.slice(-12);
-        const times = recent.map(p => (p.time || '').slice(5, 16));
-        // 四个互动指标的颜色读 style.base.css 的设计令牌：播放用墨色做主轴，其余用状态色区分。
-        const rootStyle = getComputedStyle(document.documentElement);
-        const token = (name, fallback) => rootStyle.getPropertyValue(name).trim() || fallback;
-        const metricSeries = [
-            { key: 'view', name: '播放', color: token('--ink', '#191919') },
-            { key: 'danmaku', name: '弹幕', color: token('--ok', '#1f9d6a') },
-            { key: 'reply', name: '评论', color: token('--info', '#2d5bd8') },
-            { key: 'like', name: '点赞', color: token('--warn', '#e08a00') },
-        ];
-        box.innerHTML = `<div class="hotspot-timeline-title">互动趋势（最近 ${recent.length} 次快照）</div><div class="hotspot-timeline-chart"></div>`;
-        const chartDom = box.querySelector('.hotspot-timeline-chart');
-        const chart = echarts.init(chartDom);
-        chart.setOption({
-            tooltip: { trigger: 'axis' },
-            legend: { top: 0, textStyle: { fontSize: 11 } },
-            grid: { left: 46, right: 12, top: 30, bottom: 24 },
-            xAxis: { type: 'category', data: times, axisLabel: { fontSize: 10 } },
-            yAxis: { type: 'value', axisLabel: { fontSize: 10 } },
-            series: metricSeries.map(m => ({
-                name: m.name,
-                type: 'line',
-                smooth: true,
-                symbolSize: 5,
-                data: recent.map(p => (p[m.key] === undefined ? null : p[m.key])),
-                itemStyle: { color: m.color },
-                lineStyle: { width: 2 },
-            })),
-        });
+        // 缓存最近 12 个点：主题切换时直接重画，不重复请求接口。
+        hotspotTimelineCache.set(bvid, recent);
+        renderHotspotTimelineChart(box, recent);
         box.dataset.loaded = '1';
         box.classList.add('hotspot-timeline-open');
     } catch (error) {
         box.innerHTML = `<p class="hotspot-timeline-empty">时间轴加载失败：${escapeHtml(error.message)}</p>`;
     }
+}
+
+// 把时间轴画进 box：颜色在每次绘制时现读设计令牌，主题切换后重调即可换色，不重新请求。
+function renderHotspotTimelineChart(box, recent) {
+    // 重画会整体替换 innerHTML：旧实例先 dispose，避免 echarts 注册表随主题切换累积失效实例。
+    const previousDom = box.querySelector('.hotspot-timeline-chart');
+    if (previousDom) {
+        const previous = echarts.getInstanceByDom(previousDom);
+        if (previous) previous.dispose();
+    }
+    const times = recent.map(p => (p.time || '').slice(5, 16));
+    // 四个互动指标的颜色读 style.base.css 的设计令牌：播放用墨色做主轴，其余用状态色区分。
+    const rootStyle = getComputedStyle(document.documentElement);
+    const token = (name, fallback) => rootStyle.getPropertyValue(name).trim() || fallback;
+    const metricSeries = [
+        { key: 'view', name: '播放', color: token('--ink', '#191919') },
+        { key: 'danmaku', name: '弹幕', color: token('--ok', '#1f9d6a') },
+        { key: 'reply', name: '评论', color: token('--info', '#2d5bd8') },
+        { key: 'like', name: '点赞', color: token('--warn', '#e08a00') },
+    ];
+    box.innerHTML = `<div class="hotspot-timeline-title">互动趋势（最近 ${recent.length} 次快照）</div><div class="hotspot-timeline-chart"></div>`;
+    const chartDom = box.querySelector('.hotspot-timeline-chart');
+    const chart = echarts.init(chartDom);
+    chart.setOption({
+        tooltip: { trigger: 'axis' },
+        legend: { top: 0, textStyle: { fontSize: 11 } },
+        grid: { left: 46, right: 12, top: 30, bottom: 24 },
+        xAxis: { type: 'category', data: times, axisLabel: { fontSize: 10 } },
+        yAxis: { type: 'value', axisLabel: { fontSize: 10 } },
+        series: metricSeries.map(m => ({
+            name: m.name,
+            type: 'line',
+            smooth: true,
+            symbolSize: 5,
+            data: recent.map(p => (p[m.key] === undefined ? null : p[m.key])),
+            itemStyle: { color: m.color },
+            lineStyle: { width: 2 },
+        })),
+    });
+}
+
+// 各时间轴已取回的最近 12 个快照点：bvid → points，主题切换时按 box 现状重画，不重复请求。
+const hotspotTimelineCache = new Map();
+
+// 暗色主题联动：对当前 DOM 里已加载且展开的时间轴，用缓存数据重画（颜色现读令牌）。
+// 折叠状态的 box 是 display:none，宽度为 0，跳过；展开时既有逻辑会 resize，届时令牌已是新主题。
+// 监听器注册做容错：node vm 测试桩的 document 可能没有 addEventListener。
+if (typeof document.addEventListener === 'function') {
+    document.addEventListener('fishtool:themechange', () => {
+        document.querySelectorAll('.hotspot-timeline-box').forEach(box => {
+            if (box.dataset.loaded !== '1' || !box.classList.contains('hotspot-timeline-open')) return;
+            const points = hotspotTimelineCache.get(box.dataset.bvid);
+            if (!points || !points.length) return;
+            renderHotspotTimelineChart(box, points);
+            const chart = echarts.getInstanceByDom(box.querySelector('.hotspot-timeline-chart'));
+            if (chart) chart.resize();
+        });
+    });
 }
 
 // §15.1-④：字符化入口——定位某个视频的 02 原卡片并展开时间轴（复用既有逻辑，不新建详情页）。

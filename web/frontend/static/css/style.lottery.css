@@ -86,7 +86,7 @@ html:not(.no-flex-gap) .lottery-modal-actions > .btn { margin-left: 0; }
     padding: 13px 16px;
     border: 0;
     border-radius: var(--r-card);
-    background: #fff;
+    background: var(--bg-secondary);
     box-shadow: var(--shadow-card);
 }
 .lottery-candidate-row > span,
@@ -161,7 +161,7 @@ html:not(.no-flex-gap) .lottery-modal-actions > .btn { margin-left: 0; }
     padding: 0 10px;
     color: var(--ink-2);
     border-radius: 2px;
-    background: #fff;
+    background: var(--bg-secondary);
     box-shadow: inset 0 0 0 1px var(--rule);
     font: 500 11px/1 var(--f-mono);
 }
@@ -177,7 +177,7 @@ html:not(.no-flex-gap) .lottery-modal-actions > .btn { margin-left: 0; }
     padding: 16px 18px;
     border: 0;
     border-radius: var(--r-card);
-    background: #fff;
+    background: var(--bg-secondary);
     box-shadow: var(--shadow-card);
     transition: transform .25s var(--ease), box-shadow .25s;
 }

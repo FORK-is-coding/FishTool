@@ -73,12 +73,17 @@ def test_escape_html_and_js_arg_defined_once_in_core() -> None:
 
 
 def test_core_script_loads_before_other_app_scripts() -> None:
-    """app.core.js 必须先于其他 app.*.js 及内联脚本加载，共享工具函数才可用。"""
+    """app.core.js 必须先于其他 app.*.js 及 body 内联脚本加载，共享工具函数才可用。
+
+    head 里的主题首帧恢复内联脚本（restoreThemeEarly）是刻意的例外：
+    它必须在样式生效前同步执行以防暗色模式白闪，且不使用任何共享工具函数。
+    """
     html = _INDEX_HTML.read_text(encoding="utf-8")
     scripts = re.findall(r'<script src="/static/js/(app\.[a-z]+\.js)', html)
     assert scripts and scripts[0] == "app.core.js"
     core_pos = html.index("/static/js/app.core.js")
-    inline_positions = [m.start() for m in re.finditer(r"<script>\s", html)]
+    body_pos = html.index("<body>")
+    inline_positions = [m.start() for m in re.finditer(r"<script>\s", html) if m.start() > body_pos]
     assert inline_positions, "index.html 应包含内联脚本（watch / 发现区块）"
     assert all(core_pos < pos for pos in inline_positions)
 

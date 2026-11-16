@@ -80,14 +80,15 @@ html:not(.no-flex-gap) .resident-monitor-controls > .btn { margin-left: 0; }
 }
 .resident-monitor-card .form-control::placeholder { color: #6f6f6f; }
 .resident-monitor-card .form-control:focus { box-shadow: inset 0 0 0 1px #8a8a8a, inset 3px 0 0 var(--signal); }
-/* 深色面板上的按钮：主按钮改浅底深字，次按钮改暗色线框，避免黑上叠黑。 */
+/* 深色面板上的按钮：主按钮改浅底深字，次按钮改暗色线框，避免黑上叠黑。
+   面板本身是深底（两个主题下都是），主按钮保持浅底 #fafafa，不跟随 --bg-secondary 反转。 */
 .resident-monitor-card .btn-primary {
-    color: var(--ink);
+    color: #191919;
     border-color: transparent;
     background-color: #fafafa;
     background-image: none;
 }
-.resident-monitor-card .btn-primary:hover { color: var(--ink); background-color: #fff; }
+.resident-monitor-card .btn-primary:hover { color: #191919; background-color: #fff; }
 .resident-monitor-card .btn-secondary {
     color: #d9d9d9;
     border-color: transparent;

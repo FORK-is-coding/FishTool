@@ -195,6 +195,10 @@ function renderVoiceComments(comments) {
     }).join('');
 }
 
+// 最近一次大屏渲染入参的快照：主题切换（fishtool:themechange）时用同一份数据重绘画布。
+// visualization 保持原对象引用（重渲染只读不改）；statusText 一并缓存以复现状态行文案。
+let commentDashboardSnapshot = null;
+
 // 统一消费后端 visualization 契约并渲染完整大屏。
 function renderCommentDashboard(visualization, statusText = '数据已更新') {
     const data = visualization && typeof visualization === 'object' ? visualization : {};
@@ -214,7 +218,19 @@ function renderCommentDashboard(visualization, statusText = '数据已更新') {
     renderTrendChart(data.date_comment_counts || []);
     renderDedupChart(dedup.reasons || {});
     renderVoiceComments(top10);
+    commentDashboardSnapshot = { visualization: data, statusText };
     commentDashboardLoaded = true;
+}
+
+// 暗色主题联动：CSS 变量随 data-theme 切换后，用最近一次的数据重读令牌并重绘画布。
+// setOption 为合并模式，只更新颜色即可，不 dispose 重建；重绘后补一次 resize 防止隐藏页尺寸变化。
+// 监听器注册做容错：node vm 测试桩的 document 可能没有 addEventListener。
+if (typeof document.addEventListener === 'function') {
+    document.addEventListener('fishtool:themechange', () => {
+        if (!commentDashboardLoaded || !commentDashboardSnapshot) return;
+        renderCommentDashboard(commentDashboardSnapshot.visualization, commentDashboardSnapshot.statusText);
+        resizeCommentCharts();
+    });
 }
 
 // 进入评论页时加载最近一份已落库数据，解决后端有测试数据但页面始终空白的问题。
