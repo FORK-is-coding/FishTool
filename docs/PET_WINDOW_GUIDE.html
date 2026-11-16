@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>桌宠模块图解指南 · FishTool</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --panel:#ffffff; --ink:#16181d; --ink2:#4b515c; --ink3:#7b828f;
+    --rule:#e3e6ec; --rule2:#eef0f4;
+    --blue:#3b6fd4; --blue-bg:#eaf0fc;
+    --amber:#b8720a; --amber-bg:#fdf3e0;
+    --red:#c1362c; --red-bg:#fceceb;
+    --green:#1f7a52; --green-bg:#e8f6ef;
+    --purple:#6a4bc4; --purple-bg:#f0ecfb;
+    --code-bg:#f2f4f8; --code-ink:#25293a;
+    --shadow:0 1px 2px rgba(16,24,40,.05),0 8px 24px rgba(16,24,40,.05);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0f1216; --panel:#161a20; --ink:#e8eaee; --ink2:#b3bac6; --ink3:#8b93a1;
+      --rule:#262c35; --rule2:#1e242c;
+      --blue:#7aa2f7; --blue-bg:#182437;
+      --amber:#e8b45c; --amber-bg:#2a2113;
+      --red:#f2776b; --red-bg:#2c1917;
+      --green:#66c79b; --green-bg:#14261f;
+      --purple:#b39cf5; --purple-bg:#211c33;
+      --code-bg:#1b2027; --code-ink:#dfe4ec;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.3);
+    }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+    line-height:1.7; font-size:15px; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px 80px}
+  a{color:var(--blue);text-decoration:none}
+  a:hover{text-decoration:underline}
+  header{padding:52px 0 26px;border-bottom:1px solid var(--rule)}
+  .eyebrow{font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink3);font-weight:600}
+  h1{font-size:34px;line-height:1.25;margin:10px 0 8px;letter-spacing:-.01em}
+  .lead{font-size:16px;color:var(--ink2);max-width:72ch;margin:0}
+  .metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px;margin-top:26px}
+  .metric{background:var(--panel);border:1px solid var(--rule);border-radius:12px;padding:12px 14px;box-shadow:var(--shadow)}
+  .metric b{display:block;font-size:22px;line-height:1.2;font-variant-numeric:tabular-nums}
+  .metric span{font-size:12px;color:var(--ink3)}
+  nav{position:sticky;top:0;z-index:20;background:var(--bg);border-bottom:1px solid var(--rule);margin:0 -22px;padding:8px 22px}
+  nav ul{display:flex;gap:4px;list-style:none;margin:0;padding:0;overflow-x:auto;scrollbar-width:none}
+  nav ul::-webkit-scrollbar{display:none}
+  nav a{display:block;white-space:nowrap;font-size:13px;color:var(--ink2);padding:6px 10px;border-radius:8px}
+  nav a:hover{background:var(--rule2);text-decoration:none}
+  nav a.on{background:var(--blue-bg);color:var(--blue);font-weight:600}
+  section{padding:40px 0 6px;border-bottom:1px dashed var(--rule)}
+  section:last-of-type{border-bottom:0}
+  .num{display:inline-block;font-variant-numeric:tabular-nums;font-size:12px;font-weight:700;color:var(--blue);background:var(--blue-bg);border-radius:6px;padding:2px 7px;margin-right:9px;vertical-align:2px}
+  h2{font-size:23px;margin:0 0 6px;letter-spacing:-.01em}
+  h3{font-size:16px;margin:26px 0 8px;color:var(--ink)}
+  h4{font-size:14px;margin:18px 0 6px;color:var(--ink2);font-weight:600}
+  p{margin:10px 0;color:var(--ink2);max-width:82ch}
+  .plain{margin:14px 0 18px;padding:12px 15px;background:var(--amber-bg);border-left:3px solid var(--amber);border-radius:0 8px 8px 0;color:var(--ink);font-size:14.5px}
+  .plain b{color:var(--amber)}
+  .card{background:var(--panel);border:1px solid var(--rule);border-radius:14px;padding:18px 20px;box-shadow:var(--shadow);margin:16px 0}
+  .grid{display:grid;gap:12px;margin:16px 0}
+  .g2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+  .g3{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+  .tile{background:var(--panel);border:1px solid var(--rule);border-radius:12px;padding:14px 15px;box-shadow:var(--shadow)}
+  .tile h5{margin:0 0 4px;font-size:13.5px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--blue)}
+  .tile .loc{font-size:12px;color:var(--ink3);font-variant-numeric:tabular-nums}
+  .tile p{margin:7px 0 0;font-size:13px;line-height:1.6}
+  .bar{height:5px;border-radius:3px;background:var(--rule2);margin-top:10px;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--blue);opacity:.75;border-radius:3px}
+  .tw{overflow-x:auto;margin:14px 0;border:1px solid var(--rule);border-radius:12px;background:var(--panel)}
+  table{border-collapse:collapse;width:100%;font-size:13.5px}
+  th,td{text-align:left;padding:10px 13px;border-bottom:1px solid var(--rule2);vertical-align:top}
+  th{background:var(--rule2);font-size:12.5px;color:var(--ink2);font-weight:600;white-space:nowrap}
+  tr:last-child td{border-bottom:0}
+  code{font-family:ui-monospace,SFMono-Regular,Consolas,"Cascadia Mono",monospace;background:var(--code-bg);color:var(--code-ink);padding:1.5px 5px;border-radius:5px;font-size:12.8px}
+  pre{background:var(--code-bg);border:1px solid var(--rule);border-radius:12px;padding:14px 16px;overflow-x:auto;margin:12px 0;font-size:12.8px;line-height:1.65}
+  pre code{background:none;padding:0;color:inherit;font-size:inherit}
+  .cmt{color:var(--ink3)}
+  .badge{display:inline-block;font-size:11.5px;font-weight:600;padding:2px 7px;border-radius:999px;white-space:nowrap;line-height:1.6}
+  .b-a{background:var(--green-bg);color:var(--green)}
+  .b-b{background:var(--amber-bg);color:var(--amber)}
+  .b-c{background:var(--red-bg);color:var(--red)}
+  .b-dead{background:var(--rule2);color:var(--ink3);text-decoration:line-through}
+  .fig{background:var(--panel);border:1px solid var(--rule);border-radius:14px;padding:16px;box-shadow:var(--shadow);margin:18px 0;overflow-x:auto}
+  .fig svg{display:block;min-width:660px;width:100%;height:auto}
+  .fig figcaption{font-size:12.5px;color:var(--ink3);margin-top:10px;padding-top:10px;border-top:1px dashed var(--rule2)}
+  .svg-ink{fill:var(--ink);font-family:system-ui,"Microsoft YaHei",sans-serif}
+  .node-t{font-size:12.5px;font-weight:600;fill:var(--ink);font-family:system-ui,"Microsoft YaHei",sans-serif}
+  .node-s{font-size:11px;fill:var(--ink2);font-family:system-ui,"Microsoft YaHei",sans-serif}
+  .lbl{font-size:10.5px;fill:var(--ink3);font-family:ui-monospace,Consolas,monospace}
+  .box{fill:var(--panel);stroke:var(--rule);stroke-width:1.5}
+  .box-b{fill:var(--blue-bg);stroke:var(--blue);stroke-width:1.5}
+  .box-a{fill:var(--amber-bg);stroke:var(--amber);stroke-width:1.5}
+  .box-g{fill:var(--green-bg);stroke:var(--green);stroke-width:1.5}
+  .box-r{fill:var(--red-bg);stroke:var(--red);stroke-width:1.5}
+  .box-p{fill:var(--purple-bg);stroke:var(--purple);stroke-width:1.5}
+  .flow{stroke:var(--ink3);stroke-width:1.6;fill:none}
+  .flow-b{stroke:var(--blue);stroke-width:1.8;fill:none}
+  .flow-a{stroke:var(--amber);stroke-width:1.8;fill:none;stroke-dasharray:5 4}
+  .flow-r{stroke:var(--red);stroke-width:1.6;fill:none;stroke-dasharray:4 4}
+  .risks{display:grid;gap:9px;margin:14px 0}
+  .risk{display:grid;grid-template-columns:56px 1fr;gap:12px;align-items:start;background:var(--panel);border:1px solid var(--rule);border-radius:11px;padding:12px 14px}
+  .risk .sev{font-size:11px;font-weight:700;text-align:center;border-radius:7px;padding:3px 0}
+  .sev-hi{background:var(--red-bg);color:var(--red)}
+  .sev-md{background:var(--amber-bg);color:var(--amber)}
+  .sev-lo{background:var(--blue-bg);color:var(--blue)}
+  .risk b{display:block;font-size:14px;margin-bottom:2px}
+  .risk span{font-size:13px;color:var(--ink2)}
+  .risk .fix{font-size:12.5px;color:var(--green);margin-top:4px;display:block}
+  .cols{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin:16px 0}
+  .panel-ok,.panel-no{border-radius:12px;padding:14px 16px;border:1px solid var(--rule);background:var(--panel)}
+  .panel-ok{border-left:3px solid var(--green)}
+  .panel-no{border-left:3px solid var(--red)}
+  .panel-ok h4,.panel-no h4{margin:0 0 8px}
+  .panel-ok ul,.panel-no ul{margin:0;padding-left:18px;font-size:13.5px;color:var(--ink2)}
+  .panel-ok li,.panel-no li{margin:5px 0}
+  details{background:var(--panel);border:1px solid var(--rule);border-radius:12px;padding:12px 16px;margin:12px 0}
+  summary{cursor:pointer;font-size:14px;font-weight:600;color:var(--ink)}
+  summary::marker{color:var(--blue)}
+  details[open] summary{margin-bottom:10px;padding-bottom:9px;border-bottom:1px dashed var(--rule2)}
+  details p{margin:8px 0}
+  footer{padding:34px 0 0;color:var(--ink3);font-size:12.5px}
+  footer p{margin:6px 0;max-width:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">FishTool · desktop/pet_window</div>
+  <h1>桌宠模块图解指南</h1>
+  <p class="lead">一份可以当作 PR 前地图的模块说明书：它由哪些零件拼成、对外开哪几个口子、改哪里安全、哪里一碰就会炸。所有结论都来自当前仓库代码，不是设计意图。</p>
+  <div class="metrics">
+    <div class="metric"><b>12</b><span>个 Python 文件</span></div>
+    <div class="metric"><b>1,158</b><span>行代码（wc -l 合计）</span></div>
+    <div class="metric"><b>4</b><span>个状态（实际只用 3 个）</span></div>
+    <div class="metric"><b>2</b><span>种消息 type</span></div>
+    <div class="metric"><b>18</b><span>条测试（当前全绿）</span></div>
+    <div class="metric"><b>0</b><span>行业务逻辑</span></div>
+  </div>
+</header>
+
+<nav id="navbar">
+  <ul>
+    <li><a href="#s1">01 一句话看懂</a></li>
+    <li><a href="#s2">02 它从哪来</a></li>
+    <li><a href="#s3">03 十二个零件</a></li>
+    <li><a href="#s4">04 乐高拼装</a></li>
+    <li><a href="#s5">05 四张脸</a></li>
+    <li><a href="#s6">06 手感与阈值</a></li>
+    <li><a href="#s7">07 对讲机协议</a></li>
+    <li><a href="#s8">08 三个接缝</a></li>
+    <li><a href="#s9">09 扩展雷达</a></li>
+    <li><a href="#s10">10 坑清单</a></li>
+    <li><a href="#s11">11 PR 纪律</a></li>
+    <li><a href="#s12">12 速查卡</a></li>
+  </ul>
+</nav>
+
+<section id="s1">
+  <h2><span class="num">01</span>一句话看懂：桌宠是什么</h2>
+  <p class="plain"><b>人话版：</b>桌宠是一个「前台接待员」。她不会算账、不碰数据库、不调 B 站接口。她只做三件事：站在桌角（悬浮窗）、换表情（四张图）、把对讲机里听到的话转成一张便利贴贴出来（气泡）。她需要帮助时会去敲经理的门（主窗口）。</p>
+
+  <p>代码层面的定位同样朴素：<b>一个纯 Qt 悬浮窗 + 一个 WebSocket 消费端</b>。整个模块里没有任何一行代码读写数据库、请求 B 站、或调用业务模块 —— 这是它能被安全扩展的根本原因，也是 PR 里最不该破坏的性质。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 430" role="img" aria-label="桌宠运行拓扑图">
+      <title>桌宠在整体架构中的位置</title>
+      <defs>
+        <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+          <path d="M0,0 L9,4.5 L0,9 z" fill="context-stroke"/>
+        </marker>
+      </defs>
+
+      <rect x="18" y="26" width="904" height="212" rx="14" fill="none" stroke="var(--rule)" stroke-width="1.5" stroke-dasharray="6 5"/>
+      <text x="36" y="50" class="lbl">同一个 Qt 进程 · 同一个事件循环 · 由 app.py run_desktop() 装配</text>
+
+      <rect class="box box-b" x="44" y="66" width="250" height="90" rx="10"/>
+      <text x="62" y="94" class="node-t">主窗口 MainWindow</text>
+      <text x="62" y="114" class="node-s">QWebEngineView 内嵌整套网页</text>
+      <text x="62" y="132" class="node-s">托盘 · 原生保存对话框</text>
+      <text x="62" y="148" class="lbl">desktop/main_window.py · 962 行</text>
+
+      <rect class="box box-a" x="344" y="66" width="250" height="90" rx="10"/>
+      <text x="362" y="94" class="node-t">桌宠 PetWindow ← 本指南主角</text>
+      <text x="362" y="114" class="node-s">150×150 无边框置顶透明窗</text>
+      <text x="362" y="132" class="node-s">四态表情 · 气泡 · 三卡片菜单</text>
+      <text x="362" y="148" class="lbl">desktop/pet_window/ · 1,158 行</text>
+
+      <rect class="box" x="644" y="66" width="250" height="90" rx="10"/>
+      <text x="662" y="94" class="node-t">系统托盘 / 桌宠气泡</text>
+      <text x="662" y="114" class="node-s">toast 高优先级错误</text>
+      <text x="662" y="132" class="node-s">预警气泡（5 秒自动消失）</text>
+      <text x="662" y="148" class="lbl">main_window.py show_toast()</text>
+
+      <rect class="box box-g" x="128" y="248" width="360" height="96" rx="10"/>
+      <text x="148" y="276" class="node-t">uvicorn · 127.0.0.1:8000（独立子进程）</text>
+      <text x="148" y="296" class="node-s">FastAPI · 111 条 API 路由</text>
+      <text x="148" y="314" class="node-s">/ws 连接池 ConnectionManager</text>
+      <text x="148" y="332" class="lbl">web/main.py · websocket_endpoint / push_alert</text>
+
+      <rect class="box" x="540" y="248" width="356" height="96" rx="10"/>
+      <text x="560" y="276" class="node-t">你的浏览器标签页（可选）</text>
+      <text x="560" y="296" class="node-s">同一套页面，也会订阅 /ws</text>
+      <text x="560" y="314" class="node-s">但只认 type=toast，忽略 alert</text>
+      <text x="560" y="332" class="lbl">web/frontend/static/js/app.ui.js</text>
+
+      <path class="flow-b" d="M169,156 L169,248" marker-end="url(#ar)"/>
+      <text x="58" y="230" class="lbl">HTTP 拉页面 / 调 API</text>
+
+      <path class="flow-a" d="M400,156 L400,248" marker-end="url(#ar)"/>
+      <text x="407" y="196" class="lbl">ws://localhost:8000/ws</text>
+      <text x="407" y="212" class="lbl">只收，不回（除心跳 ping）</text>
+
+      <path class="flow" d="M598,296 L540,296" marker-end="url(#ar)"/>
+
+      <path class="flow-r" d="M344,110 C300,110 300,110 294,110" marker-end="url(#ar)"/>
+      <text x="44" y="184" class="lbl" text-anchor="start">红虚线 = 鸭子类型：靠 hasattr 找窗口，不是信号/接口</text>
+      <text x="44" y="200" class="lbl" text-anchor="start">① show_window() 开主面板   ② quit_application() 退出</text>
+
+      <rect x="18" y="372" width="904" height="46" rx="9" fill="var(--red-bg)" stroke="var(--red)" stroke-width="1.2"/>
+      <text x="36" y="392" class="node-t" fill="var(--red)">端口是三者唯一的暗号</text>
+      <text x="36" y="409" class="node-s">app.py 把同一个 port 分别传给 MainWindow(web_port) 与 PetWindow(ws_port)；端口不一致 = 桌宠永远连不上，页面也打不开。</text>
+    </svg>
+    <figcaption>图 1 · 桌宠在整体架构里的位置。三块「同一进程」的窗口，一个独立子进程里的服务，中间只有 HTTP 和一条 WebSocket。</figcaption>
+  </div>
+
+  <div class="grid g3">
+    <div class="tile"><h5>它不做什么</h5><p>不读写数据库、不调 B 站 API、不做情感分析、不生成选题。这些全在 FastAPI 那一侧。</p></div>
+    <div class="tile"><h5>它做什么</h5><p>显示四种状态图、渲染一条气泡、三个菜单动作、把鼠标交互翻译成窗口移动与位置记忆。</p></div>
+    <div class="tile"><h5>因此扩展边界</h5><p>「展示 + 交互 + 消费协议」是安全区；一旦要碰服务端协议、重连策略、业务数据，就先补接口与测试。</p></div>
+  </div>
+</section>
+
+<section id="s2">
+  <h2><span class="num">02</span>它从哪来：谁创建、传什么、几秒出来</h2>
+  <p class="plain"><b>人话版：</b>没有单独的桌宠启动脚本。你在命令行敲 <code>python app.py</code>，<code>run_desktop()</code> 先盖好经理室（主窗口），再把接待员（桌宠）安排到桌角。接待员一上岗就掏出对讲机，试着连后厨（8000 端口）。</p>
+
+  <pre><code><span class="cmt"># app.py:219-224</span>
+main_window = MainWindow(web_port=port)
+main_window.show()
+pet_window = PetWindow(ws_port=port)   <span class="cmt"># 同一个 port</span>
+pet_window.show()</code></pre>
+
+  <p>构造签名只有一个参数，但有三处依赖它 —— <b>改签名等于同时打断三处</b>：</p>
+  <div class="tw">
+    <table>
+      <thead><tr><th>调用方</th><th>路径</th><th>用途</th></tr></thead>
+      <tbody>
+        <tr><td>统一入口</td><td><code>app.py:223</code></td><td>桌面版装配，正式链路</td></tr>
+        <tr><td>P0 验收脚本</td><td><code>tools/verify_pet_p0.py:83</code></td><td>真窗口 + 合成鼠标事件回归</td></tr>
+        <tr><td>桌面回归脚本</td><td><code>tools/verify_desktop_regressions.py:129</code></td><td>桌面端弹窗 / 交互回归</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 300" role="img" aria-label="桌面端启动时序">
+      <title>从敲命令到桌宠上线的七步</title>
+      <defs>
+        <marker id="ar2" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+          <path d="M0,0 L9,4.5 L0,9 z" fill="context-stroke"/>
+        </marker>
+      </defs>
+      <line x1="40" y1="228" x2="900" y2="228" stroke="var(--rule)" stroke-width="2"/>
+      <text x="40" y="252" class="lbl">0s</text>
+      <text x="470" y="252" class="lbl">约 8–20 秒</text>
+      <text x="856" y="252" class="lbl">就绪</text>
+
+      <rect class="box box-b" x="40" y="40" width="118" height="62" rx="9"/>
+      <text x="54" y="66" class="node-t">① QApplication</text>
+      <text x="54" y="84" class="node-s">高 DPI / OpenGL</text>
+      <path class="flow" d="M99,102 L99,226" marker-end="url(#ar2)"/>
+
+      <rect class="box box-b" x="166" y="40" width="118" height="62" rx="9"/>
+      <text x="180" y="66" class="node-t">② MainWindow</text>
+      <text x="180" y="84" class="node-s">加载动画先顶上</text>
+      <path class="flow" d="M225,102 L225,226" marker-end="url(#ar2)"/>
+
+      <rect class="box box-a" x="292" y="40" width="118" height="62" rx="9"/>
+      <text x="306" y="66" class="node-t">③ 试 /health</text>
+      <text x="306" y="84" class="node-s">2 秒超时</text>
+      <path class="flow" d="M351,102 L351,226" marker-end="url(#ar2)"/>
+
+      <rect class="box box-g" x="418" y="40" width="118" height="62" rx="9"/>
+      <text x="432" y="66" class="node-t">④ 起子进程</text>
+      <text x="432" y="84" class="node-s">app.py web</text>
+      <path class="flow" d="M477,102 L477,226" marker-end="url(#ar2)"/>
+
+      <rect class="box box-g" x="544" y="40" width="118" height="62" rx="9"/>
+      <text x="558" y="66" class="node-t">⑤ 轮询 /health</text>
+      <text x="558" y="84" class="node-s">每 2 秒一次</text>
+      <path class="flow" d="M603,102 L603,226" marker-end="url(#ar2)"/>
+
+      <rect class="box box-b" x="670" y="40" width="118" height="62" rx="9"/>
+      <text x="684" y="66" class="node-t">⑥ 加载页面</text>
+      <text x="684" y="84" class="node-s">?desktop_start=</text>
+      <path class="flow" d="M729,102 L729,226" marker-end="url(#ar2)"/>
+
+      <rect class="box box-a" x="796" y="40" width="108" height="62" rx="9"/>
+      <text x="810" y="66" class="node-t">⑦ 桌宠上线</text>
+      <text x="810" y="84" class="node-s">连 /ws</text>
+      <path class="flow" d="M850,102 L850,226" marker-end="url(#ar2)"/>
+
+      <rect x="40" y="268" width="864" height="24" rx="6" fill="var(--blue-bg)" stroke="var(--blue)" stroke-width="1" stroke-opacity=".35"/>
+      <text x="52" y="284" class="node-s">③ 若 /health 已返回 200（已有 FishTool 在跑）→ 跳过 ④⑤ 直接 ⑥：此时退出桌面端不会杀掉那个「别人的」服务</text>
+    </svg>
+    <figcaption>图 2 · 启动时序。③ 是唯一的分叉点：服务已在跑就复用，否则自己 spawn 一个子进程（日志落 <code>data/logs/web_subprocess.log</code>）。</figcaption>
+  </div>
+
+  <details>
+    <summary>为什么「窗口先出来、页面后出来」？</summary>
+    <p><code>init_ui()</code> 先 <code>setHtml(LOADING_HTML)</code> 摆一个加载动画，然后 <code>QTimer.singleShot(3000, check_and_load_web)</code> 才开始探测。子进程若中途退出，<code>check_and_load_web()</code> 会立刻弹窗并附上 <code>web_subprocess.log</code> 末 1500 字符 —— 不会无限转圈。</p>
+  </details>
+</section>
+
+<section id="s3">
+  <h2><span class="num">03</span>十二个零件：每个文件只管一件事</h2>
+  <p class="plain"><b>人话版：</b>这不是一个大文件，而是十二个小盒子。盒子上都写着「我只负责什么」。你要加功能，先想清楚该往哪个盒子里放 —— 放错盒子就会出现「改一个按钮崩三个测试」。</p>
+
+  <div class="grid g2">
+    <div class="tile"><h5>__init__.py</h5><div class="loc">104 行 · 组装 + 说明书</div><p>类定义只有 <code>pass</code>，靠继承把六个混入拼成 <code>PetWindow</code>；文件头的 docstring 就是协议说明书（消息格式写在里面）。<code>__all__</code> 决定外部能 import 什么。</p><div class="bar"><i style="width:45%"></i></div></div>
+    <div class="tile"><h5>base.py</h5><div class="loc">232 行 · 窗口与状态机</div><p>建窗（无边框 / 置顶 / 透明 / 150×150）、摆图片与气泡标签、加载素材、<code>set_state()</code>。<b>整个模块最核心的盒子。</b></p><div class="bar"><i style="width:100%"></i></div></div>
+    <div class="tile"><h5>drag_mixin.py</h5><div class="loc">184 行 · 手感</div><p>悬停放大、长按 100ms、位移 6px 阈值、拖拽移动、松手存位置、单击开菜单、双击打日志。</p><div class="bar"><i style="width:79%"></i></div></div>
+    <div class="tile"><h5>ws_thread.py</h5><div class="loc">167 行 · 对讲机</div><p><code>QThread</code> 里跑 <code>websocket-client</code>，注册四个回调，发 Qt 信号；连接成功再起一个 daemon 心跳线程（30 秒一次）。</p><div class="bar"><i style="width:72%"></i></div></div>
+    <div class="tile"><h5>menu_mixin.py</h5><div class="loc">101 行 · 三张卡片</div><p>菜单懒创建、淡入 + 上滑动画、右侧优先 / 左侧翻转定位、三个按钮的接线。</p><div class="bar"><i style="width:43%"></i></div></div>
+    <div class="tile"><h5>ws_mixin.py</h5><div class="loc">78 行 · 翻译官</div><p>建线程、桥接 4 个信号、把 JSON 字典按 <code>type</code> 分流（alert / toast）。</p><div class="bar"><i style="width:34%"></i></div></div>
+    <div class="tile"><h5>notify_mixin.py</h5><div class="loc">77 行 · 便利贴</div><p>显示 / 隐藏气泡、单一 5 秒定时器、点别处收菜单（装在 QApplication 上的 eventFilter）。</p><div class="bar"><i style="width:33%"></i></div></div>
+    <div class="tile"><h5>image_label.py</h5><div class="loc">70 行 · 画笔</div><p>等比平滑绘制，<code>scale_factor</code> 属性可被动画驱动，值夹在 1.0–1.08。</p><div class="bar"><i style="width:30%"></i></div></div>
+    <div class="tile"><h5>lifecycle_mixin.py</h5><div class="loc">50 行 · 下班流程</div><p>关窗时依次：收菜单 → 停定时器 → 摘 eventFilter → 停 WS → 等 5 秒 → 接受关闭；退出代理转交主窗口。</p><div class="bar"><i style="width:22%"></i></div></div>
+    <div class="tile"><h5>menu_panel.py</h5><div class="loc">38 行 · 卡片本体</div><p>固定 236×176 的无边框 QFrame，三个按钮：打开主面板 / 舆情预警实况（占位）/ 关闭程序。</p><div class="bar"><i style="width:16%"></i></div></div>
+    <div class="tile"><h5>assets.py</h5><div class="loc">33 行 · 找素材</div><p>三级候选目录（exe 解包目录 → exe 同级 → 仓库根）+ 共享 logger。</p><div class="bar"><i style="width:14%"></i></div></div>
+    <div class="tile"><h5>runner.py</h5><div class="loc">24 行 · 旁门</div><p>独立进程跑桌宠的入口，主流程没用到；单独跑时找不到主窗口，两个动作只会 warn。</p><div class="bar"><i style="width:10%"></i></div></div>
+  </div>
+</section>
+
+<section id="s4">
+  <h2><span class="num">04</span>乐高式拼装：混入（Mixin）是怎么叠起来的</h2>
+  <p class="plain"><b>人话版：</b><code>PetWindow</code> 自己没有身体，它由六块乐高叠出来。越靠左的块优先级越高 —— 两块都想回答同一个问题（比如「鼠标松开了怎么办」）时，左边的赢。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 250" role="img" aria-label="PetWindow 的继承与混入叠放顺序">
+      <title>PetWindow 的 MRO 顺序</title>
+      <defs>
+        <marker id="ar3" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="context-stroke"/></marker>
+      </defs>
+      <text x="24" y="26" class="lbl">class PetWindow(PetWindowBase, WsMixin, NotifyMixin, MenuMixin, DragMixin, LifecycleMixin, QWidget)</text>
+
+      <rect class="box box-p" x="24" y="44" width="140" height="56" rx="9"/>
+      <text x="38" y="68" class="node-t">PetWindowBase</text>
+      <text x="38" y="86" class="node-s">窗口 / 状态机</text>
+
+      <rect class="box box-b" x="176" y="44" width="126" height="56" rx="9"/>
+      <text x="190" y="68" class="node-t">WsMixin</text>
+      <text x="190" y="86" class="node-s">消息分流</text>
+
+      <rect class="box box-a" x="314" y="44" width="126" height="56" rx="9"/>
+      <text x="328" y="68" class="node-t">NotifyMixin</text>
+      <text x="328" y="86" class="node-s">气泡</text>
+
+      <rect class="box box-b" x="452" y="44" width="126" height="56" rx="9"/>
+      <text x="466" y="68" class="node-t">MenuMixin</text>
+      <text x="466" y="86" class="node-s">三卡片</text>
+
+      <rect class="box box-a" x="590" y="44" width="126" height="56" rx="9"/>
+      <text x="604" y="68" class="node-t">DragMixin</text>
+      <text x="604" y="86" class="node-s">手感</text>
+
+      <rect class="box box-g" x="728" y="44" width="126" height="56" rx="9"/>
+      <text x="742" y="68" class="node-t">Lifecycle</text>
+      <text x="742" y="86" class="node-s">清理顺序</text>
+
+      <rect class="box" x="866" y="44" width="50" height="56" rx="9"/>
+      <text x="873" y="78" class="node-t" font-size="11">QWidget</text>
+
+      <path class="flow-b" d="M164,72 L176,72" marker-end="url(#ar3)"/>
+      <path class="flow-b" d="M302,72 L314,72" marker-end="url(#ar3)"/>
+      <path class="flow-b" d="M440,72 L452,72" marker-end="url(#ar3)"/>
+      <path class="flow-b" d="M578,72 L590,72" marker-end="url(#ar3)"/>
+      <path class="flow-b" d="M716,72 L728,72" marker-end="url(#ar3)"/>
+      <path class="flow-b" d="M854,72 L866,72" marker-end="url(#ar3)"/>
+
+      <text x="24" y="128" class="node-s">← 优先级高（先被找到）</text>
+      <text x="820" y="128" class="node-s">优先级低 →</text>
+
+      <rect x="24" y="146" width="892" height="88" rx="10" fill="var(--blue-bg)" stroke="var(--blue)" stroke-width="1" stroke-opacity=".4"/>
+      <text x="40" y="168" class="node-t">三件必须知道的事</text>
+      <text x="40" y="190" class="node-s">① 混入之间靠 self.* 互相调用：DragMixin 调 self.toggle_menu() 与 self._sync_menu_position()，新混入必须提供这些名字，否则 AttributeError。</text>
+      <text x="40" y="208" class="node-s">② 事件方法最后都 super().mouseXxxEvent() 落到 QWidget，链条断在谁那里，事件就丢在谁那里。</text>
+      <text x="40" y="226" class="node-s">③ base.__init__ 末尾固定调 init_ui() → setup_websocket()；子类覆盖 setup_websocket 就能「拔掉对讲机」—— 测试与验收脚本正是靠这个离线化。</text>
+    </svg>
+    <figcaption>图 3 · MRO 顺序。注意第 ③ 点：这是全仓最容易踩碎的测试技巧（<code>OfflinePetWindow</code>）。</figcaption>
+  </div>
+</section>
+
+<section id="s5">
+  <h2><span class="num">05</span>四张脸：状态机里有一个是死的</h2>
+  <p class="plain"><b>人话版：</b>文件里定义了四种表情，但代码从来没用过「点击」那张 —— 它是上一版留下的空壳。真正的「图」只有待机、拖拽两张，通知态只有一颗粉色圆点占位。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 268" role="img" aria-label="桌宠四态状态机">
+      <title>四态与触发条件</title>
+      <defs>
+        <marker id="ar4" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="context-stroke"/></marker>
+      </defs>
+
+      <rect class="box box-b" x="60" y="96" width="150" height="70" rx="12"/>
+      <text x="96" y="126" class="node-t">STATE_IDLE</text>
+      <text x="96" y="146" class="node-s">待机 · 蓝色 · 待机.png</text>
+
+      <rect class="box box-a" x="380" y="20" width="160" height="66" rx="12"/>
+      <text x="416" y="48" class="node-t">STATE_DRAGGING</text>
+      <text x="416" y="68" class="node-s">拖拽 · 橙色 · 拖拽.png</text>
+
+      <rect class="box box-r" x="380" y="176" width="160" height="66" rx="12"/>
+      <text x="416" y="204" class="node-t">STATE_NOTIFY</text>
+      <text x="416" y="224" class="node-s">通知 · 粉色 · 无素材</text>
+
+      <rect class="box" x="720" y="96" width="170" height="70" rx="12" stroke-dasharray="5 4"/>
+      <text x="748" y="124" class="node-t" fill="var(--ink3)" text-decoration="line-through">STATE_CLICKED</text>
+      <text x="748" y="144" class="node-s">点击 · 浅蓝 · 从未被设置</text>
+
+      <path class="flow-a" d="M212,120 C300,120 300,53 378,53" marker-end="url(#ar4)"/>
+      <text x="238" y="78" class="lbl">长按 100ms / 位移 ≥6px</text>
+
+      <path class="flow" d="M382,66 C250,66 250,110 212,110" marker-end="url(#ar4)"/>
+      <text x="238" y="100" class="lbl">松手 → set_state(IDLE)</text>
+
+      <path class="flow-r" d="M296,140 C330,140 330,209 378,209" marker-end="url(#ar4)"/>
+      <text x="300" y="176" class="lbl">收到 alert / toast</text>
+
+      <path class="flow" d="M378,196 C316,196 316,166 212,166" marker-end="url(#ar4)"/>
+      <text x="250" y="232" class="lbl">5 秒后 hide_notification()</text>
+
+      <path class="flow-r" d="M716,130 L894,130" marker-end="url(#ar4)" stroke-opacity=".5"/>
+      <text x="734" y="186" class="lbl">只有定义与占位图，没有调用点</text>
+    </svg>
+    <figcaption>图 4 · 四态实况。灰掉的那只是死代码：要么给它接上「按下即点击态」，要么在 PR 里说明后删掉 —— 二选一，别留着。</figcaption>
+  </div>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>常量</th><th>值</th><th>谁设置它</th><th>素材</th><th>现状</th></tr></thead>
+      <tbody>
+        <tr><td><code>STATE_IDLE</code></td><td>0</td><td>初始化、连接成功、松手、气泡隐藏</td><td><code>assets/待机.png</code></td><td><span class="badge b-a">在用</span></td></tr>
+        <tr><td><code>STATE_DRAGGING</code></td><td>1</td><td>长按到期 / 位移超阈值</td><td><code>assets/拖拽.png</code></td><td><span class="badge b-a">在用</span></td></tr>
+        <tr><td><code>STATE_CLICKED</code></td><td>2</td><td>——</td><td>仅占位圆</td><td><span class="badge b-dead">死代码</span></td></tr>
+        <tr><td><code>STATE_NOTIFY</code></td><td>3</td><td><code>show_notification()</code></td><td>仅占位圆</td><td><span class="badge b-b">半成品</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p><code>set_state()</code> 的契约很短但要记牢：<b>值不在 <code>self.images</code> 里就静默忽略</b>。所以新增状态必须四处齐改：常量 → <code>images</code> 字典 → <code>load_placeholder_images()</code> 的素材与兜底 → 测试宿主的 <code>STATE_*</code> 属性。</p>
+</section>
+
+<section id="s6">
+  <h2><span class="num">06</span>手感：四个数字决定它像不像活的</h2>
+  <p class="plain"><b>人话版：</b>为什么「单击是开菜单、拖动是搬家」不会打架？靠三个阈值分工：按下去先观察 100 毫秒，手指挪动超过 6 像素才算拖，鼠标移入 160 毫秒慢慢放大。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 216" role="img" aria-label="鼠标交互时间轴与阈值">
+      <title>从按下到松手的判定路径</title>
+      <defs>
+        <marker id="ar5" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="context-stroke"/></marker>
+      </defs>
+
+      <line x1="40" y1="96" x2="900" y2="96" stroke="var(--rule)" stroke-width="2"/>
+
+      <circle cx="70" cy="96" r="6" fill="var(--blue)"/>
+      <text x="40" y="76" class="node-s">按下</text>
+
+      <circle cx="300" cy="96" r="6" fill="var(--amber)"/>
+      <text x="232" y="76" class="node-s">100ms 长按到期</text>
+
+      <circle cx="560" cy="96" r="6" fill="var(--green)"/>
+      <text x="496" y="76" class="node-s">位移 &gt; 6px（可随时发生）</text>
+
+      <circle cx="840" cy="96" r="6" fill="var(--red)"/>
+      <text x="800" y="76" class="node-s">松手</text>
+
+      <path class="flow-a" d="M70,116 L292,116" marker-end="url(#ar5)"/>
+      <text x="86" y="136" class="lbl">只记录起点，不切表情（防单击闪素材）</text>
+
+      <path class="flow-b" d="M300,116 L552,116" marker-end="url(#ar5)"/>
+      <text x="330" y="136" class="lbl">任一满足 → STATE_DRAGGING → move() + 同步菜单位置</text>
+
+      <path class="flow" d="M560,116 L832,116" marker-end="url(#ar5)"/>
+      <text x="600" y="136" class="lbl">继续跟手移动</text>
+
+      <rect x="40" y="158" width="400" height="44" rx="8" fill="var(--green-bg)" stroke="var(--green)" stroke-width="1" stroke-opacity=".5"/>
+      <text x="54" y="176" class="node-t" fill="var(--green)">松手时「没拖过」→ toggle_menu() 开菜单</text>
+      <text x="54" y="194" class="lbl">菜单右侧优先 +8px，出界翻左，再夹进屏幕可用区</text>
+
+      <rect x="460" y="158" width="440" height="44" rx="8" fill="var(--blue-bg)" stroke="var(--blue)" stroke-width="1" stroke-opacity=".5"/>
+      <text x="474" y="176" class="node-t" fill="var(--blue)">松手时「拖过」→ 只写 QSettings(position)</text>
+      <text x="474" y="194" class="lbl">下次启动从注册表读回来；位置越界不做校验（见第 10 节）</text>
+    </svg>
+    <figcaption>图 5 · 拖动与单击共存的判定链。顺序不能变：先停计时器、再算距离、再决定开不开菜单。</figcaption>
+  </div>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>数字</th><th>含义</th><th>位置</th></tr></thead>
+      <tbody>
+        <tr><td><code>100 ms</code></td><td>长按到期即视为拖拽（即使没移动，也给视觉确认）</td><td><code>drag_mixin.py:16</code></td></tr>
+        <tr><td><code>6 px</code></td><td>位移阈值下限，实际取 <code>max(6, startDragDistance())</code></td><td><code>drag_mixin.py:19</code></td></tr>
+        <tr><td><code>160 / 180 ms</code></td><td>悬停放大到 1.06 / 复原到 1.0</td><td><code>drag_mixin.py:63,73</code></td></tr>
+        <tr><td><code>5 000 ms</code></td><td>气泡自动消失（单一可复用定时器，新消息重置它）</td><td><code>notify_mixin.py:43</code></td></tr>
+        <tr><td><code>120 ms</code></td><td>点别处后延迟收菜单</td><td><code>notify_mixin.py:76</code></td></tr>
+        <tr><td><code>30 s</code></td><td>心跳 <code>{"type":"ping"}</code> 间隔</td><td><code>ws_thread.py:101</code></td></tr>
+        <tr><td><code>5 000 ms</code></td><td>关窗时等 WS 线程退出的上限</td><td><code>lifecycle_mixin.py:47</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="s7">
+  <h2><span class="num">07</span>对讲机协议：两条管道、两种听众</h2>
+  <p class="plain"><b>人话版：</b>对面只有两种喊话：<b>alert</b>（业务预警，有异常评论）和 <b>toast</b>（系统错误，谁出错弹谁）。桌宠两种都听；网页只听得懂 toast。你新加一种喊话不会被网页骂，它直接忽略。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 330" role="img" aria-label="预警与toast两条消息管道">
+      <title>两条消息管道与消费者</title>
+      <defs>
+        <marker id="ar6" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="context-stroke"/></marker>
+      </defs>
+
+      <rect class="box box-g" x="24" y="40" width="196" height="62" rx="9"/>
+      <text x="38" y="64" class="node-t">CommentMonitor</text>
+      <text x="38" y="82" class="node-s">评论监控 · 产生预警</text>
+      <text x="38" y="96" class="lbl">modules/comment/_alerts.py</text>
+
+      <rect class="box box-p" x="24" y="150" width="196" height="62" rx="9"/>
+      <text x="38" y="174" class="node-t">emit_toast()</text>
+      <text x="38" y="192" class="node-s">任意线程可调 · 2 秒去重</text>
+      <text x="38" y="206" class="lbl">core/toast.py</text>
+
+      <rect class="box box-b" x="286" y="88" width="196" height="72" rx="9"/>
+      <text x="300" y="112" class="node-t">push_alert(alert)</text>
+      <text x="300" y="130" class="node-s">{type:"alert", data}</text>
+      <text x="300" y="148" class="lbl">web/main.py:808</text>
+
+      <rect class="box box-a" x="286" y="196" width="196" height="72" rx="9"/>
+      <text x="300" y="220" class="node-t">toast 桥（sink）</text>
+      <text x="300" y="238" class="node-s">{type:"toast", data}</text>
+      <text x="300" y="256" class="lbl">web/main.py:745</text>
+
+      <rect class="box box-b" x="548" y="120" width="150" height="110" rx="10"/>
+      <text x="562" y="146" class="node-t">ConnectionManager</text>
+      <text x="562" y="166" class="node-s">broadcast()</text>
+      <text x="562" y="184" class="node-s">逐条发送</text>
+      <text x="562" y="202" class="node-s">失败即摘除</text>
+      <text x="562" y="220" class="lbl">web/main.py:684</text>
+
+      <rect class="box box-a" x="756" y="36" width="160" height="80" rx="9"/>
+      <text x="770" y="60" class="node-t">桌宠</text>
+      <text x="770" y="78" class="node-s">alert 收 / toast 收</text>
+      <text x="770" y="96" class="node-s">都进同一条气泡</text>
+      <text x="770" y="110" class="lbl">ws_mixin.on_ws_message</text>
+
+      <rect class="box" x="756" y="136" width="160" height="80" rx="9"/>
+      <text x="770" y="160" class="node-t">浏览器页面</text>
+      <text x="770" y="178" class="node-s">alert 不收 / toast 收</text>
+      <text x="770" y="196" class="node-s">右上角弹 toast</text>
+      <text x="770" y="210" class="lbl">app.ui.js（只认 toast）</text>
+
+      <rect class="box" x="756" y="236" width="160" height="64" rx="9"/>
+      <text x="770" y="260" class="node-t">桌宠心跳</text>
+      <text x="770" y="278" class="node-s">{"type":"ping"} 每 30 秒</text>
+      <text x="770" y="292" class="lbl">服务端只收不回</text>
+
+      <path class="flow" d="M220,71 C252,71 252,124 284,124" marker-end="url(#ar6)"/>
+      <path class="flow-a" d="M220,181 C252,181 252,232 284,232" marker-end="url(#ar6)"/>
+      <path class="flow-b" d="M482,124 C514,124 514,150 546,150" marker-end="url(#ar6)"/>
+      <path class="flow-a" d="M482,232 C514,232 514,200 546,198" marker-end="url(#ar6)"/>
+
+      <path class="flow-b" d="M698,150 C726,150 726,90 754,84" marker-end="url(#ar6)"/>
+      <path class="flow-b" d="M698,175 L754,175" marker-end="url(#ar6)"/>
+      <path class="flow-r" d="M834,236 L834,218" marker-end="url(#ar6)"/>
+      <text x="694" y="292" class="lbl">服务端 receive_text() 后什么都不回，</text>
+      <text x="694" y="308" class="lbl">所以「对端是否活着」只能靠连接状态判断</text>
+    </svg>
+    <figcaption>图 6 · 两条管道汇进同一个广播池，再由各客户端按 type 自行取舍。加新 type 是天然向后兼容的。</figcaption>
+  </div>
+
+  <h3>字段对照：alert 少了一个 title</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>type</th><th>data 字段</th><th>来源</th><th>桌宠怎么用</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>alert</code></td>
+          <td><code>bvid, video_id, type, level, message, details, created_at</code></td>
+          <td><code>modules/comment/_alerts.py:283</code></td>
+          <td>取 <code>title</code> 拿不到 → <b>标题永远是「新通知」</b>；正文取 <code>message</code></td>
+        </tr>
+        <tr>
+          <td><code>toast</code></td>
+          <td><code>title, message, level, source, error_code</code></td>
+          <td><code>core/toast.py:54</code></td>
+          <td>标题、正文都有；<code>message</code> 为空直接丢弃</td>
+        </tr>
+        <tr>
+          <td>其他</td>
+          <td>——</td>
+          <td>——</td>
+          <td>静默忽略（<code>pong</code> 也走这条）</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <details>
+    <summary>握手时还有一道门：Origin 校验</summary>
+    <p>服务端在 <code>accept()</code> 之前检查 <code>Origin</code>，跨站来源直接 <code>close(1008)</code>（<code>web/main.py:787</code>）。当前桌宠用的 <code>websocket-client</code> <b>不带</b> Origin，所以放行。如果你换成带 Origin 的客户端、或加了自定义握手头，就可能被自己的服务拒之门外。</p>
+  </details>
+</section>
+
+<section id="s8">
+  <h2><span class="num">08</span>三个接缝：外部世界只从这里进来</h2>
+  <p class="plain"><b>人话版：</b>桌宠和外界只有三根绳子：一根连着对讲机（WebSocket），一根连着经理室的门把手（鸭子类型方法名），一根贴着便利贴（QSettings）。断哪根，哪块功能就哑。</p>
+
+  <div class="grid g3">
+    <div class="tile"><h5>接缝 1 · WebSocket</h5><div class="loc">ws://localhost:{port}/ws</div><p>只收 <code>alert</code> / <code>toast</code>；只发 <code>ping</code>。端口来自构造参数，与主窗口共用同一个 port。<br><b>改协议要同时看服务端与网页。</b></p></div>
+    <div class="tile"><h5>接缝 2 · 鸭子类型</h5><div class="loc">hasattr(widget, "show_window")</div><p>打开主面板找 <code>show_window()</code>；退出找 <code>quit_application()</code>。没有信号、没有注册表、没有接口类。<br><b>任何同名方法的窗口都会被误命中。</b></p></div>
+    <div class="tile"><h5>接缝 3 · QSettings</h5><div class="loc">BiliOpsToolbox / DesktopPet</div><p>只存一个键 <code>position</code>（QPoint）。注册表路径 <code>HKCU\Software\BiliOpsToolbox\DesktopPet</code>。<br><b>新增配置请加新键，不要复用 position。</b></p></div>
+  </div>
+
+  <h3>可被外部调用的完整清单</h3>
+  <pre><code>pet = PetWindow(ws_port=8000)
+
+<span class="cmt"># 状态与展示</span>
+pet.set_state(PetWindowBase.STATE_IDLE)      <span class="cmt"># 未知值静默忽略</span>
+pet.images                                   <span class="cmt"># {state: QPixmap}</span>
+pet.image_label.set_pet_pixmap(pm)            <span class="cmt"># 等比绘制</span>
+pet.image_label.scale_factor                  <span class="cmt"># Property，夹在 1.0-1.08</span>
+
+<span class="cmt"># 气泡</span>
+pet.show_notification({"title": "...", "message": "..."})   <span class="cmt"># 5 秒后自动隐藏</span>
+pet.show_toast({"title": "...", "message": "...", "level": "error"})
+
+<span class="cmt"># 菜单</span>
+pet.toggle_menu() / show_menu() / hide_menu()
+pet.open_main_panel()      <span class="cmt"># -&gt; 主窗口.show_window()</span>
+pet.close_application()    <span class="cmt"># -&gt; 主窗口.quit_application()（带确认框）</span>
+
+<span class="cmt"># 通信</span>
+pet.ws_thread.start() / stop() / wait(ms)     <span class="cmt"># QThread</span>
+pet.ws_thread.message_received / connected / disconnected / error   <span class="cmt"># 4 个 Qt 信号</span>
+
+<span class="cmt"># 测试宿主必须补齐的属性</span>
+settings, notify_label, _menu_hide_timer, _hover_animation,
+_menu_animation, _drag_start_position, drag_position, menu_panel（懒建）</code></pre>
+</section>
+
+<section id="s9">
+  <h2><span class="num">09</span>扩展雷达：A 级随便改、C 级先设计</h2>
+  <p class="plain"><b>人话版：</b>绿色三件事今天就能动手，改完不碰别人；黄色要先写测试；红色会牵动服务端协议，独立开 PR，先出设计。</p>
+
+  <h3><span class="badge b-a">A 级 · 低风险</span> 只动展示与本地逻辑</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>#</th><th>改什么</th><th>落点</th><th>为什么安全</th></tr></thead>
+      <tbody>
+        <tr><td>A1</td><td>气泡改纯文本 / 标题正文分开；<code>alert</code> 无 title 时按 <code>level</code> / <code>type</code> 映射中文标题</td><td><code>notify_mixin.py</code></td><td>只影响渲染，不动协议</td></tr>
+        <tr><td>A2</td><td>恢复位置时校验是否仍在可用屏幕上，越界回落右下角</td><td><code>base.py:142</code></td><td>只多一次几何判断</td></tr>
+        <tr><td>A3</td><td>补齐 <code>点击.png</code> / <code>通知.png</code> 素材，仍以占位圆兜底；或明确删除死状态</td><td><code>base.py:150</code> + <code>assets/</code></td><td>字典驱动的既有机制</td></tr>
+        <tr><td>A4</td><td>清掉重复定义的 <code>colors</code> 字典、噪声注释</td><td><code>base.py:165/174</code></td><td>纯清理，行为不变</td></tr>
+        <tr><td>A5</td><td>新配置走 <code>PetSettings</code> 适配器，键名前缀避开 <code>position</code></td><td>新文件 + <code>base.py</code></td><td>与旧配置共存</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3><span class="badge b-b">B 级 · 中风险</span> 要动线程 / 动画，先补测试</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>#</th><th>改什么</th><th>注意</th></tr></thead>
+      <tbody>
+        <tr><td>B1</td><td>断线自动重连（1s→30s 指数退避），心跳线程句柄化并在 <code>stop()</code> 里 join</td><td>必须在 <code>closeEvent</code> 的 <code>wait(5000)</code> 语义内退出；重连期间不能堆积心跳线程</td></tr>
+        <tr><td>B2</td><td>离线视觉态（半透明 / 灰化，或新增 <code>STATE_OFFLINE</code>）</td><td>新状态要同步 <code>images</code> + <code>set_state</code> 校验 + 测试宿主</td></tr>
+        <tr><td>B3</td><td>跨屏拖动后按新屏可用区重新夹住；菜单定位复用 <code>screenAt()</code></td><td>别改 <code>_sync_menu_position</code> 的「右侧优先→翻左→夹住」三段式</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3><span class="badge b-c">C 级 · 高风险</span> 牵动服务端与协议</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>#</th><th>改什么</th><th>为什么危险</th></tr></thead>
+      <tbody>
+        <tr><td>C1</td><td>把「舆情预警实况（待更新）」接上真实数据</td><td>现在是纯 <code>QToolTip</code> 占位；接数据需要新 API 或新推送 type，且要定「谁能看、看多少」</td></tr>
+        <tr><td>C2</td><td>定向推送（只发给桌宠）</td><td><code>ConnectionManager</code> 现在是全局广播、无 client_id；加频道会同时影响浏览器客户端</td></tr>
+        <tr><td>C3</td><td>多桌宠实例 / 独立进程常驻</td><td>没有实例身份与关闭策略；<code>run_pet_window()</code> 单独跑时找不到主窗口</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="s10">
+  <h2><span class="num">10</span>坑清单：改之前先知道哪里会咬人</h2>
+  <p class="plain"><b>人话版：</b>下面每一条都是代码里真实存在的薄弱点，不是我猜的。A 级 PR 顺手带走几条，评审会觉得你很懂这个模块。</p>
+
+  <div class="risks">
+    <div class="risk"><div class="sev sev-hi">高</div><div><b>没有重连</b><span>服务重启、网络抖动后桌宠永久离线，只留一行 warning。注释写着「显示离线状态」，实际没有任何视觉变化。</span><span class="fix">→ B1 + B2 一起做，一次 PR 收口</span></div></div>
+
+    <div class="risk"><div class="sev sev-hi">高</div><div><b>气泡走 Qt 富文本且未转义</b><span><code>setText("&lt;b&gt;{title}&lt;/b&gt;&lt;br&gt;{message}")</code>，而 <code>message</code> 可能来自评论内容 / 关键词命中，含 <code>&lt;</code> 会被当标签解析掉。</span><span class="fix">→ A1，一行 <code>setTextFormat(Qt.PlainText)</code> 起步</span></div></div>
+
+    <div class="risk"><div class="sev sev-md">中</div><div><b>alert 没有 title 字段</b><span>业务预警永远显示「新通知」，用户看不出是「评论量突增」还是「风险关键词」。</span><span class="fix">→ A1，按 <code>type</code> / <code>level</code> 做映射表</span></div></div>
+
+    <div class="risk"><div class="sev sev-md">中</div><div><b>心跳线程无句柄</b><span>每次 <code>on_open</code> 新建一个 daemon 线程，没有保存引用；一旦加重连，旧线程可能残留并发 send。</span><span class="fix">→ B1，存 <code>self._heartbeat_thread</code> 并在 <code>stop()</code> join</span></div></div>
+
+    <div class="risk"><div class="sev sev-md">中</div><div><b>位置恢复不校验屏幕</b><span>拔掉副屏后，注册表里的坐标可能落在屏幕外，桌宠「消失」，用户以为坏了。</span><span class="fix">→ A2，十分钟的改动</span></div></div>
+
+    <div class="risk"><div class="sev sev-md">中</div><div><b>消息没有结构校验</b><span><code>data</code> 不是 dict、字段不是字符串时，<code>show_notification</code> 里的 <code>.get()</code> 会抛异常；虽然 Qt 槽里异常不一定崩，但这条消息就丢了。</span><span class="fix">→ 加 <code>isinstance</code> 与 <code>str()</code> 兜底</span></div></div>
+
+    <div class="risk"><div class="sev sev-lo">低</div><div><b>STATE_CLICKED 是死状态</b><span>定义、占位图、文档都写了，但没有一个调用点。</span><span class="fix">→ A3 二选一：接上或删掉</span></div></div>
+
+    <div class="risk"><div class="sev sev-lo">低</div><div><b>colors 字典重复定义</b><span>同一个函数里写了两遍，后一份生效，前一份是死代码。</span><span class="fix">→ A4</span></div></div>
+
+    <div class="risk"><div class="sev sev-lo">低</div><div><b>鸭子类型单例假设</b><span>靠 <code>topLevelWidgets()</code> + <code>hasattr</code> 找主窗口，多个窗口有同名方法时行为不确定。</span><span class="fix">→ 若加窗口，命名避开这两个方法</span></div></div>
+
+    <div class="risk"><div class="sev sev-lo">低</div><div><b>素材只覆盖两态</b><span>通知态是粉色圆点，跟整个 UI 设计语言脱节。</span><span class="fix">→ A3</span></div></div>
+  </div>
+</section>
+
+<section id="s11">
+  <h2><span class="num">11</span>PR 纪律：怎么改才不返工</h2>
+  <p class="plain"><b>人话版：</b>这个模块有 18 条测试 + 2 个可视化验收脚本盯着。按下面的清单走，你提的 PR 基本不会被要求重写。</p>
+
+  <div class="cols">
+    <div class="panel-ok">
+      <h4>必须做</h4>
+      <ul>
+        <li>新混入放 <code>desktop/pet_window/xxx_mixin.py</code>，类名 <code>XxxMixin</code>，在 <code>__init__.py:78</code> 的基类列表按依赖顺序插入</li>
+        <li>同步更新 <code>tests/test_desktop_pet_ui.py</code> 的 <code>_PetHost</code> 基类列表与属性桩</li>
+        <li>新增状态四处齐改：常量 → <code>images</code> → <code>load_placeholder_images</code> → 测试宿主</li>
+        <li>新消息类型只在 <code>ws_mixin.on_ws_message</code> 加 <code>elif</code>，字段做类型兜底，未知类型静默忽略</li>
+        <li>日志统一用 <code>.assets.logger</code>，中文消息 + <code>%s</code> 惰性格式化</li>
+        <li>定时器一律 <code>QTimer(self)</code> + <code>setSingleShot(True)</code>，关闭时 <code>stop()</code></li>
+        <li>素材放 <code>assets/</code> 根目录，缺失必须回落占位图</li>
+        <li>Qt 事件回调里包 <code>try/except</code> + <code>logger.exception</code></li>
+      </ul>
+    </div>
+    <div class="panel-no">
+      <h4>不要做</h4>
+      <ul>
+        <li>不要改 <code>PetWindow(ws_port=...)</code> 签名（三处依赖）</li>
+        <li>不要把 <code>setup_websocket</code> 逻辑搬进 <code>__init__</code>（会打掉 <code>OfflinePetWindow</code> 离线技巧）</li>
+        <li>不要改窗口 flags（<code>Tool</code> 决定不进任务栏）</li>
+        <li>不要在 <code>QThread.run</code> 里碰 QWidget</li>
+        <li>不要在事件回调里抛异常（会带走整个窗口进程）</li>
+        <li>不要往 <code>requirements.txt</code> 加新第三方依赖</li>
+        <li>不要把「接真实预警数据」和渲染优化混进同一个 PR</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>提交前自检（cmd，<code>set</code> 的引号不能省）</h3>
+  <pre><code>cd /d D:\\FishTool
+set "QT_QPA_PLATFORM=offscreen"
+.venv\Scripts\python.exe -X faulthandler -m pytest tests/test_desktop_pet_ui.py tests/test_desktop_websocket.py tests/test_desktop_dpi_scroll.py -q
+.venv\Scripts\python.exe tools\verify_pet_p0.py
+.venv\Scripts\python.exe tools\verify_desktop_regressions.py</code></pre>
+
+  <div class="plain" style="border-left-color:var(--red);background:var(--red-bg)">
+    <b>为什么引号不能省？</b>写成 <code>set QT_QPA_PLATFORM=offscreen &amp;&amp; ...</code> 时，<code>&amp;</code> 前面的<b>尾空格</b>会被并进变量值，Qt 解析平台插件名失败直接以 <code>0xC0000409</code> 崩掉进程 —— 这是解释器级崩溃，<code>try/except</code> 拦不住。仓库里已经踩过一次，记录在 <code>docs/TEST_BASELINE_AND_DESKTOP_RUNBOOK.md</code> §3。
+  </div>
+
+  <h3>测试基线（本机实测）</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>命令</th><th>结果</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><code>pytest tests/test_desktop_pet_ui.py tests/test_desktop_websocket.py -q</code></td><td><b>18 passed</b>（7.06s）</td><td>需要 <code>QT_QPA_PLATFORM=offscreen</code>；<code>pytest</code> 不在 requirements 里，本地先装</td></tr>
+        <tr><td><code>python tools/verify_pet_p0.py</code></td><td>7 项全 <code>true</code></td><td>悬停 / 拖拽 / 单击 / 三卡片 / 主面板动作</td></tr>
+        <tr><td><code>python tools/verify_desktop_regressions.py</code></td><td>桌面弹窗与交互回归</td><td>使用真 <code>PetWindow</code> 子类（离线化）</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="s12">
+  <h2><span class="num">12</span>速查卡：一屏记住全部</h2>
+
+  <div class="grid g2">
+    <div class="card">
+      <h4 style="margin-top:0">文件 → 职责（行数）</h4>
+      <table style="font-size:12.5px;margin-top:10px"><tbody>
+        <tr><td style="padding:5px 8px"><code>__init__.py</code></td><td style="padding:5px 8px;color:var(--ink2)">组装 + 协议说明书</td><td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums">104</td></tr>
+        <tr><td style="padding:5px 8px"><code>base.py</code></td><td style="padding:5px 8px;color:var(--ink2)">窗口 / 状态机 / 素材</td><td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums">232</td></tr>
+        <tr><td style="padding:5px 8px"><code>drag_mixin.py</code></td><td style="padding:5px 8px;color:var(--ink2)">手感与阈值</td><td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums">184</td></tr>
+        <tr><td style="padding:5px 8px"><code>ws_thread.py</code></td><td style="padding:5px 8px;color:var(--ink2)">对讲机</td><td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums">167</td></tr>
+        <tr><td style="padding:5px 8px"><code>menu_mixin.py</code></td><td style="padding:5px 8px;color:var(--ink2)">三卡片与定位</td><td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums">101</td></tr>
+        <tr><td style="padding:5px 8px"><code>ws_mixin.py</code></td><td style="padding:5px 8px;color:var(--ink2)">消息分流</td><td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums">78</td></tr>
+        <tr><td style="padding:5px 8px"><code>notify_mixin.py</code></td><td style="padding:5px 8px;color:var(--ink2)">气泡</td><td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums">77</td></tr>
+        <tr><td style="padding:5px 8px"><code>image_label.py</code></td><td style="padding:5px 8px;color:var(--ink2)">等比绘制</td><td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums">70</td></tr>
+        <tr><td style="padding:5px 8px"><code>lifecycle_mixin.py</code></td><td style="padding:5px 8px;color:var(--ink2)">清理顺序</td><td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums">50</td></tr>
+        <tr><td style="padding:5px 8px"><code>menu_panel.py</code></td><td style="padding:5px 8px;color:var(--ink2)">卡片本体</td><td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums">38</td></tr>
+        <tr><td style="padding:5px 8px"><code>assets.py</code></td><td style="padding:5px 8px;color:var(--ink2)">找素材</td><td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums">33</td></tr>
+        <tr><td style="padding:5px 8px"><code>runner.py</code></td><td style="padding:5px 8px;color:var(--ink2)">独立进程旁门</td><td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums">24</td></tr>
+      </tbody></table>
+    </div>
+    <div class="card">
+      <h4 style="margin-top:0">数字 → 含义</h4>
+      <table style="font-size:12.5px;margin-top:10px"><tbody>
+        <tr><td style="padding:5px 8px"><code>150 x 150</code></td><td style="padding:5px 8px;color:var(--ink2)">桌宠窗口</td><td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums"></td></tr>
+        <tr><td style="padding:5px 8px"><code>236 x 176</code></td><td style="padding:5px 8px;color:var(--ink2)">菜单面板</td><td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums"></td></tr>
+        <tr><td style="padding:5px 8px"><code>100 ms</code></td><td style="padding:5px 8px;color:var(--ink2)">长按判拖拽</td><td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums"></td></tr>
+        <tr><td style="padding:5px 8px"><code>6 px</code></td><td style="padding:5px 8px;color:var(--ink2)">位移判拖拽</td><td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums"></td></tr>
+        <tr><td style="padding:5px 8px"><code>1.06</code></td><td style="padding:5px 8px;color:var(--ink2)">悬停放大上限</td><td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums"></td></tr>
+        <tr><td style="padding:5px 8px"><code>5000 ms</code></td><td style="padding:5px 8px;color:var(--ink2)">气泡存活</td><td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums"></td></tr>
+        <tr><td style="padding:5px 8px"><code>120 ms</code></td><td style="padding:5px 8px;color:var(--ink2)">收菜单延迟</td><td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums"></td></tr>
+        <tr><td style="padding:5px 8px"><code>30 s</code></td><td style="padding:5px 8px;color:var(--ink2)">心跳间隔</td><td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums"></td></tr>
+        <tr><td style="padding:5px 8px"><code>8000</code></td><td style="padding:5px 8px;color:var(--ink2)">HTTP / ws 默认端口</td><td style="padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums"></td></tr>
+      </tbody></table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h4 style="margin-top:0">一句话记住三根绳子</h4>
+    <p style="margin:6px 0">对讲机 = <code>/ws</code>，只认 <code>alert</code> 与 <code>toast</code>；门把手 = <code>show_window()</code> / <code>quit_application()</code>；便利贴 = <code>QSettings("BiliOpsToolbox","DesktopPet").position</code>。</p>
+    <p style="margin:6px 0">要加功能，先问自己：<b>我是在改这三根绳子，还是在改接待员的衣服？</b> 改衣服随便改，改绳子先写测试。</p>
+  </div>
+</section>
+
+<footer>
+  <p><b>本文依据</b>：仓库当前 <code>main</code> 分支代码（<code>desktop/pet_window/</code> 12 个文件、<code>desktop/main_window.py</code>、<code>web/main.py</code>、<code>core/toast.py</code>、<code>modules/comment/_alerts.py</code>、<code>web/frontend/static/js/app.ui.js</code>），行号以当前文件为准。</p>
+  <p><b>已过时的文档</b>：<code>docs/DESKTOP_PET_ANALYSIS.md</code> 描述的是旧结构（单文件 <code>desktop/pet_window.py</code> + <code>start_desktop.py</code> 入口），当前代码已拆分为混入、入口统一为 <code>app.py</code>。该文档的「耦合判断」段落仍有参考价值，但文件路径与对象名不可照抄。</p>
+  <p><b>配套命令</b>：<code>python app.py</code>（桌面版，桌宠随主窗口一起出现）· <code>python app.py web</code>（仅网页版，没有桌宠）。</p>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  var links = Array.prototype.slice.call(document.querySelectorAll('#navbar a'));
+  var targets = links.map(function (a) { return document.querySelector(a.getAttribute('href')); });
+
+  function setActive(id) {
+    links.forEach(function (a) {
+      a.classList.toggle('on', a.getAttribute('href') === '#' + id);
+    });
+  }
+
+  if ('IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) { if (e.isIntersecting) setActive(e.target.id); });
+    }, { rootMargin: '-15% 0px -70% 0px', threshold: 0 });
+    targets.forEach(function (t) { if (t) io.observe(t); });
+  }
+
+  links.forEach(function (a) {
+    a.addEventListener('click', function () { setActive(a.getAttribute('href').slice(1)); });
+  });
+})();
+</script>
+</body>
+</html>

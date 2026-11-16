@@ -1,7 +1,11 @@
 """桌宠拖拽与悬停交互。
 
 拆分自原 pet_window.py 的 PetWindow 交互部分：
-支持长按/拖拽移动、悬停缩放与单击菜单触发。
+支持长按/拖拽移动、悬停缩放、单击菜单触发与快速拖动后的「投掷」。
+
+投掷的物理推进在 inertia.py（纯函数），计时与单屏边界在 inertia_mixin.py；
+这里只负责在恰当的时机把事件转给它（:meth:`_notify_inertia`），未装配该混入
+的宿主静默跳过，因此本文件不依赖任何惯性实现细节。
 """
 from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QTimer, Qt
 from PySide6.QtGui import QGuiApplication
@@ -97,9 +101,14 @@ class DragMixin:
                 self._is_dragging = False
                 self._left_button_pressed = True
                 self._menu_hide_timer.stop()
+                # 按下即接住正在飞行的桌宠，并重新开始采速样本。
+                self._notify_inertia("_inertia_on_press", cursor)
                 self._ensure_drag_press_timer().start(self.DRAG_LONG_PRESS_MS)
                 event.accept()
             else:
+                # 任意键按下都能接住飞行中的桌宠；右键不开菜单、也不拖拽，
+                # 所以只调 catch，不碰「本次不弹菜单」标记。
+                self._notify_inertia("_inertia_catch")
                 super().mousePressEvent(event)
         except Exception as exc:
             self._left_button_pressed = False
@@ -143,6 +152,8 @@ class DragMixin:
             # 跨 DPI 边界时 Qt 会重算窗口尺寸，这里每帧纠正一次，避免累积漂移。
             self._keep_pet_size_after_move()
             self._sync_menu_position()
+            # 采一帧位置样本，供松手时的释放速度判定使用。
+            self._notify_inertia("_inertia_track")
             event.accept()
         else:
             super().mouseMoveEvent(event)
@@ -173,13 +184,19 @@ class DragMixin:
             self._save_position_within_desktop()
             # 拖拽释放后再同步一次，消除最后一帧位置误差。
             self._sync_menu_position()
-            if not was_dragging:
+            # 接住飞行中桌宠的那一次松手只停飞，不弹菜单。
+            suppressed = bool(getattr(self, "_suppress_click_menu", False))
+            self._suppress_click_menu = False
+            if not was_dragging and not suppressed:
                 self.toggle_menu()
+            # 释放速度决定是否「投掷」，必须放在状态与位置都落定之后。
+            self._notify_inertia("_inertia_on_release", was_dragging)
             event.accept()
         except Exception as exc:
             # Qt 事件回调中的未捕获异常可能直接终止窗口进程。
             self._is_dragging = False
             self._left_button_pressed = False
+            self._suppress_click_menu = False
             self.set_state(self.STATE_IDLE)
             logger.exception("[桌宠] 鼠标释放处理失败: %s", exc)
             event.accept()
@@ -280,6 +297,21 @@ class DragMixin:
         keeper = getattr(self, "_keep_pet_size", None)
         if keeper is not None:
             keeper()
+
+    def _notify_inertia(self, hook_name: str, *args) -> None:
+        """把交互事件转给可选的惯性混入。
+
+        用鸭子类型而不是直接 import InertiaMixin：投掷是可选能力，没有装配该
+        混入的宿主（部分单测替身、未来的精简窗口）不该因为缺方法而报错。与
+        :meth:`_keep_pet_size_after_move` 的防护思路一致。
+
+        Args:
+            hook_name: 目标方法名，如 ``_inertia_on_press``。
+            *args: 原样透传给目标方法的参数。
+        """
+        hook = getattr(self, hook_name, None)
+        if hook is not None:
+            hook(*args)
 
     def _save_position_within_desktop(self) -> None:
         """把窗口拉回可见区后保存位置。

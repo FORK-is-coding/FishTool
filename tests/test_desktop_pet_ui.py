@@ -39,7 +39,7 @@ if _qt_platform and _qt_platform.strip() != "offscreen":
         "（本文件硬约束：必须 offscreen；防解释器级崩溃污染全量）"
     )
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QPropertyAnimation, QRect, Qt
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QPropertyAnimation, QRect, QSize, Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
@@ -48,6 +48,7 @@ from desktop.pet_window import assets as pet_assets
 from desktop.pet_window.base import PetWindowBase
 from desktop.pet_window.drag_mixin import DragMixin
 from desktop.pet_window.image_label import PetImageLabel
+from desktop.pet_window.inertia_mixin import InertiaMixin
 from desktop.pet_window.lifecycle_mixin import LifecycleMixin
 from desktop.pet_window.menu_mixin import MenuMixin
 from desktop.pet_window.menu_panel import PetMenuPanel
@@ -277,8 +278,8 @@ class _MixinHostBase(QObject):
         return QPoint(point)
 
 
-class _PetHost(DragMixin, NotifyMixin, MenuMixin, LifecycleMixin, _MixinHostBase):
-    """把四个混入接到最小宿主上，并补齐 mixin 依赖的属性。"""
+class _PetHost(DragMixin, NotifyMixin, MenuMixin, LifecycleMixin, InertiaMixin, _MixinHostBase):
+    """把五个混入接到最小宿主上，并补齐 mixin 依赖的属性。"""
 
     def __init__(self) -> None:
         """初始化状态机替身、控件与各桩对象。"""
@@ -287,6 +288,7 @@ class _PetHost(DragMixin, NotifyMixin, MenuMixin, LifecycleMixin, _MixinHostBase
         self.STATE_DRAGGING = PetWindowBase.STATE_DRAGGING
         self.STATE_CLICKED = PetWindowBase.STATE_CLICKED
         self.STATE_NOTIFY = PetWindowBase.STATE_NOTIFY
+        self.STATE_FLYING = PetWindowBase.STATE_FLYING
         self.current_state = self.STATE_IDLE
         self.state_history: list = []
         self.image_label = PetImageLabel()
@@ -301,7 +303,12 @@ class _PetHost(DragMixin, NotifyMixin, MenuMixin, LifecycleMixin, _MixinHostBase
         self.menu_toggles = 0
 
     def set_state(self, state) -> None:
-        """记录状态切换（不真正换图）。"""
+        """记录状态切换（不真正换图）。
+
+        与真实控件一致地同步 ``current_state``：inertia 收尾要靠它判断「当前是不是
+        飞行态」，只记 history 会让通知态被飞行收尾误判成待机。
+        """
+        self.current_state = state
         self.state_history.append(state)
 
     def toggle_menu(self) -> None:
@@ -683,3 +690,264 @@ def test_default_pet_position_uses_available_area_corner():
     # 拿不到主屏
     pos = default_pet_position(None, 150, 200)
     assert (pos.x(), pos.y()) == (100, 100)
+
+
+# ===========================================================================
+# 9. inertia_mixin（投掷惯性）
+# ===========================================================================
+class _MovingPetHost(_PetHost):
+    """位置可变的宿主：pos() 跟随 move()，才能采样出真实速度。"""
+
+    def __init__(self, start=QPoint(150, 150)) -> None:
+        """记录初始位置。"""
+        super().__init__()
+        self._pos = QPoint(start)
+
+    def pos(self):
+        """返回当前窗口左上角。"""
+        return QPoint(self._pos)
+
+    def move(self, pos) -> None:
+        """记录并应用位置。"""
+        self.moved.append(QPoint(pos))
+        self._pos = QPoint(pos)
+
+    def frameGeometry(self):  # noqa: N802 - 对齐 Qt API
+        """返回跟随位置的窗口几何。
+
+        基类替身把 frameGeometry 钉在原点，会让 DragMixin 算出的抓取偏移与真实
+        位置不一致（实测拖到 (600,500) 时偏移被算成 (500,500) 而不是 (350,350)），
+        投掷测速也就跟着偏。这里按 ``pos()`` 返回，语义与真实无边框窗口一致。
+        """
+        return QRect(QPoint(self._pos), QSize(150, 150))
+
+
+def _inertia_host(
+    monkeypatch,
+    *,
+    bounds=(0.0, 0.0, 600.0, 400.0),
+    start=QPoint(150, 150),
+):
+    """构造时钟可控、边界固定、拖拽目标不依赖真实屏幕的宿主。
+
+    Args:
+        monkeypatch: pytest monkeypatch。
+        bounds: 允许窗口左上角活动的范围。
+        start: 初始位置。
+
+    Returns:
+        tuple[_MovingPetHost, list]: 宿主与可写时钟（毫秒）。
+    """
+    host = _MovingPetHost(start)
+    clock = [0.0]
+    monkeypatch.setattr(host, "_inertia_now_ms", lambda: clock[0])
+    monkeypatch.setattr(host, "_inertia_bounds", lambda: bounds)
+    # 拖动目标一律按「光标 - 抓取偏移」换算，避免用例依赖真实屏幕几何。
+    monkeypatch.setattr(
+        host,
+        "_drag_target_at",
+        lambda cursor, offset: (cursor - host.drag_position, True),
+    )
+    return host, clock
+
+
+def _drag_to(host, clock, x: int, y: int, *, at_ms: float) -> None:
+    """把桌宠拖到指定全局坐标，并在该时刻写一帧采样。
+
+    Args:
+        host: 宿主。
+        clock: 可写时钟。
+        x: 鼠标全局 x。
+        y: 鼠标全局 y。
+        at_ms: 该帧时间戳（毫秒）。
+    """
+    clock[0] = float(at_ms)
+    host.mouseMoveEvent(
+        _FakeMouseEvent(buttons=Qt.LeftButton, global_pos=QPoint(x, y))
+    )
+
+
+def _throw_to_the_right(host, clock) -> None:
+    """模拟一次向右的快速甩动：两帧共 200px / 100ms = 2000px/s。
+
+    Args:
+        host: 宿主。
+        clock: 可写时钟。
+    """
+    clock[0] = 0.0
+    host.mousePressEvent(_FakeMouseEvent(button=Qt.LeftButton, global_pos=QPoint(500, 500)))
+    _drag_to(host, clock, 600, 500, at_ms=50)
+    _drag_to(host, clock, 700, 500, at_ms=100)
+    clock[0] = 110.0
+    host.mouseReleaseEvent(_FakeMouseEvent(global_pos=QPoint(700, 500)))
+
+
+def test_inertia_fast_flick_starts_flight_and_ticks_window(qt_app, monkeypatch):
+    """快速拖动后松手：进入飞行态、启动计时器，逐帧继续移动窗口。"""
+    host, clock = _inertia_host(monkeypatch)
+
+    _throw_to_the_right(host, clock)
+
+    assert host.state_history[-1] == host.STATE_FLYING
+    assert host.flight_active is True
+    assert host._inertia_timer.isActive() is True
+
+    start_x = host.pos().x()
+    moved_before = len(host.moved)
+    host._inertia_tick(0.016)
+    assert len(host.moved) == moved_before + 1, "每帧必须移动一次窗口"
+    assert host.moved[-1].x() > start_x, "向右甩应继续向右飞"
+
+    host._inertia_stop(save_position=False)
+    assert host.flight_active is False
+    assert host._inertia_timer.isActive() is False
+
+
+def test_inertia_slow_drag_does_not_throw(qt_app, monkeypatch):
+    """缓慢拖动（100px/s）：不投掷，也不创建计时器。"""
+    host, clock = _inertia_host(monkeypatch)
+
+    clock[0] = 0.0
+    host.mousePressEvent(_FakeMouseEvent(button=Qt.LeftButton, global_pos=QPoint(500, 500)))
+    _drag_to(host, clock, 540, 500, at_ms=400)  # 40px / 400ms = 100px/s
+    clock[0] = 420.0
+    host.mouseReleaseEvent(_FakeMouseEvent(global_pos=QPoint(540, 500)))
+
+    assert host.flight_active is False
+    assert host.STATE_FLYING not in host.state_history
+    assert getattr(host, "_inertia_timer", None) is None, "未投掷不该建计时器"
+
+
+def test_inertia_stale_release_after_pause_does_not_throw(qt_app, monkeypatch):
+    """快拖后停住再松手：末次采样已过期，按静止处理。"""
+    host, clock = _inertia_host(monkeypatch)
+
+    clock[0] = 0.0
+    host.mousePressEvent(_FakeMouseEvent(button=Qt.LeftButton, global_pos=QPoint(500, 500)))
+    _drag_to(host, clock, 600, 500, at_ms=50)
+    _drag_to(host, clock, 700, 500, at_ms=100)
+    clock[0] = 400.0  # 停手 300ms 后才松手
+    host.mouseReleaseEvent(_FakeMouseEvent(global_pos=QPoint(700, 500)))
+
+    assert host.flight_active is False
+    assert host.STATE_FLYING not in host.state_history
+
+
+def test_inertia_click_without_drag_does_not_throw(qt_app, monkeypatch):
+    """按下即松开（单击）：不采样不投掷，仍走菜单逻辑。"""
+    host, clock = _inertia_host(monkeypatch)
+
+    clock[0] = 0.0
+    host.mousePressEvent(_FakeMouseEvent(button=Qt.LeftButton, global_pos=QPoint(500, 500)))
+    clock[0] = 20.0
+    host.mouseReleaseEvent(_FakeMouseEvent(global_pos=QPoint(500, 500)))
+
+    assert host.flight_active is False
+    assert host.menu_toggles == 1, "单击仍应展开菜单"
+
+
+def test_inertia_flight_stays_inside_release_screen(qt_app, monkeypatch):
+    """整段飞行都留在松手所在屏的可用区内（不跨屏）。"""
+    bounds = (0.0, 0.0, 150.0, 100.0)
+    host, clock = _inertia_host(monkeypatch, bounds=bounds)
+
+    _throw_to_the_right(host, clock)
+    assert host.flight_active is True, "起点被夹进小屏后仍应起飞"
+
+    flight_start = len(host.moved)
+    for _ in range(600):
+        if not host.flight_active:
+            break
+        host._inertia_tick(0.016)
+
+    assert host.flight_active is False, "飞行必须在有限帧内结束"
+    assert host.moved[flight_start:], "飞行期间应有移动"
+    for point in host.moved[flight_start:]:
+        assert bounds[0] <= point.x() <= bounds[2]
+        assert bounds[1] <= point.y() <= bounds[3]
+
+
+def test_inertia_press_catches_flight_and_suppresses_menu(qt_app, monkeypatch):
+    """飞行中按下：立即停飞、位置不变，且这次松手不弹菜单。"""
+    host, clock = _inertia_host(monkeypatch)
+    _throw_to_the_right(host, clock)
+    assert host.flight_active is True
+    caught_pos = host.pos()
+
+    clock[0] = 200.0
+    host.mousePressEvent(_FakeMouseEvent(button=Qt.LeftButton, global_pos=QPoint(500, 500)))
+    assert host.flight_active is False, "按下即接住"
+    assert host._inertia_timer.isActive() is False
+    assert host.pos() == caught_pos, "接住不能改变位置"
+    assert host._suppress_click_menu is True
+
+    clock[0] = 210.0
+    host.mouseReleaseEvent(_FakeMouseEvent(global_pos=QPoint(500, 500)))
+    assert host.menu_toggles == 0, "接住那一下不应弹菜单"
+    assert host.state_history[-1] == host.STATE_IDLE
+
+
+def test_inertia_right_press_catches_without_eating_next_click(qt_app, monkeypatch):
+    """右键按下也接住，但不会吞掉随后一次正常左键单击的菜单。"""
+    host, clock = _inertia_host(monkeypatch)
+    _throw_to_the_right(host, clock)
+    assert host.flight_active is True
+
+    clock[0] = 200.0
+    host.mousePressEvent(_FakeMouseEvent(button=Qt.RightButton, global_pos=QPoint(500, 500)))
+    assert host.flight_active is False, "任意键按下都应接住"
+    assert host._suppress_click_menu is False, "右键不该设置「不弹菜单」标记"
+    clock[0] = 205.0
+    host.mouseReleaseEvent(_FakeMouseEvent(button=Qt.RightButton, global_pos=QPoint(500, 500)))
+
+    # 随后一次左键单击应照常展开菜单（右键那次不能污染标记）
+    clock[0] = 260.0
+    host.mousePressEvent(_FakeMouseEvent(button=Qt.LeftButton, global_pos=QPoint(500, 500)))
+    clock[0] = 270.0
+    host.mouseReleaseEvent(_FakeMouseEvent(global_pos=QPoint(500, 500)))
+    assert host.menu_toggles == 1
+
+
+def test_inertia_tick_swallows_errors_and_stops(qt_app, monkeypatch):
+    """飞行推进内部异常：不冒泡、停飞、不再每帧刷错误。"""
+    host, clock = _inertia_host(monkeypatch)
+    _throw_to_the_right(host, clock)
+
+    def _boom(*args, **kwargs):
+        """故意抛错，驱动 tick 的 except 分支。"""
+        raise RuntimeError("physics failed")
+
+    monkeypatch.setattr("desktop.pet_window.inertia_mixin.step_flight", _boom)
+    host._inertia_tick(0.016)  # 不应向外抛异常
+
+    assert host.flight_active is False
+    assert host._inertia_timer.isActive() is False
+
+
+def test_inertia_finish_keeps_notification_state(qt_app, monkeypatch):
+    """飞行途中收到通知：收尾只清飞行态，不覆盖通知态。"""
+    host, clock = _inertia_host(monkeypatch)
+    _throw_to_the_right(host, clock)
+
+    host.show_notification({"title": "预警", "message": "命中"})
+    for _ in range(600):
+        if not host.flight_active:
+            break
+        host._inertia_tick(0.016)
+
+    assert host.flight_active is False
+    assert host.current_state == host.STATE_NOTIFY
+    host._notification_timer.stop()
+
+
+def test_close_event_stops_flight(qt_app, monkeypatch):
+    """关闭窗口时必须停掉飞行计时器，避免销毁后仍收到 tick。"""
+    host, clock = _inertia_host(monkeypatch)
+    _throw_to_the_right(host, clock)
+    assert host._inertia_timer.isActive() is True
+
+    host.closeEvent(_FakeCloseEvent())
+
+    assert host._inertia_timer.isActive() is False
+    assert host.flight_active is False
+
