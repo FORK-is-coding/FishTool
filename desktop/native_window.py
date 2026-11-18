@@ -10,6 +10,10 @@ import webbrowser
 import wx
 
 from desktop.native_backend import NativeBackend
+from core.logger import get_logger
+
+
+logger = get_logger(__name__)
 
 
 class NativeWindow(wx.Frame):
@@ -83,6 +87,7 @@ class NativeWindow(wx.Frame):
                 result = self.backend.request(method, path, payload)
                 error = None
             except Exception as exc:
+                logger.exception("原生界面 API 请求失败：%s %s", method, path)
                 result, error = None, str(exc)
             def finish():
                 if self.closing:
@@ -189,6 +194,7 @@ class NativeWindow(wx.Frame):
             try:
                 result = self.backend.request("POST", "/api/auth/poll", {"qrcode_key": key})
             except Exception as exc:
+                logger.exception("原生界面登录状态轮询失败")
                 result = {"status": "error", "message": str(exc)}
             def finish():
                 self.qr_pending = False
@@ -217,6 +223,7 @@ def run_native(port=8000):
         try:
             backend.start()
         except BaseException as exc:
+            logger.exception("原生界面本机服务启动失败")
             errors.append(str(exc))
         finally:
             ready.set()

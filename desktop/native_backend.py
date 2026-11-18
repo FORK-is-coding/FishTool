@@ -6,7 +6,7 @@ import socket
 import threading
 import time
 
-import requests
+import httpx
 
 
 class NativeBackend:
@@ -65,8 +65,7 @@ class NativeBackend:
             self.sock = None
 
     def request(self, method, path, payload=None):
-        with requests.Session() as session:
-            session.trust_env = False
-            response = session.request(method, self.url + path, json=payload, timeout=120)
+        with httpx.Client(trust_env=False, timeout=120) as session:
+            response = session.request(method, self.url + path, json=payload)
         response.raise_for_status()
         return response.json()
