@@ -14,8 +14,16 @@ PetWindow 通过 WebSocket 接收实时预警。
 外部使用方式：
     from desktop import MainWindow, PetWindow
 """
-from .main_window import MainWindow
-from .pet_window import PetWindow
+from importlib import import_module
+
+
+def __getattr__(name):
+    modules = {"MainWindow": "main_window", "PetWindow": "pet_window"}
+    if name not in modules:
+        raise AttributeError(name)
+    value = getattr(import_module(f".{modules[name]}", __name__), name)
+    globals()[name] = value
+    return value
 
 __all__ = ['MainWindow', 'PetWindow']
 

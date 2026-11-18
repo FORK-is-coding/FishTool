@@ -37,8 +37,8 @@ def _runtime_root() -> Path:
 
 
 #: 冻结环境下要放到 exe 旁边 config/ 的随包配置文件。
-#: config.yaml 不在此列：ConfigManager 首次启动时会自己生成。
-BUNDLED_CONFIG_FILES = ("budget.yaml",)
+#: 只复制仓库默认配置，已有用户文件不覆盖。
+BUNDLED_CONFIG_FILES = ("budget.yaml", "config.yaml")
 
 
 def seed_bundled_config(
@@ -254,6 +254,10 @@ def build_parser() -> argparse.ArgumentParser:
     desktop_parser = subparsers.add_parser("desktop", help="启动桌面版（默认）")
     desktop_parser.add_argument("--port", type=int, default=8000, help="内嵌 Web 端口（默认 8000）")
 
+    if sys.platform == "win32":
+        native_parser = subparsers.add_parser("native", help="启动 Windows 系统控件界面")
+        native_parser.add_argument("--port", type=int, default=8000, help="本机 Web 端口")
+
     web_parser = subparsers.add_parser("web", help="仅启动 Web 服务")
     # 默认只监听回环地址；局域网访问需显式 --host 0.0.0.0 并配置 FISHTOOL_ALLOWED_HOSTS。
     web_parser.add_argument(
@@ -281,6 +285,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    if getattr(sys, "frozen", False):
+        os.chdir(_runtime_root())
+    if hasattr(args, "port") and not 1 <= args.port <= 65535:
+        parser.error("端口必须在 1 到 65535 之间")
+
     # 冻结环境先补齐 exe 旁边的随包配置，后面所有子命令读到的都是同一份。
     seed_bundled_config()
 
@@ -299,6 +308,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if command == "desktop":
         return run_desktop(port=getattr(args, "port", 8000))
+
+    if command == "native":
+        from desktop.native_window import run_native
+        return run_native(port=args.port)
 
     parser.print_help()
     return 2

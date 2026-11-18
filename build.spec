@@ -6,6 +6,8 @@ PyInstaller打包配置
 """
 
 import os
+from PyInstaller.utils.hooks import collect_all, get_package_paths
+from pathlib import Path
 
 block_cipher = None
 
@@ -14,7 +16,8 @@ block_cipher = None
 project_root = os.path.abspath(SPECPATH)
 assets_dir = os.path.join(project_root, 'assets')
 datas = [
-    (os.path.join(project_root, 'config', '*.yaml'), 'config'),
+    (os.path.join(project_root, 'config', 'config.yaml'), 'config'),
+    (os.path.join(project_root, 'config', 'budget.yaml'), 'config'),
     (os.path.join(project_root, 'web', 'frontend', 'templates'), 'web/frontend/templates'),
     (os.path.join(project_root, 'web', 'frontend', 'static'), 'web/frontend/static'),
     (assets_dir, 'assets'),
@@ -22,6 +25,8 @@ datas = [
 
 # 隐藏导入
 hiddenimports = [
+    'desktop.native_window',
+    'desktop.native_backend',
     'web.main',
     'PySide6.QtCore',
     'PySide6.QtGui',
@@ -48,10 +53,14 @@ hiddenimports = [
     'matplotlib',
 ]
 
+wx_datas, wx_binaries, wx_imports = collect_all('wx')
+datas += wx_datas
+hiddenimports += wx_imports
+
 a = Analysis(
     ['app.py'],  # 唯一启动入口：默认桌面版；app.py web 提供 Web 服务
     pathex=[],
-    binaries=[],
+    binaries=wx_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
@@ -69,6 +78,19 @@ a = Analysis(
 
 # PySide6 自带的 WebEngine 调试资源（*.debug.pak / *.debug.bin，约 77MB）运行时用不到，不打进包。
 a.datas = [entry for entry in a.datas if not entry[0].replace('\\', '/').endswith(('.debug.pak', '.debug.bin'))]
+
+# 统一使用 PySide6 wheel 随附的较新 VC runtime，避免包根与 Qt 子目录
+# 收入不同版本，让 Python、wxMSW 和 Qt 使用同一组兼容 DLL。
+qt_dir = Path(get_package_paths('PySide6')[1])
+for pattern in ('vcruntime140*.dll', 'msvcp140*.dll'):
+    for runtime in qt_dir.glob(pattern):
+        a.binaries = [entry for entry in a.binaries if entry[0].lower() != runtime.name.lower()]
+        a.binaries.append((runtime.name, str(runtime), 'BINARY'))
+
+# Qt6Core 使用 Windows ICU 的无版本号导出；构建机 PATH 中的 Poppler /
+# conda ICU 同名但只有带版本号导出，不能误收进包覆盖系统 ICU。
+a.binaries = [entry for entry in a.binaries
+              if not Path(entry[0]).name.lower().startswith(('icuuc', 'icudt', 'icuin'))]
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
