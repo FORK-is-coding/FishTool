@@ -27,7 +27,7 @@
 
 - 启动调用 `init_database()`，内部 `Base.metadata.create_all()`。
 - 普通代码通过 `get_session()` 获取 Session，必须 `commit/rollback/close`；FastAPI 依赖可使用 `get_db()`。
-- SQLite 会话按请求创建并关闭；具体连接与池策略以 `core/database/` 当前实现为准。这不是多进程数据库方案。
+- SQLite 文件库使用 `NullPool`（每个 Session 独占连接），`:memory:` 使用 `StaticPool` 与 `check_same_thread=False`；这不是多进程数据库方案。
 - 写入先利用唯一键做幂等，捕获异常时 rollback。不要长期持有 Session 跨 await 或跨多轮后台循环。
 
 ## 3. Cookie 安全

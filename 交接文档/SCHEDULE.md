@@ -8,8 +8,8 @@
 
 - Cookie 巡检：始终创建 `bili-cookie-check` task，按 CookiePool `check_interval` 周期执行 `check_all_cookies()`。
 - 评论常驻监控：仅在配置/持久化状态允许时创建 `bili-comment-monitor` task，对目标 BV 做增量采集。
-- 单视频跟踪采样：按 `monitor.watch_enable` 与可用 Cookie 条件创建 `bili-watch` task，按跟踪目标的采样间隔执行采集。
-- 热点发现：按配置与预算条件创建 `bili-discovery` task，从榜单/排行等来源发现候选并接入跟踪池。
+- 单视频跟踪采样：按 `monitor.watch_enable`（在 `config/user_config.yaml` 的 `monitor` 段设置；默认 `config.yaml` 未列出）与可用 Cookie 条件创建 `bili-watch` task，按跟踪目标的采样间隔执行采集。
+- 热点发现：按 `monitor.discovery_enable`（同样在 `user_config.yaml` 的 `monitor` 段设置）与预算条件创建 `bili-discovery` task，从榜单/排行等来源发现候选并接入跟踪池。
 
 动态/活动采集没有常驻任务入口，由 WebUI 请求触发。
 
@@ -35,7 +35,7 @@ uvicorn 关闭
 
 ## 3. 状态和控制接口
 
-状态保存于 `monitor_state` 单例记录：`enabled/paused/status/target_bvids/last_collect_at/total_collected/last_error/consecutive_failures/updated_at`。`monitor_service.snapshot()` 还会给出 `watch_task_running`、`discovery_task_running` 和前端展示用的 `display_state`。
+状态保存于 `monitor_state` 单例记录：`enabled/paused/status/target_bvids/last_collect_at/total_collected/last_error/consecutive_failures/updated_at`。`monitor_service.snapshot()` 还会给出 `watch_task_running`、`discovery_task_running`；`display_state` 由 watch 列表/详情接口计算并返回。
 
 Web 接口：
 
@@ -69,7 +69,7 @@ Web 接口：
 6. Session 每轮关闭，避免跨 await 泄漏数据库连接。
 7. 状态/启停 API 和至少一个异常恢复测试。
 
-确需 APScheduler 时，先决定单进程约束。当前 SQLite + StaticPool 和内存 Cookie/限流器不适合多个 worker 各自启动同一 scheduler；至少要使用进程锁/外部 job store 和任务唯一身份。
+确认 APScheduler 时区/幂等设计；当前 SQLite（文件库 `NullPool`、内存库 `StaticPool`）与内存 Cookie/评论队列适合单 worker；多进程同一 scheduler 需使用进程锁/外部 job store，不能只靠唯一约束。
 
 ## 6. 运维检查
 

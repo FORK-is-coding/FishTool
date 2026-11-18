@@ -28,15 +28,15 @@ B站公开接口             SQLite / 文件日志
 ## 3. 核心对象
 
 - `ConfigManager`：三层配置，主 YAML → user YAML → 加密 secrets。exe 环境以 exe 所在目录为持久化根。
-- `DatabaseManager`：SQLite + SQLAlchemy + StaticPool，模块级 `init_database/get_session/get_db`。
+- `DatabaseManager`：SQLite + SQLAlchemy（文件库 `NullPool`、内存库 `StaticPool`），模块级 `init_database/get_session/get_db`。
 - `BilibiliAPI`：aiohttp 会话、统一 `code/data` 解析、WBI、Cookie 和重试。
 - `MultiEndpointRateLimiter`：normal/comment/dynamic 独立策略。
 - `CookiePool`：数据库和内存双状态、轮换、有效性检查、旧明文迁移。
 - `ResidentCommentMonitor`：常驻任务控制面，状态保存在 `monitor_state`。
 - `ConnectionManager`：`/ws` WebSocket 广播，用于桌宠/告警。
-- `MonitorService`：统一启动/停止 Cookie、评论、单视频跟踪和热点发现循环，公开 `snapshot()` 状态。
+- `ResidentCommentMonitor`：统一启动/停止 Cookie、评论、单视频跟踪和热点发现循环，公开 `snapshot()` 状态。
 - `EventAggregationService` / `TopicGenerationService` / `EventDiscoveryService`：热点事件、选题生成与发现编排，由 lifespan 装配。
-- `SemanticService` / `LotteryPatrol` / `BenchmarkService`：评论语义折叠、AI 伪人巡检和基准对比服务，由 lifespan 装配或 recover 钩子恢复任务。
+- `SemanticService` / `PatrolService` / `BenchmarkService`：评论语义折叠、AI 伪人巡检和基准对比服务，由 lifespan 装配或 recover 钩子恢复任务。
 
 ## 4. 业务模块
 
@@ -55,7 +55,7 @@ B站公开接口             SQLite / 文件日志
 - `/api/hotspot`：分区、标签云异步任务、活动、选题、事件、发现、跟踪与状态。
 - `/api`：UP 分析任务、自诊和报告导出。
 - `/api/comment`：采集、监控、看板、常驻任务、预警、关键词。
-- `/api/benchmark`、`/api/analysis`、`/api/lottery`、`/api/lottery-patrol`：基准对比、分析、抽奖与巡检。
+- `/api/analysis/benchmark`、`/api/analysis`、`/api/lottery`、`/api/lottery/patrol`：基准对比、分析、抽奖与巡检。
 - `/health`、`/docs`、`/ws`：健康、OpenAPI、WebSocket。
 
 前端是单页静态实现，共享契约在 `web/frontend/static/js/app.core.js`，业务契约分散在各 `app.*.js`。后端字段改名必须搜索整个 `web/frontend/static/js/` 同步。

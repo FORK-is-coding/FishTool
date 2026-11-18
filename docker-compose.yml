@@ -3,7 +3,7 @@ services:
     build: .
     image: fishtool:local
     ports:
-      - "8000:8000"
+      - "${FISHTOOL_BIND_ADDRESS:-127.0.0.1}:8000:8000"
     environment:
       FISHTOOL_ALLOWED_HOSTS: ${FISHTOOL_ALLOWED_HOSTS:-localhost,127.0.0.1}
       FISHTOOL_ALLOWED_PORTS: ${FISHTOOL_ALLOWED_PORTS:-8000}

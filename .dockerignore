@@ -17,3 +17,6 @@ config/.key
 htmlcov
 .coverage
 *.log
+.env
+.env.*
+!.env.example

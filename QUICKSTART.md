@@ -150,7 +150,7 @@ A:
 ```bash
 docker compose up -d --build
 ```
-访问 `http://localhost:8000`，数据保存在 `fishtool-data`、`fishtool-config` 卷中；其他域名或端口需设置 `FISHTOOL_ALLOWED_HOSTS` 与 `FISHTOOL_ALLOWED_PORTS`。
+访问 `http://localhost:8000`，数据保存在 `fishtool-data`、`fishtool-config` 卷中。默认只绑定宿主机 `127.0.0.1:8000`；需要局域网访问时，在 `.env` 中设置 `FISHTOOL_BIND_ADDRESS=0.0.0.0`，并同时设置 `FISHTOOL_ALLOWED_HOSTS` 与 `FISHTOOL_ALLOWED_PORTS`。
 
 ## 命令行参数
 

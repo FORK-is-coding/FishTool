@@ -65,7 +65,7 @@ Invoke-RestMethod http://127.0.0.1:8000/health
 ```bash
 docker compose up -d --build
 ```
-容器监听 `0.0.0.0:8000`，宿主机通过 `http://localhost:8000` 访问；`FISHTOOL_ALLOWED_HOSTS` 与 `FISHTOOL_ALLOWED_PORTS` 由 compose 环境变量控制，默认仅放行 `localhost,127.0.0.1` 与 8000。数据与密钥持久化到 `fishtool-data`、`fishtool-config` 卷。
+容器内监听 `0.0.0.0:8000`；Compose 默认只发布到宿主机 `127.0.0.1:8000`，通过 `http://localhost:8000` 访问。需要局域网访问时在 `.env` 设置 `FISHTOOL_BIND_ADDRESS=0.0.0.0`，并同时设置 `FISHTOOL_ALLOWED_HOSTS` / `FISHTOOL_ALLOWED_PORTS`；数据与密钥持久化到 `fishtool-data`、`fishtool-config` 卷。
 
 
 ## 4. 桌面运行

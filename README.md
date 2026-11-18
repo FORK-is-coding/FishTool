@@ -45,12 +45,6 @@ FishTool的目标是成为开源、免费、共创、普惠、为所有视频创
 - 8000 端口被别的程序占用时，可以在命令行里运行 `start_web.bat 9000` 换个端口。
 
 ### 其他启动方式
-### Docker 部署
-```bash
-docker compose up -d --build
-```
-访问 `http://localhost:8000`，数据保存在 `fishtool-data`、`fishtool-config` 卷中。默认只接受来自 `localhost` / `127.0.0.1` 的管理请求；需要其他域名或端口时，在 `.env` 中设置 `FISHTOOL_ALLOWED_HOSTS` 和 `FISHTOOL_ALLOWED_PORTS`。
-
 
 先在项目目录安装一次依赖，然后：
 
@@ -70,6 +64,14 @@ pip install -r requirements.txt
 | `python app.py web` | 只启动网页版，适合 macOS / Linux 或不想要桌面窗口时 |
 | `python app.py web --port 9000` | 换端口 |
 | `python app.py web --host 0.0.0.0` | 让局域网其他设备访问，同时要设置环境变量 `FISHTOOL_ALLOWED_HOSTS`，例如 `localhost,127.0.0.1,192.168.1.10` |
+
+#### Docker 部署
+
+```bash
+docker compose up -d --build
+```
+
+访问 `http://localhost:8000`，数据保存在 `fishtool-data`、`fishtool-config` 卷中。默认只绑定宿主机 `127.0.0.1:8000`；需要局域网访问时，在 `.env` 中把 `FISHTOOL_BIND_ADDRESS` 改为 `0.0.0.0`，并同时设置 `FISHTOOL_ALLOWED_HOSTS` / `FISHTOOL_ALLOWED_PORTS`。当前业务接口没有完整用户鉴权，开放到局域网前必须加反向代理和访问控制。
 
 ## 第一次使用
 
@@ -226,6 +228,13 @@ pytest tests/ -q
 ```
 
 接口文档在服务启动后访问 http://localhost:8000/docs 。
+
+## 贡献
+
+- Docker 部署：[#154](https://github.com/FORK-is-coding/FishTool/pull/154)，作者 [@maiphucgiang](https://github.com/maiphucgiang)
+- 交接文档修正：[#155](https://github.com/FORK-is-coding/FishTool/pull/155)，作者 [@maiphucgiang](https://github.com/maiphucgiang)
+
+后续由维护者在 #157/#158 按原作者改动落地并补充审查修复。
 
 ## 交流
 

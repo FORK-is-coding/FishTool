@@ -22,7 +22,7 @@
 - 可重试判断已上线：`is_retryable_error()` 与 `bilibili/api/client.py` 请求循环配合；Cookie 失效 `-101`、风控 `-352/-412` 不做短重试，429/`-509` 走退避。
 - Cookie 迁移已完成：`bilibili/cookie_pool.py` 读取旧明文失败时会尝试兼容并加密回写；新数据由 `ConfigManager` 的 Fernet 加密体系管理。迁移前先备份数据库和 `config/.key`、`config/.secrets`。
 - 历史归档和验收材料不是当前测试入口；当前测试入口是 `tests/`，开发脚本在 `tools/`。不要把历史诊断临时脚本接回生产调用链。
-- 当前源码目录中仍有 `.tmp/.fixtmp` 和缓存目录，它们不是运行入口，提交/交接时不要把临时文件当实现依据。
+- 仓库不包含 `.tmp/.fixtmp`；本地开发产生的临时文件不属于实现，提交前清理。
 - 项目不使用 APScheduler：`requirements.txt` 不含该依赖，源码也没有 scheduler 注册代码；常驻任务由 `core/monitor_service.py` 的 asyncio 循环负责，当前包括 Cookie 巡检、评论监控、单视频跟踪采集和热点发现。
 
 ## 3. 目录职责
@@ -56,7 +56,7 @@ FishTool/
 ├─ desktop/                  # PySide6 主窗口、桌宠、图标与报告导出（无首次运行向导）
 ├─ llm/                      # OpenAI 兼容客户端和用量统计
 ├─ integrations/astrbot/     # AstrBot 插件与适配器
-├─ reports/                  # 报告输出目录
+├─ reports/（运行时生成）      # 报告输出目录
 ├─ config/                   # config.yaml、budget.yaml；.key/.secrets 为敏感文件
 ├─ data/                     # bili_ops.db 与 data/logs
 ├─ tests/                    # pytest 测试入口

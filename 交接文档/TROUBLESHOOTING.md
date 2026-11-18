@@ -103,7 +103,7 @@
 
 ## 11.2 单视频跟踪显示「跟踪中」但无数据
 - 先看列表是否显示「待启用」：记录存在不代表 `watch_task_running` 为真。
-- 检查 `monitor.watch_enable`、可用 Cookie、`config/budget.yaml` 中 watch 配额和目标采样间隔。
+- 检查 `monitor.watch_enable`（在 `user_config.yaml` 的 `monitor` 段设置；默认 `config.yaml` 未列出）、可用 Cookie、`config/budget.yaml` 中 watch 配额和目标采样间隔。
 - 关闭采集时只会出现记录，不会定期请求 B 站；开启后再观察最近成功采集时间。
 ## 12. 测试与归档
 
