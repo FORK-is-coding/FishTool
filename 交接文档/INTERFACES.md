@@ -1,10 +1,10 @@
 # B站接口维护手册
 
-本文只描述当前源码实际使用的 B 站接口。B 站接口可能变更，字段说明以运行时响应为准；变更时先在 `bilibili/api/` 对应子模块或对应业务模块做最小适配，再同步本文。
+本文只描述当前源码实际使用的 B 站接口。B 站接口可能变更，字段说明以运行时响应为准；变更时先在 `bilibili/api.py` 或对应业务模块做最小适配，再同步本文。
 
 ## 1. 统一请求契约
 
-`BilibiliAPI.request()` 位于 `bilibili/api/client.py:265` 附近，统一处理：
+`BilibiliAPI.request()` 位于 `bilibili/api.py:429` 附近，统一处理：
 
 - `method/url/params/data/json/headers/need_sign/retry_times`。
 - 请求前按需从 `CookiePool` 取有效 Cookie，再经 `RateLimiter` 获取令牌。
@@ -25,7 +25,7 @@
 
 签名：该接口自身不需要 WBI。`WBISigner.update_wbi_keys()` 与 `auth.validate_cookie()`、Cookie 巡检都会调用。
 
-同步点：`bilibili/api/signer.py` 与 `bilibili/api/client.py` 的 nav/WBI 相关段、`bilibili/auth.py`、`bilibili/cookie_pool.py`。若字段路径变化，三处都要改，并验证匿名 nav 仍可刷新密钥。
+同步点：`bilibili/api.py:181-240`、`bilibili/auth.py`、`bilibili/cookie_pool.py`。若字段路径变化，三处都要改，并验证匿名 nav 仍可刷新密钥。
 
 ### `GET /x/frontend/finger/spi`
 
@@ -33,7 +33,7 @@
 
 入参：无。出参只用于会话初始化，不进入业务数据库。
 
-同步点：`bilibili/api/client.py` 会话初始化段。失败通常不应掩盖主请求错误，修改时保持会话可关闭。
+同步点：`bilibili/api.py` 会话初始化段。失败通常不应掩盖主请求错误，修改时保持会话可关闭。
 
 ### WBI 签名算法
 
@@ -80,7 +80,7 @@
 
 出参重点：`list.vlist[]` 中的 `aid/bvid/title/play/pic/description/created`，以及 `page.pn/page.ps/page.count`。
 
-同步点：`bilibili/api/user.py` 便捷方法、`modules/up_analyzer/data_fetcher.py`、自诊模块的字段映射。
+同步点：`bilibili/api.py` 便捷方法、`modules/up_analyzer/data_fetcher.py`、自诊模块的字段映射。
 
 ### `GET /x/web-interface/ranking/v2`
 
@@ -204,12 +204,12 @@
 
 任何 B 站接口变更，按以下顺序同步：
 
-1. `bilibili/api/client.py`、`bilibili/api/user.py`：URL、参数、`need_sign`、返回包装、错误码和重试策略。
+1. `bilibili/api.py`：URL、参数、`need_sign`、返回包装、错误码和重试策略。
 2. 直接业务调用：`modules/hotspot/tag_cloud.py`、`activity_tracker.py`、`modules/comment/collector.py`、`modules/up_analyzer/data_fetcher.py`。
 3. 数据映射：数据库 ORM 字段、模块输出字典、Web router 的 JSON 序列化。
 4. 限流分类：`get_rate_limiter()` 的 normal/comment/dynamic 类型和 `config/config.yaml`。
 5. 认证/迁移：若 Cookie 或 nav 字段变化，同步 `auth.py`、`cookie_pool.py`。
-6. 前端契约：`web/routers` 返回字段和 `web/frontend/static/js/app.core.js` 与各业务脚本。
+6. 前端契约：`web/routers` 返回字段和 `web/frontend/static/js/app.js`。
 7. 文档与验证：更新本文、运行 `/health`、目标接口小样本验证、检查 `data/logs/error.log` 和 `risk_control.log`。
 8. 举报接口变更：同步 `modules/lottery/patrol/reporter.py` 的错误码表、`FALLBACK_REASONS` 兜底表与对应测试。
 

@@ -2,15 +2,14 @@
 
 ## 1. 环境
 
-建议 Windows 10/11、Python 3.11 或 3.12、独立虚拟环境。项目依赖见 `pyproject.toml` / `uv.lock` 与 `requirements.txt`，包括 aiohttp/FastAPI/SQLAlchemy、PySide6（含 WebEngine）、数据分析和 LLM 客户端。PySide6 不能与 PyQt5 装在同一个虚拟环境：PyInstaller 收集到两个 Qt 绑定会中止打包。
+建议 Windows 10/11、Python 3.11 或 3.12、独立虚拟环境。项目依赖见 `requirements.txt`，包括 aiohttp/FastAPI/SQLAlchemy、PySide6（含 WebEngine）、数据分析和 LLM 客户端。PySide6 不能与 PyQt5 装在同一个虚拟环境：PyInstaller 收集到两个 Qt 绑定会中止打包。
 
 ```powershell
-cd <FishTool 仓库根目录>
+cd D:\tasks\cola\bili_ops_toolbox
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements.txt
-# 或：uv sync
 ```
 
 PDF 导出还依赖系统安装 `wkhtmltopdf`；没有它时 Markdown 导出仍可用。
@@ -61,12 +60,6 @@ Invoke-RestMethod http://127.0.0.1:8000/health
 应返回 `{"status":"ok"}`。浏览器访问 `/`，接口文档访问 `/docs`。默认只监听本机（`app.py web` 与桌面版内嵌服务均为 127.0.0.1）；确需局域网访问时显式传 `--host 0.0.0.0`，并用 `FISHTOOL_ALLOWED_HOSTS` 列出允许的 Host（逗号分隔，覆盖默认白名单，需同时保留 `localhost,127.0.0.1`），否则 `/api/config` 返回 403。
 
 写请求与 `/ws` 的同源判定比较 scheme、主机和端口：默认放行 80/443/8000/8080，以及与服务自身相同的端口（例如 `start_web.bat 9000` 时的 9000）。如果页面由另一个本机端口提供（例如前端开发服务器 5173），用 `FISHTOOL_ALLOWED_PORTS=5173,8000` 显式列出（逗号分隔，整体覆盖默认端口集）。设置了 `FISHTOOL_ALLOWED_PORTS` 后，`FISHTOOL_ALLOWED_HOSTS` 里写的 `主机:端口` 不再合并进端口集；值全部非法时回退默认端口集。与服务自身相同的端口始终放行。对局域网开放前必须增加认证、反向代理和访问控制，当前业务接口没有完整用户鉴权。
-容器部署：
-```bash
-docker compose up -d --build
-```
-容器内监听 `0.0.0.0:8000`；Compose 默认只发布到宿主机 `127.0.0.1:8000`，通过 `http://localhost:8000` 访问。需要局域网访问时在 `.env` 设置 `FISHTOOL_BIND_ADDRESS=0.0.0.0`，并同时设置 `FISHTOOL_ALLOWED_HOSTS` / `FISHTOOL_ALLOWED_PORTS`；数据与密钥持久化到 `fishtool-data`、`fishtool-config` 卷。
-
 
 ## 4. 桌面运行
 
@@ -79,7 +72,7 @@ python app.py
 
 ## 5. PyInstaller 打包
 
-当前唯一实际打包描述是 `build.spec`（Analysis 入口为 `app.py`）；项目根目录没有 `build.py`，README 的打包章节与下面的命令一致。
+当前唯一实际打包描述是 `build.spec`（Analysis 入口为 `app.py`）；项目根目录没有 `build.py`，README 快速开始第 3 步与下面的命令一致。
 
 在已执行 `pip install -r requirements.txt` 的虚拟环境中安装构建工具并打包：
 

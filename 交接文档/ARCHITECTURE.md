@@ -18,7 +18,7 @@ web/routers
   ↓
 modules/* 业务服务
   ↓                 ↘ llm/client.py
-bilibili/* 外部API    core/database/
+bilibili/* 外部API    core/database.py
   ↓                    core/config/logger/exceptions
 B站公开接口             SQLite / 文件日志
 ```
@@ -28,15 +28,12 @@ B站公开接口             SQLite / 文件日志
 ## 3. 核心对象
 
 - `ConfigManager`：三层配置，主 YAML → user YAML → 加密 secrets。exe 环境以 exe 所在目录为持久化根。
-- `DatabaseManager`：SQLite + SQLAlchemy（文件库 `NullPool`、内存库 `StaticPool`），模块级 `init_database/get_session/get_db`。
+- `DatabaseManager`：SQLite + SQLAlchemy + StaticPool，模块级 `init_database/get_session/get_db`。
 - `BilibiliAPI`：aiohttp 会话、统一 `code/data` 解析、WBI、Cookie 和重试。
 - `MultiEndpointRateLimiter`：normal/comment/dynamic 独立策略。
 - `CookiePool`：数据库和内存双状态、轮换、有效性检查、旧明文迁移。
 - `ResidentCommentMonitor`：常驻任务控制面，状态保存在 `monitor_state`。
 - `ConnectionManager`：`/ws` WebSocket 广播，用于桌宠/告警。
-- `ResidentCommentMonitor`：统一启动/停止 Cookie、评论、单视频跟踪和热点发现循环，公开 `snapshot()` 状态。
-- `EventAggregationService` / `TopicGenerationService` / `EventDiscoveryService`：热点事件、选题生成与发现编排，由 lifespan 装配。
-- `SemanticService` / `PatrolService` / `BenchmarkService`：评论语义折叠、AI 伪人巡检和基准对比服务，由 lifespan 装配或 recover 钩子恢复任务。
 
 ## 4. 业务模块
 
@@ -52,13 +49,12 @@ B站公开接口             SQLite / 文件日志
 - `/api/auth`：扫码登录、轮询、退出、登录状态。
 - `/api/config`：普通配置、LLM 配置和用量。
 - `/api/logs`：日志查询、导出和类型。
-- `/api/hotspot`：分区、标签云异步任务、活动、选题、事件、发现、跟踪与状态。
+- `/api/hotspot`：分区、标签云异步任务、活动、选题。
 - `/api`：UP 分析任务、自诊和报告导出。
 - `/api/comment`：采集、监控、看板、常驻任务、预警、关键词。
-- `/api/analysis/benchmark`、`/api/analysis`、`/api/lottery`、`/api/lottery/patrol`：基准对比、分析、抽奖与巡检。
 - `/health`、`/docs`、`/ws`：健康、OpenAPI、WebSocket。
 
-前端是单页静态实现，共享契约在 `web/frontend/static/js/app.core.js`，业务契约分散在各 `app.*.js`。后端字段改名必须搜索整个 `web/frontend/static/js/` 同步。
+前端是单页静态实现，主要契约集中在 `web/frontend/static/js/app.js`。后端字段改名必须搜索该文件同步。
 
 ## 6. 数据一致性约定
 
@@ -70,10 +66,10 @@ B站公开接口             SQLite / 文件日志
 
 ## 7. 新功能落点
 
-新增 B站数据源：在 `bilibili/api/` 对应子模块建便捷方法；若仅某业务一次使用，可在模块直接调用统一 `api.get()`，但仍必须复用签名、Cookie、限流。
+新增 B站数据源：在 `bilibili/api.py` 建便捷方法；若仅某业务一次使用，可在模块直接调用统一 `api.get()`，但仍必须复用签名、Cookie、限流。
 
 新增业务功能：在 `modules/<domain>` 封装处理，router 只做参数校验、调用和 JSON/HTTP 错误转换。
 
-新增前端页面：同步 `templates/`、`static/js/app.core.js` 与业务脚本、`style.css`，保持对应 router 的请求/响应契约，并在桌面 WebView 中验证。
+新增前端页面：同步 `index.html`、`app.js`、`style.css`，保持对应 router 的请求/响应契约，并在桌面 WebView 中验证。
 
 新增后台任务：接入 FastAPI lifespan 的统一启动/关闭，提供持久化状态、幂等启动、停止事件、退避和可观测日志；不要在 import 阶段创建 asyncio task。

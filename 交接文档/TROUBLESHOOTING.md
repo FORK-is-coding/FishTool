@@ -7,13 +7,13 @@
 1. 运行 `python app.py web --host 127.0.0.1 --port 8000`。
 2. 请求 `http://127.0.0.1:8000/health`；失败则看启动终端和 `data/logs/error.log`。
 3. 检查 8000 是否被占用；改端口时同步 CORS 白名单，否则前后端跨域可能失败。
-4. `/health` 正常但页面空白：检查 `/static/js/app.core.js` 与业务脚本、模板目录和浏览器控制台；exe 中确认 spec 已包含 frontend。
+4. `/health` 正常但页面空白：检查 `/static/js/app.js`、模板目录和浏览器控制台；exe 中确认 spec 已包含 frontend。
 
 ### 1.1 桌面版页面能打开，但之后所有网络请求超时
 
 症状：桌面窗口和页面都正常显示，刚开始几个请求可能成功，随后所有按钮无响应、API 请求全部超时，但 Web 子进程仍然存活。
 
-根因：源码模式下 `MainWindow` 用 `subprocess.Popen` 通过统一入口 `app.py web` 启动 Web 子进程，旧实现把子进程 `stdout/stderr` 接到 `PIPE` 却从不读取；日志写满管道缓冲区后，子进程阻塞在写日志上。当前实现已把输出重定向到 `data/logs/web_subprocess.log`；再次出现同类超时按回归处理。
+根因：源码模式下 `MainWindow` 用 `subprocess.Popen` 通过统一入口 `app.py web` 启动 Web 子进程，旧实现把子进程 `stdout/stderr` 接到 `PIPE` 却从不读取；uvicorn/应用日志写满管道缓冲区后，子进程阻塞在写日志上，Web 服务不再处理请求。
 
 排查：
 
@@ -87,7 +87,7 @@
 
 ## 11. exe 打包后启动失败
 
-- 打包命令是 `pyinstaller --clean --noconfirm build.spec`（需先 `pip install pyinstaller`），与 README 打包章节一致；项目没有 `build.py`。
+- 打包命令是 `pyinstaller --clean --noconfirm build.spec`（需先 `pip install pyinstaller`），与 README 快速开始一致；项目没有 `build.py`。
 - 打包阶段报图标格式错误：环境里缺 Pillow（`assets/图标.png` 需要它转换），先执行 `pip install -r requirements.txt`。
 - 查 `build/build/warn-build.txt` 和 exe 旁 `data/logs/error.log`。
 - 检查 frontend 静态资源、PySide6 WebEngine hidden import（`PySide6.QtWebEngineCore` / `PySide6.QtWebEngineWidgets`）、可写 config/data 目录。
@@ -95,18 +95,8 @@
 - 升级到 PySide6 版后开场动画又播了一次：WebEngine 数据目录从 `%LOCALAPPDATA%\BiliOpsToolbox\...\QtWebEngine\Default` 变成 `%APPDATA%\BiliOpsToolbox\...\QtWebEngine\Default`，首次启动会复制旧 localStorage；看 `app.log` 里的「迁移 Qt5 localStorage」记录。
 - PDF 单独失败时检查系统 `wkhtmltopdf`，不是重装整个程序。
 
-## 11.1 Docker 部署排障
-- 容器 unhealthy：先看 `docker compose logs`，再确认容器内 `/health` 是否返回 `{"status":"ok"}`。
-- 宿主机访问被拒绝但容器内有响应：检查宿主机 8000 端口占用和 compose 端口映射。
-- `/api/config` 返回 403：检查 `FISHTOOL_ALLOWED_HOSTS`、`FISHTOOL_ALLOWED_PORTS` 是否覆盖宿主机访问域名或端口。
-- 数据重启后丢失：确认 `fishtool-data`、`fishtool-config` 卷未被删除，日志与数据库均在 `/app/data` 下。
-
-## 11.2 单视频跟踪显示「跟踪中」但无数据
-- 先看列表是否显示「待启用」：记录存在不代表 `watch_task_running` 为真。
-- 检查 `monitor.watch_enable`（在 `user_config.yaml` 的 `monitor` 段设置；默认 `config.yaml` 未列出）、可用 Cookie、`config/budget.yaml` 中 watch 配额和目标采样间隔。
-- 关闭采集时只会出现记录，不会定期请求 B 站；开启后再观察最近成功采集时间。
 ## 12. 测试与归档
 
-当前有效脚本优先使用 `tools/test_logs_api.py`、`tools/test_web.ps1`；`tools/run_packaging_test.ps1` 调用的 `run_packaging.py` 不在仓库中，不能直接使用。历史验证资料运行前必须读源码确认端口、数据写入和依赖；禁止把历史诊断脚本当作当前测试入口。
+当前有效脚本优先使用 `tools/test_logs_api.py`、`tools/test_web.ps1`；`tools/run_packaging_test.ps1` 调用的 `run_packaging.py` 不在仓库中，不能直接使用。`tools/archive/` 是历史验证资料；运行前必须读源码确认端口、数据写入和依赖，`dead_*.py` 禁止作为生产测试。
 
 故障修复后至少记录：触发条件、接口/错误码、改动文件、数据库是否迁移、验证命令、日志位置和回滚方法。

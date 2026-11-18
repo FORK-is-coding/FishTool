@@ -1,6 +1,6 @@
 # 数据库结构与维护
 
-数据库默认路径：`data/bili_ops.db`。ORM 定义在 `core/database/models_*.py`，当前实际 SQLAlchemy 模型包含 40 张业务表。
+数据库默认路径：`data/bili_ops.db`。ORM 定义在 `core/database.py`，当前实际 SQLite 中有 14 张业务表。
 
 ## 1. 表清单
 
@@ -27,7 +27,7 @@
 
 - 启动调用 `init_database()`，内部 `Base.metadata.create_all()`。
 - 普通代码通过 `get_session()` 获取 Session，必须 `commit/rollback/close`；FastAPI 依赖可使用 `get_db()`。
-- SQLite 文件库使用 `NullPool`（每个 Session 独占连接），`:memory:` 使用 `StaticPool` 与 `check_same_thread=False`；这不是多进程数据库方案。
+- SQLite 使用 `StaticPool` 和 `check_same_thread=False` 以兼容线程访问；这不是多进程数据库方案。
 - 写入先利用唯一键做幂等，捕获异常时 rollback。不要长期持有 Session 跨 await 或跨多轮后台循环。
 
 ## 3. Cookie 安全
@@ -48,13 +48,12 @@ Copy-Item config\.secrets backups\config_secrets_$(Get-Date -Format yyyyMMdd_HHm
 
 项目也提供 `DatabaseManager.backup()`。恢复时先停 Web/桌面进程，整体替换数据库与配套密钥文件，再启动 `/health` 和登录态验证。不要在 SQLite 正在写入时直接覆盖文件。
 
-容器部署时，数据库在 `fishtool-data` 卷、配置在 `fishtool-config` 卷。维护前先停止容器，使用 `docker compose exec` 或导出卷文件备份，并与 `.key`、`.secrets` 成套保存。
 ## 5. Schema 变更
 
 `create_all()` 不会给已有表自动加列、改类型或创建迁移历史。变更步骤：
 
 1. 备份数据库和敏感配置。
-2. 修改 `core/database/models_*.py` ORM。
+2. 修改 `core/database.py` ORM。
 3. 编写一次性、幂等迁移 SQL/脚本；先在副本执行。
 4. 同步写入/查询模块、router 响应、前端字段和本文。
 5. 用 `PRAGMA table_info('<table>')` 与关键查询核对。
