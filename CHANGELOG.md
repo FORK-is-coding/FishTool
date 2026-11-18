@@ -10,6 +10,9 @@
 
 ## [未发布]
 
+### 原作者署名
+- Docker 部署（#154）与交接文档修正（#155）由 @maiphucgiang 提出；维护者因 fork 分支权限限制，通过 #157/#158 以等价提交落地并补充审查修复。
+
 ### Docker 部署（#148）
 - 新增 `Dockerfile`、`docker-compose.yml` 与 `.dockerignore`，支持 `docker compose up -d --build` 启动纯 Web 服务。
 - 容器内监听 `0.0.0.0:8000`，Compose 默认只发布到宿主机 `127.0.0.1:8000`；局域网访问需设置 `FISHTOOL_BIND_ADDRESS=0.0.0.0` 并配合 `FISHTOOL_ALLOWED_HOSTS`、`FISHTOOL_ALLOWED_PORTS`。数据与密钥分别持久化到 `fishtool-data`、`fishtool-config` 卷。

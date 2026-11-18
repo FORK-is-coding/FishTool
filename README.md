@@ -229,6 +229,13 @@ pytest tests/ -q
 
 接口文档在服务启动后访问 http://localhost:8000/docs 。
 
+## 贡献
+
+- Docker 部署：[#154](https://github.com/FORK-is-coding/FishTool/pull/154)，作者 [@maiphucgiang](https://github.com/maiphucgiang)
+- 交接文档修正：[#155](https://github.com/FORK-is-coding/FishTool/pull/155)，作者 [@maiphucgiang](https://github.com/maiphucgiang)
+
+后续由维护者在 #157/#158 按原作者改动落地并补充审查修复。
+
 ## 交流
 
 QQ 群二维码在「欢迎」页的「加入群聊」里，也可以直接提 [Issue](https://github.com/FORK-is-coding/FishTool/issues)。
