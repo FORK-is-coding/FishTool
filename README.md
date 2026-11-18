@@ -65,14 +65,6 @@ pip install -r requirements.txt
 | `python app.py web --port 9000` | 换端口 |
 | `python app.py web --host 0.0.0.0` | 让局域网其他设备访问，同时要设置环境变量 `FISHTOOL_ALLOWED_HOSTS`，例如 `localhost,127.0.0.1,192.168.1.10` |
 
-#### Docker 部署
-
-```bash
-docker compose up -d --build
-```
-
-访问 `http://localhost:8000`，数据保存在 `fishtool-data`、`fishtool-config` 卷中。默认只绑定宿主机 `127.0.0.1:8000`；需要局域网访问时，在 `.env` 中把 `FISHTOOL_BIND_ADDRESS` 改为 `0.0.0.0`，并同时设置 `FISHTOOL_ALLOWED_HOSTS` / `FISHTOOL_ALLOWED_PORTS`。当前业务接口没有完整用户鉴权，开放到局域网前必须加反向代理和访问控制。
-
 ## 第一次使用
 
 1. **扫码登录 B站**：打开后在「欢迎」页点「扫码登录」，用 B站 App 扫码确认。登录后评论、抽奖等数据更完整，登录态加密保存在本地。
