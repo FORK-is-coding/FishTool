@@ -4,10 +4,12 @@
 
 项目不使用 APScheduler：`requirements.txt` 不含该依赖，源码也没有 `add_job`、cron 或 scheduler 启动代码。当前“定时任务”由 `core/monitor_service.py` 的 `ResidentCommentMonitor` 使用 asyncio 常驻循环实现，并由 `web/main.py` lifespan 统一启动/关闭。
 
-当前两个循环：
+当前四个主要循环：
 
 - Cookie 巡检：始终创建 `bili-cookie-check` task，按 CookiePool `check_interval` 周期执行 `check_all_cookies()`。
 - 评论常驻监控：仅在配置/持久化状态允许时创建 `bili-comment-monitor` task，对目标 BV 做增量采集。
+- 单视频跟踪采样：按 `monitor.watch_enable` 与可用 Cookie 条件创建 `bili-watch` task，按跟踪目标的采样间隔执行采集。
+- 热点发现：按配置与预算条件创建 `bili-discovery` task，从榜单/排行等来源发现候选并接入跟踪池。
 
 动态/活动采集没有常驻任务入口，由 WebUI 请求触发。
 
@@ -33,7 +35,7 @@ uvicorn 关闭
 
 ## 3. 状态和控制接口
 
-状态保存于 `monitor_state` 单例记录：`enabled/paused/status/target_bvids/last_collect_at/total_collected/last_error/consecutive_failures/updated_at`。
+状态保存于 `monitor_state` 单例记录：`enabled/paused/status/target_bvids/last_collect_at/total_collected/last_error/consecutive_failures/updated_at`。`monitor_service.snapshot()` 还会给出 `watch_task_running`、`discovery_task_running` 和前端展示用的 `display_state`。
 
 Web 接口：
 
@@ -71,7 +73,7 @@ Web 接口：
 
 ## 6. 运维检查
 
-- `/api/comment/resident/status` 中 `monitor_task_running` 与 `cookie_task_running` 应和预期一致。
+- `/api/comment/resident/status` 中 `monitor_task_running`、`cookie_task_running`、`watch_task_running` 与 `discovery_task_running` 应和预期一致。
 - `last_collect_at` 长时间不更新：检查目标 BV、Cookie、`last_error`、风控日志。
 - `consecutive_failures` 持续增加：不要立即缩短间隔，应先查接口码、网络、数据库锁和 Cookie。
 - reload/桌面重复启动时出现双采集：检查是否有两个 Python/exe 进程监听不同端口；SQLite 状态不能阻止不同进程各自启动任务。
