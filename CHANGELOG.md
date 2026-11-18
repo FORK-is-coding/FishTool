@@ -10,6 +10,10 @@
 
 ## [未发布]
 
+### Docker 部署（#148）
+- 新增 `Dockerfile`、`docker-compose.yml` 与 `.dockerignore`，支持 `docker compose up -d --build` 启动纯 Web 服务。
+- 默认监听容器 `0.0.0.0:8000`，通过 `FISHTOOL_ALLOWED_HOSTS`、`FISHTOOL_ALLOWED_PORTS` 控制可访问来源；数据与密钥分别持久化到 `fishtool-data`、`fishtool-config` 卷。
+
 ### 桌宠投掷惯性
 
 - 桌宠快速拖动后松手会按释放速度继续滑行，在**松手所在屏幕的可用区内**反弹并逐渐减速；不跨屏、不压任务栏。慢拖、停住再松手、单击都不会触发。
