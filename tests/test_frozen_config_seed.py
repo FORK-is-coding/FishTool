@@ -50,7 +50,9 @@ def clear_budget_caches():
 def test_build_spec_bundles_config_yaml():
     """复制的前提：build.spec 把 config/*.yaml 打进包内 config/。"""
     spec = (REPO_ROOT / "build.spec").read_text(encoding="utf-8")
-    assert "(os.path.join(project_root, 'config', '*.yaml'), 'config')" in spec
+    assert "(os.path.join(project_root, 'config', 'budget.yaml'), 'config')" in spec
+    assert "(os.path.join(project_root, 'config', 'config.yaml'), 'config')" in spec
+    assert "'*.yaml'" not in spec
     assert REPO_BUDGET.is_file()
 
 
@@ -77,6 +79,21 @@ def test_existing_budget_is_not_overwritten(monkeypatch, tmp_path):
 
     assert entry.seed_bundled_config() == []
     assert dst.read_text(encoding="utf-8") == "# user edited\n"
+
+
+def test_existing_user_config_and_key_are_preserved(monkeypatch, tmp_path):
+    bundle, exe_dir = _make_bundle(tmp_path), tmp_path / "exe"
+    shutil.copyfile(REPO_ROOT / "config" / "config.yaml", bundle / "config" / "config.yaml")
+    _fake_frozen(monkeypatch, bundle, exe_dir)
+    entry.seed_bundled_config()
+    config = exe_dir / "config" / "config.yaml"
+    assert config.read_bytes() == (bundle / "config" / "config.yaml").read_bytes()
+    config.write_text("custom: keep\n", encoding="utf-8")
+    key = config.with_name("config.key")
+    key.write_bytes(b"existing local key")
+    assert entry.seed_bundled_config() == []
+    assert config.read_text(encoding="utf-8") == "custom: keep\n"
+    assert key.read_bytes() == b"existing local key"
 
 
 def test_source_run_does_nothing(monkeypatch, tmp_path):
